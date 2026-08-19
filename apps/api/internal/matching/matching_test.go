@@ -1,0 +1,71 @@
+package matching
+
+import (
+	"jobpilot/core/api/internal/models"
+	"testing"
+	"time"
+)
+
+func sampleProfile() models.Profile {
+	return models.Profile{DesiredTitles: []string{"Backend Engineer"}, Seniorities: []string{"senior"}, WorkPreference: []string{"remote"}, SalaryExpectation: 90000, Experiences: []models.WorkExperience{{Company: "Acme Inc.", Current: true}}, Skills: []models.Skill{{Name: "Go"}, {Name: "PostgreSQL"}}}
+}
+
+func TestHardRejectEmployer(t *testing.T) {
+	e := Evaluate(sampleProfile(), nil, nil, models.JobInput{Title: "Backend Engineer", Company: "ACME LLC"}, time.Now())
+	if !e.Rejected {
+		t.Fatal("expected current employer rejection")
+	}
+}
+func TestFilterRejections(t *testing.T) {
+	f := models.FilterPreset{ExcludedTitleWords: []string{"unpaid"}, RemoteTypes: []string{"remote"}, MinSalary: 80000}
+	e := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Unpaid Backend Engineer", Company: "Other", RemoteType: "onsite", SalaryMax: 50000}, time.Now())
+	if len(e.RejectionReasons) != 3 {
+		t.Fatalf("reasons=%v", e.RejectionReasons)
+	}
+}
+func TestScoreBreakdown(t *testing.T) {
+	e := Evaluate(sampleProfile(), nil, nil, models.JobInput{Title: "Backend Engineer", Company: "Other", RemoteType: "remote", SalaryMax: 100000, Description: "Go and PostgreSQL", Industry: "Software"}, time.Now())
+	if e.Score < 70 || e.Score > 100 {
+		t.Fatalf("unexpected score %d", e.Score)
+	}
+	if e.Breakdown["title_match"] != 25 {
+		t.Fatal(e.Breakdown)
+	}
+}
+
+func TestTechnologyFilters(t *testing.T) {
+	f := models.FilterPreset{IncludedTechnologies: []string{"Go", "Rust"}, ExcludedTechnologies: []string{"PHP"}}
+	accepted := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Build services with Go and PostgreSQL."}, time.Now())
+	if accepted.Rejected {
+		t.Fatalf("expected technology match, got %v", accepted.RejectionReasons)
+	}
+	rejected := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Maintain a PHP application."}, time.Now())
+	if len(rejected.RejectionReasons) != 2 {
+		t.Fatalf("expected missing-required and excluded-technology reasons, got %v", rejected.RejectionReasons)
+	}
+}
+
+func TestRemoteRoleWithDifferentLocationWarns(t *testing.T) {
+	f := models.FilterPreset{Locations: []string{"Romania"}, RemoteTypes: []string{"remote"}}
+	e := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Backend Engineer", Company: "Other", Location: "Europe", RemoteType: "remote", Description: "Go services"}, time.Now())
+	if e.Rejected || len(e.Warnings) != 1 {
+		t.Fatalf("expected warning without rejection, rejected=%v warnings=%v", e.Rejected, e.Warnings)
+	}
+}
+
+func TestIncludedTitleAllowsStrongTokenOverlap(t *testing.T) {
+	f := models.FilterPreset{IncludedTitles: []string{"Backend Engineer"}}
+	e := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Senior Backend Software Engineer", Company: "Other", Description: "Go services"}, time.Now())
+	if e.Rejected {
+		t.Fatalf("expected similar title to pass, got %v", e.RejectionReasons)
+	}
+}
+
+func TestSeniorityUsesBestSelectedLevel(t *testing.T) {
+	p := sampleProfile()
+	p.Seniorities = []string{"mid", "senior"}
+	e := Evaluate(p, nil, nil, models.JobInput{Title: "Mid Backend Engineer", Company: "Other", Description: "Go services"}, time.Now())
+	if e.Breakdown["seniority_match"] != 15 {
+		t.Fatalf("expected exact match from selected levels, got %v", e.Breakdown)
+	}
+}

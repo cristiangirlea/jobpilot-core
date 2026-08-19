@@ -1,0 +1,11 @@
+.env
+.DS_Store
+node_modules/
+.next/
+.cache/
+*.log
+coverage.out
+apps/api/api
+apps/api/seed
+apps/web/tsconfig.tsbuildinfo
+apps/web/.next/

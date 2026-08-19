@@ -1,0 +1,2 @@
+import Link from "next/link";const items=[['/profile/setup','Basics'],['/profile/experience','Experience'],['/profile/skills','Skills'],['/profile/projects','Projects'],['/profile/blacklist','Ignored companies']];export function ProfileNav(){return <div className="mb-6 flex gap-2 overflow-auto pb-1">{items.map(([href,label])=><Link key={href} href={href} className="btn-secondary whitespace-nowrap !py-2">{label}</Link>)}</div>}
+

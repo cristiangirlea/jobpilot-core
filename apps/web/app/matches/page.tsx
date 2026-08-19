@@ -1,0 +1,2 @@
+import Link from "next/link";import {Shell} from "@/components/Shell";import {Header} from "@/components/UI";import {JobList} from "@/components/JobList";export default function Matches(){return <Shell><Header eyebrow="Shortlist" title="Accepted matches" description="Roles that passed every hard rule, ordered by transparent match score." action={<Link href="/jobs/import" className="btn">Import job</Link>}/><JobList matchesOnly/></Shell>}
+
