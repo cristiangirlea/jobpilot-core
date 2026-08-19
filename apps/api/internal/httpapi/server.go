@@ -14,6 +14,7 @@ import (
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/generator"
+	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/matching"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
@@ -22,6 +23,7 @@ import (
 type Server struct {
 	Store       *store.Store
 	Discovery   *discovery.Service
+	LLM         *llm.Client
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
@@ -33,6 +35,7 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
 	p := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.Secret, h) }
+	m.Handle("GET /api/ai/status", p(s.aiStatus))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", p(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))
@@ -706,4 +709,11 @@ func nonNil(in []string) []string {
 		return []string{}
 	}
 	return in
+}
+
+// aiStatus reports whether an optional AI provider is wired up. Deterministic
+// behaviour never depends on this; it exists so a test run can confirm which
+// provider, if any, is actually in use.
+func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) {
+	write(w, 200, map[string]any{"enabled": s.LLM.Enabled(), "provider": s.LLM.Describe()})
 }

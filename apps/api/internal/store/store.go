@@ -666,3 +666,23 @@ func (s *Store) SeedFirstUser(ctx context.Context) error {
 	_, err = s.DB.Exec(ctx, `INSERT INTO work_experiences(user_id,company,title,current,description) SELECT $1,'CurrentCo','Senior Backend Engineer',true,'Built reliable backend services.' WHERE NOT EXISTS(SELECT 1 FROM work_experiences WHERE user_id=$1)`, u)
 	return err
 }
+
+// LookupCompletion implements llm.Cache. A miss is not an error.
+func (s *Store) LookupCompletion(ctx context.Context, key string) (string, bool, error) {
+	var response string
+	err := s.DB.QueryRow(ctx, `UPDATE llm_cache SET hits=hits+1,last_used_at=now() WHERE cache_key=$1 RETURNING response`, key).Scan(&response)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return response, true, nil
+}
+
+// StoreCompletion implements llm.Cache.
+func (s *Store) StoreCompletion(ctx context.Context, key, task, provider, model, response string) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO llm_cache(cache_key,task,provider,model,response,hits) VALUES($1,$2,$3,$4,$5,1)
+		ON CONFLICT (cache_key) DO UPDATE SET response=EXCLUDED.response,last_used_at=now()`, key, task, provider, model, response)
+	return err
+}

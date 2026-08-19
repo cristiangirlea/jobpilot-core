@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -12,6 +13,19 @@ type Config struct {
 	JWTSecret   string
 	FrontendURL string
 	TokenTTL    time.Duration
+	LLM         LLMConfig
+}
+
+// LLMConfig selects the optional AI provider. The zero value ("none") keeps the
+// product fully deterministic, which is the supported default.
+type LLMConfig struct {
+	Provider     string
+	Model        string
+	CLICommand   string
+	CLIArgs      []string
+	OllamaURL    string
+	Timeout      time.Duration
+	CallsPerHour int
 }
 
 func Load() Config {
@@ -22,6 +36,21 @@ func Load() Config {
 		JWTSecret:   env("JWT_SECRET", "development-only-change-me"),
 		FrontendURL: env("FRONTEND_URL", "http://localhost:3000"),
 		TokenTTL:    time.Duration(hours) * time.Hour,
+		LLM:         loadLLM(),
+	}
+}
+
+func loadLLM() LLMConfig {
+	seconds, _ := strconv.Atoi(env("LLM_TIMEOUT_SECONDS", "90"))
+	calls, _ := strconv.Atoi(env("LLM_CALLS_PER_HOUR", "120"))
+	return LLMConfig{
+		Provider:     env("LLM_PROVIDER", "none"),
+		Model:        env("LLM_MODEL", ""),
+		CLICommand:   env("LLM_CLI_COMMAND", ""),
+		CLIArgs:      strings.Fields(env("LLM_CLI_ARGS", "")),
+		OllamaURL:    env("LLM_OLLAMA_URL", "http://localhost:11434"),
+		Timeout:      time.Duration(seconds) * time.Second,
+		CallsPerHour: calls,
 	}
 }
 
