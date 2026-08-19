@@ -36,6 +36,11 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/auth/login", s.login)
 	p := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.Secret, h) }
 	m.Handle("GET /api/ai/status", p(s.aiStatus))
+	m.Handle("GET /api/answers", p(s.listAnswers))
+	m.Handle("POST /api/answers", p(s.saveAnswer))
+	m.Handle("PATCH /api/answers/{id}", p(s.updateAnswer))
+	m.Handle("DELETE /api/answers/{id}", p(s.deleteAnswer))
+	m.Handle("POST /api/jobs/{id}/answers", p(s.resolveJobAnswers))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", p(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))

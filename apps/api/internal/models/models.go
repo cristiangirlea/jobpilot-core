@@ -196,3 +196,22 @@ type DiscoveryRun struct {
 	StartedAt            time.Time  `json:"started_at"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 }
+
+// AnswerEntry is one reusable application answer. Answers are private per user
+// and are only reused once approved, so an unreviewed generated answer can
+// never reach an employer on its own.
+type AnswerEntry struct {
+	ID                 string     `json:"id,omitempty"`
+	QuestionKey        string     `json:"question_key"`
+	QuestionText       string     `json:"question_text"`
+	QuestionNormalized string     `json:"question_normalized,omitempty"`
+	Answer             string     `json:"answer"`
+	RoleFamily         string     `json:"role_family"`
+	Technologies       []string   `json:"technologies"`
+	Source             string     `json:"source"`
+	Approved           bool       `json:"approved"`
+	UsageCount         int        `json:"usage_count"`
+	CreatedAt          time.Time  `json:"created_at,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
+}

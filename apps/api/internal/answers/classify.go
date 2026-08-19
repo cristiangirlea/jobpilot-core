@@ -1,0 +1,247 @@
+// Package answers resolves application questions to reusable answers.
+//
+// Everything in this file is deterministic: normalisation, canonical question
+// keys, role families, and technology signatures never call a model. They are
+// what makes the answer bank cheap - an unseen question is classified locally,
+// and only a genuine miss reaches a provider.
+package answers
+
+import (
+	"regexp"
+	"sort"
+	"strings"
+)
+
+// Canonical question keys. A key groups differently-worded questions that want
+// the same answer, which is what lets one stored answer serve many postings.
+const (
+	KeyFullName          = "full_name"
+	KeyEmail             = "email"
+	KeyPhone             = "phone"
+	KeyLocation          = "location"
+	KeyLinkedIn          = "linkedin_url"
+	KeyGitHub            = "github_url"
+	KeyPortfolio         = "portfolio_url"
+	KeyAboutYou          = "about_you"
+	KeyWhyRole           = "why_role"
+	KeyWhyCompany        = "why_company"
+	KeyWhyFit            = "why_fit"
+	KeySalary            = "salary_expectation"
+	KeyNotice            = "notice_period"
+	KeyStartDate         = "start_date"
+	KeyAuthorization     = "work_authorization"
+	KeySponsorship       = "visa_sponsorship"
+	KeyRemotePreference  = "remote_preference"
+	KeyRelocation        = "relocation"
+	KeyYearsExperience   = "years_experience"
+	KeyTechExperience    = "technology_experience"
+	KeyEnglishLevel      = "english_level"
+	KeyReferralSource    = "referral_source"
+	KeyConsent           = "data_consent"
+	KeyStrengths         = "strengths"
+	KeyChallenge         = "challenge_example"
+	KeyAdditionalContext = "additional_context"
+)
+
+var tagStripper = regexp.MustCompile(`<[^>]*>`)
+var nonWord = regexp.MustCompile(`[^a-z0-9+#. ]+`)
+var spaces = regexp.MustCompile(`\s+`)
+var noise = regexp.MustCompile(`\b(optional|required|please|kindly|briefly|if applicable|if any)\b`)
+
+// Normalize reduces a question to a stable comparison key so that "Why do you
+// want to work here?*" and "why do you want to work here (optional)" collapse to
+// the same string.
+func Normalize(question string) string {
+	v := strings.ToLower(tagStripper.ReplaceAllString(question, " "))
+	v = strings.NewReplacer("&amp;", "&", "&nbsp;", " ", "’", "'", "‘", "'").Replace(v)
+	v = nonWord.ReplaceAllString(v, " ")
+	v = noise.ReplaceAllString(v, " ")
+	v = spaces.ReplaceAllString(v, " ")
+	return strings.TrimSpace(strings.Trim(v, ". "))
+}
+
+type rule struct {
+	key     string
+	pattern *regexp.Regexp
+}
+
+// Order matters: the most specific reading of a question wins. "why do you want
+// to work at acme" is a company question, not a generic role question.
+var rules = []rule{
+	{KeyWhyCompany, regexp.MustCompile(`why (do you want to |would you like to )?(work|join|apply).*(at|for|with) (us|our|this comp|the comp)|why (us|our company|this company)|what (interests|excites|attracts) you about (us|our|this comp)`)},
+	{KeyWhyRole, regexp.MustCompile(`why (are you |do you )?(interested|excited|applying).*(role|position|job|opportunity)|what (interests|attracts|excites) you about (this|the) (role|position)|why (this|the) (role|position)`)},
+	{KeyWhyFit, regexp.MustCompile(`why (are you |do you think you are |would you be )?(a )?(good |great |strong |the right )?(fit|match|candidate)|what makes you (a )?(good|great|strong|the right)|why should we (hire|consider)`)},
+	{KeyAboutYou, regexp.MustCompile(`tell (us|me) (a bit |something )?about (yourself|you)|introduce yourself|who are you|describe yourself|your background`)},
+	{KeySalary, regexp.MustCompile(`salary|compensation|remuneration|day rate|hourly rate|rate expectation|expected pay`)},
+	{KeyNotice, regexp.MustCompile(`notice period|how much notice|availability to start|earliest start`)},
+	{KeyStartDate, regexp.MustCompile(`start date|available from|when would you be available|when can you start`)},
+	{KeySponsorship, regexp.MustCompile(`sponsor|sponsorship|require a visa|need a visa|visa support`)},
+	{KeyAuthorization, regexp.MustCompile(`(legally )?(authori[sz]ed|eligible|permitted|right) to work|work permit|work authori[sz]ation|citizenship status`)},
+	{KeyRelocation, regexp.MustCompile(`relocat|willing to move|open to moving`)},
+	{KeyRemotePreference, regexp.MustCompile(`remote|hybrid|onsite|on site|in office|work from home|working arrangement|time ?zone`)},
+	{KeyYearsExperience, regexp.MustCompile(`how many years|years of (professional )?experience|total experience`)},
+	{KeyTechExperience, regexp.MustCompile(`experience (with|in|using)|describe your experience|rate your (skill|proficiency|experience)|have you (used|worked with)|familiar with`)},
+	{KeyEnglishLevel, regexp.MustCompile(`english (level|proficiency|fluency)|level of english|do you speak english|language proficiency`)},
+	{KeyReferralSource, regexp.MustCompile(`how did you (hear|find out|learn) about|where did you (hear|find)|referred by|referral source`)},
+	{KeyConsent, regexp.MustCompile(`consent|gdpr|privacy policy|store your data|process your (personal )?data|agree to the terms`)},
+	{KeyStrengths, regexp.MustCompile(`(greatest |biggest |key )?strength|what are you (best|good) at|proudest (achievement|accomplishment)|biggest achievement`)},
+	{KeyChallenge, regexp.MustCompile(`describe a (time|situation|project)|tell (us|me) about a (time|challenge|project)|most challenging|difficult (problem|situation)|example of`)},
+	{KeyLinkedIn, regexp.MustCompile(`linkedin`)},
+	{KeyGitHub, regexp.MustCompile(`github|gitlab|bitbucket`)},
+	{KeyPortfolio, regexp.MustCompile(`portfolio|personal (website|site)|your website`)},
+	{KeyFullName, regexp.MustCompile(`^(your |full |first and last )?name$|^full name|^legal name`)},
+	{KeyEmail, regexp.MustCompile(`^(your )?e ?mail|email address`)},
+	{KeyPhone, regexp.MustCompile(`phone|mobile number|telephone`)},
+	{KeyLocation, regexp.MustCompile(`^(your )?(current )?(location|city|country)|where (are|do) you (based|live|located)`)},
+	{KeyAdditionalContext, regexp.MustCompile(`anything else|additional (information|context|comments)|further comments|cover letter|message to (the )?(hiring|recruiter|team)`)},
+}
+
+// Classify maps a question to a canonical key, or "" when nothing matches. An
+// unclassified question is not a failure: it still goes through the bank on its
+// normalized text before any provider is consulted.
+func Classify(question string) string {
+	normalized := Normalize(question)
+	if normalized == "" {
+		return ""
+	}
+	for _, r := range rules {
+		if r.pattern.MatchString(normalized) {
+			return r.key
+		}
+	}
+	return ""
+}
+
+// roleFamilies are ordered so a compound title resolves to its dominant family;
+// "senior devops engineer" is devops, not a generic engineering role.
+var roleFamilies = []struct {
+	family string
+	terms  []string
+}{
+	{"devops", []string{"devops", "sre", "site reliability", "platform engineer", "infrastructure", "cloud engineer", "kubernetes"}},
+	{"data", []string{"data engineer", "data scientist", "machine learning", "ml engineer", "analytics", "data analyst", "ai engineer"}},
+	{"mobile", []string{"android", "ios", "mobile", "react native", "flutter"}},
+	{"qa", []string{"qa", "quality assurance", "test engineer", "sdet", "automation tester"}},
+	{"security", []string{"security", "appsec", "penetration", "infosec"}},
+	{"management", []string{"engineering manager", "team lead", "tech lead", "head of", "director", "cto", "vp of"}},
+	{"fullstack", []string{"full stack", "fullstack", "full-stack"}},
+	{"frontend", []string{"frontend", "front end", "front-end", "ui engineer", "react developer", "angular", "vue"}},
+	{"backend", []string{"backend", "back end", "back-end", "server side", "api engineer"}},
+	{"engineering", []string{"software engineer", "developer", "programmer", "architect"}},
+	{"product", []string{"product manager", "product owner", "business analyst"}},
+	{"design", []string{"designer", "ux", "ui designer"}},
+}
+
+// RoleFamily buckets a job title so an answer written for one backend role can
+// be reused for the next one. Returns "general" when nothing matches.
+func RoleFamily(title string) string {
+	v := strings.ToLower(strings.TrimSpace(title))
+	if v == "" {
+		return "general"
+	}
+	for _, candidate := range roleFamilies {
+		for _, term := range candidate.terms {
+			if strings.Contains(v, term) {
+				return candidate.family
+			}
+		}
+	}
+	return "general"
+}
+
+// knownTechnologies is the vocabulary used to build a comparable technology
+// signature. It is deliberately a closed list: free-text extraction would make
+// signatures unstable and break reuse.
+var knownTechnologies = []string{
+	"go", "golang", "java", "kotlin", "scala", "python", "ruby", "php", "rust", "c#", "c++", "elixir", "erlang", "clojure", "swift", "dart",
+	"javascript", "typescript", "node.js", "node", "deno", "bun",
+	"react", "next.js", "angular", "vue", "svelte", "remix", "redux", "tailwind",
+	"spring", "spring boot", "quarkus", "micronaut", ".net", "asp.net", "django", "flask", "fastapi", "rails", "laravel", "symfony", "express", "nestjs", "gin", "echo", "fiber",
+	"postgresql", "postgres", "mysql", "mariadb", "mongodb", "redis", "cassandra", "dynamodb", "elasticsearch", "opensearch", "clickhouse", "snowflake", "bigquery", "sqlite", "oracle", "sql server",
+	"kafka", "rabbitmq", "nats", "sqs", "pubsub", "grpc", "graphql", "rest", "openapi", "protobuf", "websocket",
+	"docker", "kubernetes", "helm", "terraform", "pulumi", "ansible", "argocd", "jenkins", "github actions", "gitlab ci", "circleci",
+	"aws", "azure", "gcp", "google cloud", "digitalocean", "cloudflare", "vercel", "heroku",
+	"prometheus", "grafana", "datadog", "opentelemetry", "sentry", "splunk",
+	"spark", "airflow", "dbt", "hadoop", "flink", "pandas", "pytorch", "tensorflow", "langchain",
+	"linux", "bash", "git", "microservices", "serverless", "ci/cd", "tdd", "agile", "scrum",
+}
+
+// technologyAliases collapse spellings that mean the same stack, so a signature
+// built from one posting matches a signature built from another.
+var technologyAliases = map[string]string{
+	"golang": "go", "node": "node.js", "postgres": "postgresql", "google cloud": "gcp",
+}
+
+// TechnologySignature extracts a sorted, de-duplicated technology list from job
+// text, capped at limit. Sorting is what makes it comparable across postings.
+func TechnologySignature(limit int, texts ...string) []string {
+	if limit <= 0 {
+		limit = 12
+	}
+	haystack := " " + spaces.ReplaceAllString(strings.ToLower(tagStripper.ReplaceAllString(strings.Join(texts, " "), " ")), " ") + " "
+	seen := map[string]bool{}
+	for _, tech := range knownTechnologies {
+		if !containsTerm(haystack, tech) {
+			continue
+		}
+		if alias, ok := technologyAliases[tech]; ok {
+			tech = alias
+		}
+		seen[tech] = true
+	}
+	out := make([]string, 0, len(seen))
+	for tech := range seen {
+		out = append(out, tech)
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// containsTerm requires a non-alphanumeric boundary so "go" does not match
+// "going" and "rust" does not match "trusted".
+func containsTerm(haystack, term string) bool {
+	offset := 0
+	for offset < len(haystack) {
+		index := strings.Index(haystack[offset:], term)
+		if index < 0 {
+			return false
+		}
+		start := offset + index
+		end := start + len(term)
+		if start > 0 && !isWordByte(haystack[start-1]) && (end >= len(haystack) || !isWordByte(haystack[end])) {
+			return true
+		}
+		offset = start + 1
+	}
+	return false
+}
+
+func isWordByte(b byte) bool {
+	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '+' || b == '#'
+}
+
+// Overlap scores how similar two technology signatures are, from 0 to 1. It is
+// the ranking signal for reusing an answer written for a "similar" role.
+func Overlap(a, b []string) float64 {
+	if len(a) == 0 || len(b) == 0 {
+		return 0
+	}
+	set := make(map[string]bool, len(a))
+	for _, v := range a {
+		set[v] = true
+	}
+	shared := 0
+	for _, v := range b {
+		if set[v] {
+			shared++
+		}
+	}
+	smaller := len(a)
+	if len(b) < smaller {
+		smaller = len(b)
+	}
+	return float64(shared) / float64(smaller)
+}
