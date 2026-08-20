@@ -139,9 +139,12 @@ func RoleFamily(title string) string {
 	if v == "" {
 		return "general"
 	}
+	// Word boundaries are required, not optional: plain substring matching reads
+	// "Contractor" as "cto" and files a backend engineer under management.
+	haystack := " " + spaces.ReplaceAllString(v, " ") + " "
 	for _, candidate := range roleFamilies {
 		for _, term := range candidate.terms {
-			if strings.Contains(v, term) {
+			if containsTerm(haystack, term) {
 				return candidate.family
 			}
 		}
@@ -179,44 +182,59 @@ func TechnologySignature(limit int, texts ...string) []string {
 		limit = 12
 	}
 	haystack := " " + spaces.ReplaceAllString(strings.ToLower(tagStripper.ReplaceAllString(strings.Join(texts, " "), " ")), " ") + " "
-	seen := map[string]bool{}
+	counts := map[string]int{}
 	for _, tech := range knownTechnologies {
-		if !containsTerm(haystack, tech) {
+		mentions := countTerm(haystack, tech)
+		if mentions == 0 {
 			continue
 		}
 		if alias, ok := technologyAliases[tech]; ok {
 			tech = alias
 		}
-		seen[tech] = true
+		counts[tech] += mentions
 	}
-	out := make([]string, 0, len(seen))
-	for tech := range seen {
+	out := make([]string, 0, len(counts))
+	for tech := range counts {
 		out = append(out, tech)
 	}
-	sort.Strings(out)
+	// Rank by how often a technology is mentioned before truncating. Cutting an
+	// alphabetically sorted list instead would keep "angular" and drop
+	// "typescript" purely because of the letter it starts with.
+	sort.SliceStable(out, func(i, j int) bool {
+		if counts[out[i]] != counts[out[j]] {
+			return counts[out[i]] > counts[out[j]]
+		}
+		return out[i] < out[j]
+	})
 	if len(out) > limit {
 		out = out[:limit]
 	}
+	// Sorted output keeps the stored signature stable regardless of how the
+	// source text happened to be ordered.
+	sort.Strings(out)
 	return out
 }
 
-// containsTerm requires a non-alphanumeric boundary so "go" does not match
-// "going" and "rust" does not match "trusted".
-func containsTerm(haystack, term string) bool {
-	offset := 0
+// containsTerm reports whether a term appears as a whole word.
+func containsTerm(haystack, term string) bool { return countTerm(haystack, term) > 0 }
+
+// countTerm counts whole-word occurrences. The boundary check is what stops
+// "go" matching "going" and "rust" matching "trusted".
+func countTerm(haystack, term string) int {
+	count, offset := 0, 0
 	for offset < len(haystack) {
 		index := strings.Index(haystack[offset:], term)
 		if index < 0 {
-			return false
+			return count
 		}
 		start := offset + index
 		end := start + len(term)
 		if start > 0 && !isWordByte(haystack[start-1]) && (end >= len(haystack) || !isWordByte(haystack[end])) {
-			return true
+			count++
 		}
 		offset = start + 1
 	}
-	return false
+	return count
 }
 
 func isWordByte(b byte) bool {

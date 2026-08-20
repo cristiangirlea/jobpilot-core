@@ -56,6 +56,15 @@ func (s *Store) Profile(ctx context.Context, userID string) (models.Profile, err
 	return p, nil
 }
 func (s *Store) SaveProfile(ctx context.Context, u string, p models.Profile) error {
+	// The profile's list columns are NOT NULL. A caller that builds a profile in
+	// Go rather than decoding one from JSON leaves these nil, so they are
+	// normalised here instead of at every call site.
+	for _, list := range []*[]string{&p.DesiredTitles, &p.Seniorities, &p.Certifications, &p.Languages,
+		&p.WorkPreference, &p.PreferredCountries, &p.PreferredTimezones, &p.IndustryPreferences} {
+		if *list == nil {
+			*list = []string{}
+		}
+	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO user_profiles(user_id,name,email,phone,location,linkedin,github,portfolio,current_title,desired_titles,seniority,seniorities,years_experience,certifications,languages,salary_expectation,rate_expectation,currency,work_preference,preferred_countries,preferred_timezones,work_authorization,notice_period,industry_preferences,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ON CONFLICT(user_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,phone=EXCLUDED.phone,location=EXCLUDED.location,linkedin=EXCLUDED.linkedin,github=EXCLUDED.github,portfolio=EXCLUDED.portfolio,current_title=EXCLUDED.current_title,desired_titles=EXCLUDED.desired_titles,seniority=EXCLUDED.seniority,seniorities=EXCLUDED.seniorities,years_experience=EXCLUDED.years_experience,certifications=EXCLUDED.certifications,languages=EXCLUDED.languages,salary_expectation=EXCLUDED.salary_expectation,rate_expectation=EXCLUDED.rate_expectation,currency=EXCLUDED.currency,work_preference=EXCLUDED.work_preference,preferred_countries=EXCLUDED.preferred_countries,preferred_timezones=EXCLUDED.preferred_timezones,work_authorization=EXCLUDED.work_authorization,notice_period=EXCLUDED.notice_period,industry_preferences=EXCLUDED.industry_preferences,summary=EXCLUDED.summary,updated_at=now()`, u, p.Name, p.Email, p.Phone, p.Location, p.LinkedIn, p.GitHub, p.Portfolio, p.CurrentTitle, p.DesiredTitles, p.Seniority, p.Seniorities, p.YearsExperience, p.Certifications, p.Languages, p.SalaryExpectation, p.RateExpectation, p.Currency, p.WorkPreference, p.PreferredCountries, p.PreferredTimezones, p.WorkAuthorization, p.NoticePeriod, p.IndustryPreferences, p.Summary)
 	return err
 }

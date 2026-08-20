@@ -215,3 +215,28 @@ type AnswerEntry struct {
 	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
 	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
 }
+
+// CVDocument is one stored CV: the original file, what was read out of it, and
+// whether the user has approved it for sending.
+//
+// Parsed is deliberately typed as a free-form map here so the models package
+// does not depend on the parser; the cv package owns that shape.
+type CVDocument struct {
+	ID            string         `json:"id"`
+	Kind          string         `json:"kind"`
+	Label         string         `json:"label,omitempty"`
+	Filename      string         `json:"filename"`
+	Format        string         `json:"format"`
+	ContentType   string         `json:"content_type,omitempty"`
+	SizeBytes     int            `json:"size_bytes"`
+	ExtractedText string         `json:"extracted_text,omitempty"`
+	Parsed        map[string]any `json:"parsed,omitempty"`
+	RoleFamily    string         `json:"role_family,omitempty"`
+	Technologies  []string       `json:"technologies,omitempty"`
+	Approved      bool           `json:"approved"`
+	ApprovedAt    *time.Time     `json:"approved_at,omitempty"`
+	ParentID      string         `json:"parent_id,omitempty"`
+	Fingerprint   string         `json:"fingerprint,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}

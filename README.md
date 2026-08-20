@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-06-19**.
+Last verified: **2026-08-20**.
 
 ## Current status
 
@@ -21,6 +21,9 @@ The full local stack is implemented and usable:
 - Strict application lockout for rejected jobs.
 - Dashboard metrics and recommended jobs.
 - Docker Compose, migrations, seed command, unit tests, and end-to-end smoke scripts.
+- Optional, pluggable AI adapter with a completion cache; disabled by default.
+- Reusable answer bank that resolves application questions deterministically first.
+- CV upload with deterministic PDF/DOCX parsing, user approval, and profile import.
 
 The product works without Redis and without an LLM API key. Manual job import remains available as a fallback, but discovery is the primary workflow.
 
@@ -144,12 +147,15 @@ apps/
     cmd/seed/main.go                   sample-data seed command
     internal/auth/                     bcrypt and JWT
     internal/company/normalize.go      company names, aliases, and domains
+    internal/answers/                  question classification and answer reuse
     internal/config/config.go          environment configuration
+    internal/cv/                       CV text extraction and deterministic parsing
     internal/db/db.go                  PostgreSQL connection
     internal/discovery/fetcher.go      provider adapters
     internal/discovery/service.go      runs, scheduler, dedup, auto-prepare
     internal/generator/generator.go    deterministic application text
     internal/httpapi/server.go         REST router and handlers
+    internal/llm/                      optional AI providers, cache, call budget
     internal/matching/matching.go      hard filters and weighted score
     internal/models/models.go          shared domain models
     internal/store/store.go            SQL persistence and isolation
@@ -407,7 +413,69 @@ Generation is deterministic and requires no API key. It produces:
 
 The generator may only use data already present in the profile, skills, projects, work experience, and computed match. It must never infer or invent experience. Copy buttons are available in the UI.
 
-There is currently no LLM integration. If one is added later, deterministic generation must remain the default fallback, input facts must be constrained to the same source data, and generated claims must be validated or clearly presented for user review.
+An optional LLM adapter now exists, but deterministic generation remains the default and the fallback. See **Optional AI adapter** and **Answer bank** below. The factuality boundary is unchanged: a provider is only ever given stored candidate facts, and anything it writes is stored unapproved until the user reviews it.
+
+## Optional AI adapter
+
+AI is off by default and the product must keep working with it off. A disabled client returns `ErrUnavailable`, which callers treat as "fall back", never as an error.
+
+Providers:
+
+| Provider | Behaviour |
+|---|---|
+| `none` | No AI. Every feature uses its deterministic path. |
+| `cli` | Runs an installed agent CLI (`claude`, `codex`) as a subprocess. Billed against a subscription rather than per token. |
+| `ollama` | A local Ollama server. Private, but output quality depends on local hardware. |
+
+Every completion is cached in `llm_cache`, keyed on provider, model, task, system prompt, and prompt, so an identical request is never paid for twice. Changing the model changes the key, so a switch cannot serve another model's answer. A rolling per-hour call budget bounds runaway usage; cache hits do not consume it.
+
+`GET /api/ai/status` reports what is actually wired up.
+
+## Answer bank
+
+Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
+
+1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed.
+2. **Exact reuse** - this same question, previously approved for this role family.
+3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
+4. **Provider** - only on a genuine miss. Stored unapproved.
+5. **Deterministic wording** - the existing generator output.
+
+The reuse keys are all deterministic and computed locally:
+
+- **Canonical question key** from a local pattern table, so "Why are you a good fit?" and "What makes you the right candidate?" resolve to the same stored answer.
+- **Role family** from the job title, matched on whole words.
+- **Technology signature** from a closed vocabulary, ranked by how often each technology is mentioned and then sorted, so the stored signature is stable and comparable across postings.
+
+Safety rules:
+
+- A generated answer is stored **unapproved** and is never served until the user approves it.
+- A question with no supporting fact is left unanswered rather than guessed. Consent and data-policy questions are always left to a human.
+- The rejected-job application lock applies here too: resolving answers for a rejected job returns `409`.
+
+## CV upload, parsing, and approval
+
+CV handling is deterministic. CV formats are machine-readable, so no model is involved in reading one, and a field the file does not contain stays empty and earns a warning rather than being invented.
+
+Supported uploads: PDF, DOCX, Markdown, and plain text, up to 12 MB. Format is detected from the file's own bytes, so a mislabelled extension is still read correctly. A scanned image CV is reported as such; there is no OCR.
+
+PDF text needs genuine reconstruction, because a PDF stores glyphs at coordinates rather than words in reading order:
+
+- Columns are separated by locating the blank vertical gutter, so a sidebar does not interleave with the main column.
+- Word breaks come from the document's own space runs where it has them. Those runs frequently carry no position, so each is folded into the run it follows; left standing they sort to the front of a line and fuse every word behind them.
+- Where a generator emits no spaces at all, breaks are inferred from glyph gaps, with the threshold adapting to whether that file reports real glyph advances.
+- A final repair pass fixes only unambiguous over-splits.
+
+Work experience is read from the whole document rather than the experience section alone, because a two-column CV places a page-two sidebar heading in the middle of the role list. A dated line must also carry a title to start a role, which is what keeps education entries from becoming jobs.
+
+The approval gate:
+
+1. Upload. The CV is stored **unapproved**, with the original bytes, the extracted text, and the parse.
+2. Review the parse and its warnings.
+3. `POST /api/cv/{id}/import` copies reviewed values into the profile. Only non-empty values are written, so a field the parser missed can never blank out something entered by hand. Importing experience is opt-in and reports which employers it just added, because those employers become hard exclusions.
+4. `POST /api/cv/{id}/approve` marks the CV as sendable.
+
+The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ.
 
 ## Applications and referral attribution
 
@@ -482,6 +550,24 @@ Authorization: Bearer <token>
 | `POST` | `/api/discovery/run` | Run all active sources now |
 | `POST` | `/api/discovery/recommended` | Derive a profile-focused search and run active sources |
 
+### AI, answer bank, and CV endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/ai/status` | Whether an AI provider is configured, and which |
+| `GET` | `/api/answers` | List the answer bank; `?status=pending` or `approved` |
+| `POST` | `/api/answers` | Store a hand-written answer |
+| `PATCH` | `/api/answers/{id}` | Edit and/or approve an answer |
+| `DELETE` | `/api/answers/{id}` | Remove an answer |
+| `POST` | `/api/jobs/{id}/answers` | Resolve application questions for one job |
+| `POST` | `/api/cv` | Upload a CV (multipart, field `file`) |
+| `GET` | `/api/cv` | List stored CVs |
+| `GET` | `/api/cv/{id}` | CV detail, extracted text, and parse |
+| `GET` | `/api/cv/{id}/file` | Download the original bytes |
+| `POST` | `/api/cv/{id}/approve` | Approve or unapprove a CV for sending |
+| `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
+| `DELETE` | `/api/cv/{id}` | Remove a CV |
+
 ### Application and dashboard endpoints
 
 | Method | Path | Purpose |
@@ -505,6 +591,9 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `004_boards_and_technology_filters.sql` | Additional board providers and include/exclude technology filters |
 | `005_profile_seniorities.sql` | Multiple profile seniorities and legacy migration |
 | `006_discovery_exclusions.sql` | Source-level NOT queries and source uniqueness rules |
+| `007_llm.sql` | Completion cache for the optional AI adapter |
+| `008_answer_bank.sql` | Reusable, approval-gated application answers |
+| `009_cv_documents.sql` | Uploaded CVs, extracted text, parse result, approval |
 
 Core entities:
 
@@ -547,6 +636,22 @@ When changing schema:
 | `JWT_SECRET` | Required secret; set it in `.env` |
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
+
+### AI environment
+
+All optional. `LLM_PROVIDER=none` is the default and keeps the API fully deterministic.
+
+| Variable | Purpose |
+|---|---|
+| `LLM_PROVIDER` | `none`, `cli`, or `ollama` |
+| `LLM_CLI_COMMAND` | Command for the `cli` provider, e.g. `claude` or `codex` |
+| `LLM_CLI_ARGS` | Arguments for it, e.g. `-p --output-format text`. The prompt goes to stdin unless an argument contains `{{prompt}}` |
+| `LLM_OLLAMA_URL` | Base URL for the `ollama` provider |
+| `LLM_MODEL` | Model name; optional for the CLI provider |
+| `LLM_TIMEOUT_SECONDS` | Per-call timeout, default `90` |
+| `LLM_CALLS_PER_HOUR` | Rolling call budget, default `120` |
+
+The `cli` provider bills against an existing subscription instead of per token, which makes it the cheapest option. It needs the CLI installed in the same environment as the API, so run the API natively rather than in Compose when using it.
 
 ### Frontend environment
 
@@ -671,7 +776,7 @@ These are known gaps, not hidden surprises:
 2. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
 3. **Source management UI:** sources can be added, validated, and deleted. Rich editing, enable/disable toggles, and per-source schedules can be improved.
 4. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
-5. **LLM enhancement:** no optional LLM adapter is implemented. Any future adapter must preserve the deterministic fallback and factuality boundary.
+5. **Automated submission:** not implemented yet. The planned tiers are email apply, public ATS apply APIs, and browser autofill on the employer's own form. Nothing may bypass CAPTCHA or automate job-board portals.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.
 7. **Production auth and operations:** see the security section above.
 8. **Official application APIs:** external submission is intentionally absent. Add only authorized ATS/employer integrations, never generic stealth automation.
@@ -697,7 +802,9 @@ Preserve these rules when extending the product:
 - Current employers, previous employers, and manual blacklist entries are hard exclusions.
 - Positive title/technology selections use OR; negative selections use NOT.
 - Generated claims come only from stored candidate facts.
-- The application must continue to work with no LLM key.
+- The application must continue to work with no LLM key; every AI path needs a deterministic fallback.
+- A generated answer or CV is never reused or sent before the user approves it.
+- A CV parser must leave a field it cannot read empty and warn, never guess.
 - Provider fetches are explicit, bounded, cancellable, and terms-conscious.
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.
 - Keep PostgreSQL as the source of truth; introduce another service only for a demonstrated need.

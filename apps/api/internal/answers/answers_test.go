@@ -300,3 +300,31 @@ func TestFactSheetOnlyContainsStoredFacts(t *testing.T) {
 		t.Error("the fact sheet must not carry employer-side text into candidate facts")
 	}
 }
+
+func TestRoleFamilyRequiresWholeWords(t *testing.T) {
+	// "Contractor" contains the letters of "cto"; substring matching filed this
+	// title under management.
+	if got := RoleFamily("Senior Payments & Backend Engineer - Contractor - Freelancer"); got != "backend" {
+		t.Fatalf("RoleFamily = %q, want backend", got)
+	}
+	if got := RoleFamily("Senior Backend Engineer - Contractor"); got != "backend" {
+		t.Fatalf("RoleFamily = %q, want backend", got)
+	}
+	if got := RoleFamily("CTO"); got != "management" {
+		t.Fatalf("RoleFamily = %q, want management", got)
+	}
+}
+
+func TestTechnologySignatureKeepsTheMostMentioned(t *testing.T) {
+	// Alphabetical truncation would keep "angular" and drop "typescript"; the
+	// signature must reflect what the text is actually about.
+	text := "TypeScript everywhere. TypeScript and Go services. Go, Go. Mentions angular once."
+	signature := TechnologySignature(2, "", text)
+	if len(signature) != 2 {
+		t.Fatalf("expected 2 entries, got %v", signature)
+	}
+	joined := strings.Join(signature, ",")
+	if !strings.Contains(joined, "typescript") || !strings.Contains(joined, "go") {
+		t.Fatalf("signature = %v, want the two most-mentioned technologies", signature)
+	}
+}
