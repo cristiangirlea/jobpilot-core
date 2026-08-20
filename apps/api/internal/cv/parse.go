@@ -1,0 +1,420 @@
+package cv
+
+import (
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+
+	"jobpilot/core/api/internal/models"
+)
+
+// Parsed is everything a CV yielded, plus an honest account of what it did not.
+//
+// Warnings matter as much as the fields: a CV that parses badly must say so
+// rather than hand back a confident-looking half-profile. Nothing here is
+// written to the profile without the user confirming it.
+type Parsed struct {
+	Name            string                  `json:"name"`
+	Email           string                  `json:"email"`
+	Phone           string                  `json:"phone"`
+	Location        string                  `json:"location"`
+	LinkedIn        string                  `json:"linkedin"`
+	GitHub          string                  `json:"github"`
+	Portfolio       string                  `json:"portfolio"`
+	CurrentTitle    string                  `json:"current_title"`
+	Summary         string                  `json:"summary"`
+	YearsExperience float64                 `json:"years_experience"`
+	Skills          []models.Skill          `json:"skills"`
+	Experiences     []models.WorkExperience `json:"experiences"`
+	Education       []string                `json:"education"`
+	Languages       []string                `json:"languages"`
+	Certifications  []string                `json:"certifications"`
+	Warnings        []string                `json:"warnings"`
+	Text            string                  `json:"text"`
+}
+
+var (
+	emailPattern = regexp.MustCompile(`[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}`)
+	phonePattern = regexp.MustCompile(`\+?\d[\d\s().\-]{7,}\d`)
+	// The \s* after the slash matters: reconstructed PDF text frequently leaves
+	// a space there, and without it the handle is never captured.
+	linkedInPattern = regexp.MustCompile(`(?i)(?:linkedin\.com/in/|\bin/)\s*([A-Za-z0-9\-_%.]+)`)
+	gitHubPattern   = regexp.MustCompile(`(?i)github\.com/\s*([A-Za-z0-9\-_.]+)`)
+	sitePattern     = regexp.MustCompile(`(?i)\bhttps?://[A-Za-z0-9.\-]+\.[A-Za-z]{2,}(?:/\S*)?`)
+	yearsPattern    = regexp.MustCompile(`(?i)(\d{1,2})\s*\+?\s*years?\s+of\s+experience`)
+	// "Golang 5-6 years", "SQL 12 years", "CI/CD 8 years"
+	skillYearsPattern = regexp.MustCompile(`(?i)^(.{2,40}?)\s*(\d{1,2})\s*(?:-\s*(\d{1,2}))?\s*years?$`)
+	locationPattern   = regexp.MustCompile(`^[\p{L}][\p{L} .'\-]{1,40},\s*[\p{L}][\p{L} .'\-]{1,40}$`)
+
+	monthNames   = `Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec`
+	datePeriod   = regexp.MustCompile(`(?i)((?:` + monthNames + `)[a-z]*\.?\s*\d{4}|\d{4})\s*[-–—]\s*(present|current|now|(?:` + monthNames + `)[a-z]*\.?\s*\d{4}|\d{4})`)
+	skillsPrefix = regexp.MustCompile(`(?i)^(?:skills|tech(?:nologies)?|stack|tools)\s*[:\-]\s*`)
+)
+
+// sectionHeadings map a CV's own headings onto the sections this parser knows
+// how to read. Anything unrecognised simply stays in the section it follows.
+var sectionHeadings = map[string]string{
+	"about me": "summary", "about": "summary", "summary": "summary", "profile": "summary",
+	"professional summary": "summary", "personal statement": "summary", "objective": "summary",
+	"work experience": "experience", "experience": "experience", "employment": "experience",
+	"employment history": "experience", "professional experience": "experience",
+	"career history": "experience", "work history": "experience",
+	"education": "education", "academic background": "education",
+	"skills": "skills", "technical skills": "skills", "core skills": "skills", "expertise": "skills",
+	"languages": "languages", "certifications": "certifications", "certificates": "certifications",
+	"contact": "contact", "contact details": "contact",
+	"projects": "projects", "personal projects": "projects",
+}
+
+// Parse turns extracted CV text into candidate facts. It is deterministic and
+// never invents a value: a field it cannot find stays empty and, where the
+// absence is surprising, earns a warning.
+func Parse(text string) Parsed {
+	parsed := Parsed{Text: text, Skills: []models.Skill{}, Experiences: []models.WorkExperience{}, Warnings: []string{}}
+	lines := splitLines(text)
+	if len(lines) == 0 {
+		parsed.Warnings = append(parsed.Warnings, "The CV contained no readable text.")
+		return parsed
+	}
+
+	sections := groupSections(lines)
+	parsed.parseContacts(text, lines)
+	parsed.parseIdentity(lines, sections)
+	parsed.parseSummary(sections)
+	parsed.parseSkills(lines)
+	parsed.parseExperience(lines)
+	parsed.Education = parseEducation(sections["education"])
+	parsed.Languages = parseLanguageList(sections["languages"])
+	parsed.Certifications = compact(sections["certifications"], 12)
+
+	if matches := yearsPattern.FindStringSubmatch(text); len(matches) == 2 {
+		if years, err := strconv.ParseFloat(matches[1], 64); err == nil {
+			parsed.YearsExperience = years
+		}
+	}
+	if parsed.YearsExperience == 0 && len(parsed.Skills) > 0 {
+		// Fall back to the longest-held skill, which is a lower bound rather
+		// than a guess: the CV states it directly.
+		for _, skill := range parsed.Skills {
+			if skill.Years > parsed.YearsExperience {
+				parsed.YearsExperience = skill.Years
+			}
+		}
+	}
+	parsed.addWarnings()
+	return parsed
+}
+
+func splitLines(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// groupSections buckets lines under the heading that precedes them.
+func groupSections(lines []string) map[string][]string {
+	sections := map[string][]string{}
+	current := "header"
+	for _, line := range lines {
+		if section, ok := headingFor(line); ok {
+			current = section
+			continue
+		}
+		sections[current] = append(sections[current], line)
+	}
+	return sections
+}
+
+// headingFor recognises a section heading. Headings are short and stand alone,
+// so a long line that merely contains the word "experience" is not one.
+func headingFor(line string) (string, bool) {
+	candidate := strings.ToLower(strings.Trim(line, " :-—–"))
+	if len(candidate) > 32 {
+		return "", false
+	}
+	section, ok := sectionHeadings[candidate]
+	return section, ok
+}
+
+func (p *Parsed) parseContacts(text string, lines []string) {
+	if match := emailPattern.FindString(text); match != "" {
+		p.Email = match
+	}
+	for _, line := range lines {
+		if match := phonePattern.FindString(line); match != "" && countDigits(match) >= 9 && countDigits(match) <= 15 {
+			// A date range or a metric can look like a phone number; requiring
+			// the line to be mostly the number itself avoids both.
+			if len(strings.TrimSpace(match)) >= len(line)-2 {
+				p.Phone = strings.TrimSpace(match)
+				break
+			}
+		}
+	}
+	if match := linkedInPattern.FindStringSubmatch(text); len(match) == 2 {
+		p.LinkedIn = "https://www.linkedin.com/in/" + strings.Trim(match[1], "/.")
+	}
+	if match := gitHubPattern.FindStringSubmatch(text); len(match) == 2 {
+		p.GitHub = "https://github.com/" + strings.Trim(match[1], "/.")
+	}
+	for _, candidate := range sitePattern.FindAllString(text, -1) {
+		lower := strings.ToLower(candidate)
+		if strings.Contains(lower, "linkedin.") || strings.Contains(lower, "github.") {
+			continue
+		}
+		p.Portfolio = candidate
+		break
+	}
+	for _, line := range lines[:min(len(lines), 25)] {
+		if locationPattern.MatchString(line) && !strings.Contains(line, "@") {
+			p.Location = line
+			break
+		}
+	}
+}
+
+// parseIdentity reads the name and headline from the top of the CV, which is
+// where essentially every template puts them.
+func (p *Parsed) parseIdentity(lines []string, sections map[string][]string) {
+	// A two-column CV reaches this parser sidebar-first, so the name is not
+	// necessarily near the top of the text. Candidates are collected across a
+	// wider window and the one styled as a name wins: templates set the name in
+	// full capitals far more often than they do any other short line.
+	candidates := lines
+	if len(candidates) > 80 {
+		candidates = candidates[:80]
+	}
+	best, bestIndex := "", -1
+	for i, line := range candidates {
+		if !looksLikeName(line) {
+			continue
+		}
+		if bestIndex < 0 {
+			best, bestIndex = line, i
+		}
+		if line == strings.ToUpper(line) {
+			best, bestIndex = line, i
+			break
+		}
+	}
+	if bestIndex < 0 {
+		return
+	}
+	p.Name = titleCaseName(best)
+	// The headline is normally the line immediately below the name.
+	for _, next := range lines[bestIndex+1:] {
+		if looksLikeTitle(next) {
+			p.CurrentTitle = strings.TrimSpace(next)
+			break
+		}
+	}
+}
+
+func looksLikeName(line string) bool {
+	// Commas and slashes rule out the two things that most resemble a name in a
+	// CV sidebar: a "City, Country" line and a profile handle.
+	if strings.ContainsAny(line, "@0123456789|:/,()") || len(line) > 48 {
+		return false
+	}
+	words := strings.Fields(line)
+	if len(words) < 2 || len(words) > 4 {
+		return false
+	}
+	for _, word := range words {
+		runes := []rune(word)
+		if len(runes) < 2 || !isUpperRune(runes[0]) {
+			return false
+		}
+	}
+	return true
+}
+
+// looksLikeTitle accepts a headline such as "Senior Payments & Backend Engineer
+// - Contractor" while rejecting contact lines and bullets.
+func looksLikeTitle(line string) bool {
+	if strings.ContainsAny(line, "@/") || strings.HasPrefix(line, "-") {
+		return false
+	}
+	words := strings.Fields(line)
+	return len(words) >= 2 && len(words) <= 14 && len(line) <= 90
+}
+
+func (p *Parsed) parseSummary(sections map[string][]string) {
+	body := sections["summary"]
+	if len(body) == 0 {
+		return
+	}
+	joined := strings.Join(body, " ")
+	joined = strings.Join(strings.Fields(joined), " ")
+	if len(joined) > 1200 {
+		joined = strings.TrimSpace(joined[:1200])
+	}
+	p.Summary = joined
+}
+
+// parseSkills reads the "<skill> <n> years" entries CV sidebars use, and falls
+// back to the technology vocabulary when a CV lists skills as prose.
+func (p *Parsed) parseSkills(lines []string) {
+	seen := map[string]models.Skill{}
+	for _, line := range lines {
+		match := skillYearsPattern.FindStringSubmatch(line)
+		if len(match) == 0 {
+			continue
+		}
+		name := strings.TrimSpace(strings.Trim(match[1], ":-–—,"))
+		if name == "" || len(name) > 40 || looksLikeSentence(name) {
+			continue
+		}
+		years, _ := strconv.ParseFloat(match[2], 64)
+		if match[3] != "" {
+			// "5-6 years": take the upper bound the candidate claimed.
+			if upper, err := strconv.ParseFloat(match[3], 64); err == nil && upper > years {
+				years = upper
+			}
+		}
+		key := strings.ToLower(name)
+		if existing, ok := seen[key]; !ok || years > existing.Years {
+			seen[key] = models.Skill{Name: name, Years: years}
+		}
+	}
+	// Skills named on "Skills: ..." lines, which carry no duration.
+	for _, line := range lines {
+		if !skillsPrefix.MatchString(line) {
+			continue
+		}
+		for _, item := range strings.Split(skillsPrefix.ReplaceAllString(line, ""), ",") {
+			name := strings.TrimSpace(strings.Trim(item, ".;"))
+			if name == "" || len(name) > 40 || looksLikeSentence(name) {
+				continue
+			}
+			key := strings.ToLower(name)
+			if _, ok := seen[key]; !ok {
+				seen[key] = models.Skill{Name: name}
+			}
+		}
+	}
+	for _, skill := range seen {
+		p.Skills = append(p.Skills, skill)
+	}
+	sort.SliceStable(p.Skills, func(i, j int) bool {
+		if p.Skills[i].Years != p.Skills[j].Years {
+			return p.Skills[i].Years > p.Skills[j].Years
+		}
+		return strings.ToLower(p.Skills[i].Name) < strings.ToLower(p.Skills[j].Name)
+	})
+	if len(p.Skills) > 120 {
+		p.Skills = p.Skills[:120]
+	}
+}
+
+func looksLikeSentence(v string) bool {
+	return len(strings.Fields(v)) > 5
+}
+
+func normalizeEnd(v string) string {
+	if isPresent(v) {
+		return ""
+	}
+	return v
+}
+
+func isPresent(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "present", "current", "now":
+		return true
+	}
+	return false
+}
+
+func parseLanguageList(lines []string) []string {
+	var out []string
+	for _, line := range lines {
+		for _, item := range strings.Split(line, ",") {
+			name := strings.TrimSpace(item)
+			if name != "" && len(name) <= 40 && !looksLikeSentence(name) {
+				out = append(out, name)
+			}
+		}
+	}
+	return compact(out, 12)
+}
+
+func compact(lines []string, limit int) []string {
+	out := []string{}
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		out = append(out, line)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+// addWarnings names what a review should look at. Silence here would be worse
+// than a long list: an unnoticed empty field becomes a wrong application.
+func (p *Parsed) addWarnings() {
+	if p.Name == "" {
+		p.Warnings = append(p.Warnings, "No name was found. Enter it manually.")
+	}
+	if p.Email == "" {
+		p.Warnings = append(p.Warnings, "No email address was found. Applications need one.")
+	}
+	if p.Phone == "" {
+		p.Warnings = append(p.Warnings, "No phone number was found.")
+	}
+	if p.Location == "" {
+		p.Warnings = append(p.Warnings, "No location was found. Location affects matching and eligibility answers.")
+	}
+	if len(p.Experiences) == 0 {
+		p.Warnings = append(p.Warnings, "No dated work experience was found. Add roles manually so current and previous employers are excluded from matches.")
+	}
+	if len(p.Skills) == 0 {
+		p.Warnings = append(p.Warnings, "No skills were found. Skills drive most of the match score.")
+	}
+	if p.Summary == "" {
+		p.Warnings = append(p.Warnings, "No summary section was found.")
+	}
+}
+
+func countDigits(v string) int {
+	count := 0
+	for _, r := range v {
+		if r >= '0' && r <= '9' {
+			count++
+		}
+	}
+	return count
+}
+
+func isUpperRune(r rune) bool {
+	return strings.ToUpper(string(r)) == string(r) && strings.ToLower(string(r)) != string(r)
+}
+
+// titleCaseName normalises an all-caps heading such as "OCTAVIAN PIRVAN" while
+// leaving a normally-cased name untouched.
+func titleCaseName(line string) string {
+	if line != strings.ToUpper(line) {
+		return strings.TrimSpace(line)
+	}
+	words := strings.Fields(strings.ToLower(line))
+	for i, word := range words {
+		runes := []rune(word)
+		words[i] = strings.ToUpper(string(runes[0])) + string(runes[1:])
+	}
+	return strings.Join(words, " ")
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
