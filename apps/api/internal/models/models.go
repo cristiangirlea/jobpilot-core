@@ -240,3 +240,60 @@ type CVDocument struct {
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
+
+// Outbox statuses. Composition never sends: an entry waits at ready until the
+// user approves it.
+const (
+	OutboxNeedsReview = "needs_review" // something is missing or unapproved
+	OutboxReady       = "ready"        // complete, waiting for the user
+	OutboxApproved    = "approved"     // released by the user
+	OutboxSent        = "sent"
+	OutboxFailed      = "failed"
+	OutboxCancelled   = "cancelled"
+)
+
+// Channels an application can go out through.
+const (
+	ChannelATSForm = "ats_form" // the employer's own ATS form
+	ChannelEmail   = "email"
+	ChannelManual  = "manual" // the user applies themselves
+)
+
+// OutboxAnswer is one resolved form field, kept with its provenance so a review
+// shows where each answer came from.
+type OutboxAnswer struct {
+	Field       string   `json:"field"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Answer      string   `json:"answer"`
+	Source      string   `json:"source"`
+	NeedsReview bool     `json:"needs_review"`
+	EntryID     string   `json:"entry_id,omitempty"`
+	Options     []string `json:"options,omitempty"`
+}
+
+// OutboxEntry is one application composed in full and held for approval.
+type OutboxEntry struct {
+	ID                string         `json:"id"`
+	JobID             string         `json:"job_id"`
+	ApplicationID     string         `json:"application_id,omitempty"`
+	Status            string         `json:"status"`
+	Channel           string         `json:"channel"`
+	ATSProvider       string         `json:"ats_provider,omitempty"`
+	CVDocumentID      string         `json:"cv_document_id,omitempty"`
+	CVDecision        string         `json:"cv_decision,omitempty"`
+	CoverLetter       string         `json:"cover_letter"`
+	CoverLetterSource string         `json:"cover_letter_source"`
+	Form              map[string]any `json:"form,omitempty"`
+	Answers           []OutboxAnswer `json:"answers"`
+	Blockers          []string       `json:"blockers"`
+	Notices           []string       `json:"notices"`
+	NeedsReview       int            `json:"needs_review"`
+	Error             string         `json:"error,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	ApprovedAt        *time.Time     `json:"approved_at,omitempty"`
+	SentAt            *time.Time     `json:"sent_at,omitempty"`
+	Job               *Job           `json:"job,omitempty"`
+}

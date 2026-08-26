@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
 )
@@ -93,6 +94,12 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	// select with two hundred entries and every yes/no question resolve here,
 	// at no cost. A fact that does not match cleanly falls through rather than
 	// submitting free text into a select.
+	if answer, ok := subjectAnswer(key, subject); ok {
+		if fitted, usable := fitToOptions(answer, question.Options); usable {
+			resolution.Answer, resolution.Source, resolution.Approved = fitted, SourceProfile, true
+			return resolution, nil
+		}
+	}
 	if answer, ok := profileAnswer(key, subject.Profile); ok {
 		if len(question.Options) == 0 {
 			resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
@@ -326,6 +333,20 @@ func profileAnswer(key string, p models.Profile) (string, bool) {
 	switch key {
 	case KeyFullName:
 		return nonEmpty(p.Name)
+	case KeyFirstName, KeyPreferredName:
+		return nonEmpty(firstName(p.Name))
+	case KeyLastName:
+		return nonEmpty(lastName(p.Name))
+	case KeySponsorship:
+		// Only an explicit statement counts. Inferring "no sponsorship needed"
+		// from a citizenship alone would answer for the wrong jurisdiction: an
+		// EU citizen still needs sponsorship for a role based in the US.
+		authorization := strings.ToLower(p.WorkAuthorization)
+		for _, phrase := range []string{"no sponsorship", "without sponsorship", "not require sponsorship", "no visa required", "no work permit required"} {
+			if strings.Contains(authorization, phrase) {
+				return "No", true
+			}
+		}
 	case KeyEmail:
 		return nonEmpty(p.Email)
 	case KeyPhone:
@@ -420,4 +441,47 @@ func fitToOptions(answer string, options []string) (string, bool) {
 		return answer, true
 	}
 	return MatchOption(answer, options)
+}
+
+// subjectAnswer covers deterministic answers that need the job as well as the
+// profile. These are lookups against facts already stored, so they must never
+// reach a provider.
+func subjectAnswer(key string, subject Subject) (string, bool) {
+	switch key {
+	case KeyWorkedHere:
+		// The candidate's own employment history already answers this, and it
+		// is the same list that drives company exclusion.
+		if strings.TrimSpace(subject.Job.Company) == "" {
+			return "", false
+		}
+		employer := company.Normalize(subject.Job.Company)
+		if employer == "" {
+			return "", false
+		}
+		for _, experience := range subject.Profile.Experiences {
+			if company.Normalize(experience.Company) == employer {
+				return "Yes", true
+			}
+		}
+		return "No", true
+	}
+	return "", false
+}
+
+// firstName and lastName split a stored full name. A single-token name yields
+// that token as the first name and no surname, rather than a guess.
+func firstName(name string) string {
+	parts := strings.Fields(strings.TrimSpace(name))
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[0]
+}
+
+func lastName(name string) string {
+	parts := strings.Fields(strings.TrimSpace(name))
+	if len(parts) < 2 {
+		return ""
+	}
+	return parts[len(parts)-1]
 }

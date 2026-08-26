@@ -263,6 +263,15 @@ func (s *Store) InsertJob(ctx context.Context, u string, in models.JobInput, e m
 	return models.JobWithMatch{Job: j, Match: e, MatchID: matchID}, nil
 }
 
+// CatalogJob reads a job from the shared catalog by id, without a per-user
+// match. Callers that show a job alongside user-scoped data use it to label
+// that data; visibility itself is still governed by the user's job_matches row.
+func (s *Store) CatalogJob(ctx context.Context, id string) (models.Job, error) {
+	var j models.Job
+	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider FROM jobs WHERE id=$1`, id).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider)
+	return j, err
+}
+
 func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string) (models.Job, error) {
 	var j models.Job
 	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider FROM jobs WHERE fingerprint=$1`, fingerprint).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider)

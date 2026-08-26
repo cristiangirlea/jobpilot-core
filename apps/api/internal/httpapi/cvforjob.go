@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -47,6 +48,117 @@ type cvForJobResponse struct {
 // when it already fits, otherwise reuse a tailored CV already approved for this
 // kind of role, and only then build a new one - which waits for approval rather
 // than being sent.
+// cvDecision is the outcome of choosing a CV for one job.
+type cvDecision struct {
+	Decision  string
+	Reason    string
+	Alignment float64
+	CV        models.CVDocument
+	Preview   *cv.Tailored
+	Approved  bool
+}
+
+// decideCV chooses which CV an application should carry, generating one when
+// nothing suitable is approved yet.
+//
+// The order implements the rule the product promises: send the approved base CV
+// when it already fits, otherwise reuse a tailored CV already approved for this
+// kind of role, and only then build a new one - which waits for approval rather
+// than being sent.
+func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMatch, profile models.Profile) (cvDecision, error) {
+	base, baseErr := s.Store.ApprovedBaseCV(ctx, uid)
+	if baseErr != nil && !errors.Is(baseErr, pgx.ErrNoRows) {
+		return cvDecision{}, baseErr
+	}
+	hasBase := baseErr == nil
+
+	baseText := ""
+	if hasBase {
+		if full, textErr := s.Store.CV(ctx, uid, base.ID); textErr == nil {
+			baseText = full.ExtractedText
+		}
+	}
+	alignment := cv.Alignment(profile, baseText, job.Job)
+
+	// 1. The base CV already speaks to this posting.
+	if hasBase && alignment >= cv.AlignmentThreshold {
+		return cvDecision{
+			Decision:  decisionBase,
+			Reason:    fmt.Sprintf("Your approved CV already covers %.0f%% of this posting's technologies.", alignment*100),
+			Alignment: alignment, CV: base, Approved: true,
+		}, nil
+	}
+
+	family := answers.RoleFamily(job.Job.Title)
+	posting := answers.TechnologySignature(20, job.Job.Title, job.Job.Description)
+
+	// 2. A tailored CV approved for a similar role covers this one too.
+	candidates, err := s.Store.ApprovedTailoredCVs(ctx, uid, family, 20)
+	if err != nil {
+		return cvDecision{}, err
+	}
+	if best, overlap, ok := bestTailored(candidates, family, posting); ok {
+		return cvDecision{
+			Decision:  decisionReused,
+			Reason:    fmt.Sprintf("Reusing a CV you already approved for %s roles (%.0f%% stack overlap).", best.RoleFamily, overlap*100),
+			Alignment: alignment, CV: best, Approved: true,
+		}, nil
+	}
+
+	// 3. Build one. It is stored unapproved, so it cannot be sent yet.
+	tailored := cv.Tailor(ctx, s.LLM, profile, job.Job, job.Match, baseText)
+	data, err := cv.RenderPDF(tailored)
+	if err != nil {
+		return cvDecision{}, err
+	}
+	sum := sha256.Sum256(data)
+	fingerprint := hex.EncodeToString(sum[:])
+
+	// An identical file may already be approved from an earlier job; reuse that
+	// approval rather than resetting it by saving over the row.
+	if existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint); lookupErr == nil && found && existing.Approved {
+		return cvDecision{
+			Decision:  decisionReused,
+			Reason:    "This posting produces a CV identical to one you already approved.",
+			Alignment: alignment, CV: existing, Approved: true,
+		}, nil
+	}
+
+	document := models.CVDocument{
+		Kind:         "tailored",
+		Label:        strings.TrimSpace(job.Job.Title + " — " + job.Job.Company),
+		Filename:     tailoredFilename(profile.Name, job.Job.Title),
+		Format:       cv.FormatPDF,
+		ContentType:  "application/pdf",
+		SizeBytes:    len(data),
+		Parsed:       toMap(cv.Parsed{}),
+		RoleFamily:   family,
+		Technologies: posting,
+		Fingerprint:  fingerprint,
+	}
+	if hasBase {
+		document.ParentID = base.ID
+	}
+	// The rendered text is stored so the user can read what will be sent without
+	// opening the file.
+	if text, _, textErr := cv.ExtractText("tailored.pdf", data); textErr == nil {
+		document.ExtractedText = text
+	}
+
+	saved, err := s.Store.SaveCV(ctx, uid, document, data)
+	if err != nil {
+		return cvDecision{}, err
+	}
+	reason := fmt.Sprintf("Your CV covers only %.0f%% of this posting's technologies, so a tailored version was prepared. Approve it to send it, and it will be reused for similar roles.", alignment*100)
+	if !hasBase {
+		reason = "No approved base CV was found, so a tailored version was prepared from your profile. Approve it to send it."
+	}
+	return cvDecision{
+		Decision: decisionGenerated, Reason: reason, Alignment: alignment,
+		CV: saved, Preview: &tailored, Approved: false,
+	}, nil
+}
+
 func (s *Server) cvForJob(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	uid := auth.UserID(ctx)
@@ -65,108 +177,22 @@ func (s *Server) cvForJob(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
-
-	base, baseErr := s.Store.ApprovedBaseCV(ctx, uid)
-	if baseErr != nil && !errors.Is(baseErr, pgx.ErrNoRows) {
-		internal(w, baseErr)
-		return
-	}
-	hasBase := baseErr == nil
-
-	baseText := ""
-	if hasBase {
-		full, textErr := s.Store.CV(ctx, uid, base.ID)
-		if textErr == nil {
-			baseText = full.ExtractedText
-		}
-	}
-	alignment := cv.Alignment(profile, baseText, job.Job)
-
-	// 1. The base CV already speaks to this posting.
-	if hasBase && alignment >= cv.AlignmentThreshold {
-		write(w, 200, cvForJobResponse{
-			Decision:  decisionBase,
-			Reason:    fmt.Sprintf("Your approved CV already covers %.0f%% of this posting's technologies.", alignment*100),
-			Alignment: alignment, CV: base, Approved: true,
-		})
-		return
-	}
-
-	family := answers.RoleFamily(job.Job.Title)
-	posting := answers.TechnologySignature(20, job.Job.Title, job.Job.Description)
-
-	// 2. A tailored CV approved for a similar role covers this one too.
-	candidates, err := s.Store.ApprovedTailoredCVs(ctx, uid, family, 20)
+	decision, err := s.decideCV(ctx, uid, job, profile)
 	if err != nil {
 		internal(w, err)
 		return
 	}
-	if best, overlap, ok := bestTailored(candidates, family, posting); ok {
-		write(w, 200, cvForJobResponse{
-			Decision:  decisionReused,
-			Reason:    fmt.Sprintf("Reusing a CV you already approved for %s roles (%.0f%% stack overlap).", best.RoleFamily, overlap*100),
-			Alignment: alignment, CV: best, Approved: true,
-		})
-		return
+	response := cvForJobResponse{
+		Decision: decision.Decision, Reason: decision.Reason, Alignment: decision.Alignment,
+		CV: decision.CV, Preview: decision.Preview, Approved: decision.Approved,
 	}
-
-	// 3. Build one. It is stored unapproved, so it cannot be sent yet.
-	tailored := cv.Tailor(ctx, s.LLM, profile, job.Job, job.Match, baseText)
-	data, err := cv.RenderPDF(tailored)
-	if err != nil {
-		internal(w, err)
-		return
+	status := 200
+	if decision.Decision == decisionGenerated {
+		status = 201
+		response.Highlight = decision.Preview.Highlighted
+		response.Missing = decision.Preview.Missing
 	}
-	sum := sha256.Sum256(data)
-	fingerprint := hex.EncodeToString(sum[:])
-
-	// An identical file may already be approved from an earlier job; reuse that
-	// approval rather than resetting it by saving over the row.
-	if existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint); lookupErr == nil && found && existing.Approved {
-		write(w, 200, cvForJobResponse{
-			Decision:  decisionReused,
-			Reason:    "This posting produces a CV identical to one you already approved.",
-			Alignment: alignment, CV: existing, Approved: true,
-		})
-		return
-	}
-
-	document := models.CVDocument{
-		Kind:          "tailored",
-		Label:         strings.TrimSpace(job.Job.Title + " — " + job.Job.Company),
-		Filename:      tailoredFilename(profile.Name, job.Job.Title),
-		Format:        cv.FormatPDF,
-		ContentType:   "application/pdf",
-		SizeBytes:     len(data),
-		ExtractedText: "",
-		Parsed:        toMap(cv.Parsed{}),
-		RoleFamily:    family,
-		Technologies:  posting,
-		Fingerprint:   fingerprint,
-	}
-	if hasBase {
-		document.ParentID = base.ID
-	}
-	// The rendered text is stored so the user can read what will be sent without
-	// opening the file.
-	if text, _, textErr := cv.ExtractText("tailored.pdf", data); textErr == nil {
-		document.ExtractedText = text
-	}
-
-	saved, err := s.Store.SaveCV(ctx, uid, document, data)
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	reason := fmt.Sprintf("Your CV covers only %.0f%% of this posting's technologies, so a tailored version was prepared. Approve it to send it, and it will be reused for similar roles.", alignment*100)
-	if !hasBase {
-		reason = "No approved base CV was found, so a tailored version was prepared from your profile. Approve it to send it."
-	}
-	write(w, 201, cvForJobResponse{
-		Decision: decisionGenerated, Reason: reason, Alignment: alignment,
-		CV: saved, Preview: &tailored, Approved: false,
-		Highlight: tailored.Highlighted, Missing: tailored.Missing,
-	})
+	write(w, status, response)
 }
 
 // bestTailored picks the approved tailored CV closest to this posting, provided

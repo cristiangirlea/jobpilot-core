@@ -25,6 +25,8 @@ The full local stack is implemented and usable:
 - Reusable answer bank that resolves application questions deterministically first.
 - CV upload with deterministic PDF/DOCX parsing, user approval, and profile import.
 - CV tailoring per posting, with approve-once-reuse-many for similar roles.
+- Reading the employer's published application form (Greenhouse) and resolving it.
+- An outbox that composes a whole application and holds it for approval.
 
 The product works without Redis and without an LLM API key. Manual job import remains available as a fallback, but discovery is the primary workflow.
 
@@ -149,6 +151,7 @@ apps/
     internal/auth/                     bcrypt and JWT
     internal/company/normalize.go      company names, aliases, and domains
     internal/answers/                  question classification and answer reuse
+    internal/ats/                      reads employers' published application forms
     internal/config/config.go          environment configuration
     internal/cv/                       CV text extraction and deterministic parsing
     internal/db/db.go                  PostgreSQL connection
@@ -503,6 +506,29 @@ Tailored CVs render as a single column, and the font is embedded.
 
 Both choices are load-bearing rather than aesthetic. A two-column CV interleaves its sidebar with the main text when a machine reads it - the failure this project's own parser had to be taught around - and the machine reading a submitted CV is usually the employer's ATS. The embedded font exists because the first renderer written here emitted an identity ToUnicode map, which silently turned "București" into a control character for every reader, including an ATS. Any replacement renderer must be verified by reading its own output back; `TestRenderedPDFIsMachineReadable` does exactly that.
 
+## Reading employer application forms
+
+`internal/ats` reads the form an employer's ATS publishes for a job, using read-only public endpoints. Nothing in that package submits anything.
+
+Greenhouse publishes a complete form schema: every question, its type, whether it is required, and the full option list for each select. Reading it up front is what makes automated applying tractable, because each question can be resolved against the answer bank before anything is submitted, and a select is answered with one of its own options rather than by guessing at a page's DOM.
+
+Lever, Ashby and SmartRecruiters are detected so the composer can name the ATS, but they do not publish their schemas, so those jobs report `ErrUnsupported` and are applied to by hand.
+
+Equal-opportunity, veteran, disability and demographic questions are **never** auto-answered. They concern protected characteristics, they are voluntary, and answering them on someone's behalf is not a decision this software makes. They are reported as skipped so their absence is visible.
+
+## The outbox
+
+`POST /api/jobs/{id}/compose` assembles a whole application - the CV, the cover letter, and every form answer - and queues it. **Composition never sends.** The user reviews exactly what an employer would receive.
+
+An entry records two separate things:
+
+- **Blockers** stop approval: an unapproved tailored CV, a required question with no answer, a missing profile email. Approval is refused while any stands, and that check lives in the store rather than the handler, because it is a safety rule rather than a UI concern.
+- **Notices** inform without blocking: voluntary demographic questions left blank, or a cover letter that fell back to the template. Treating these as blockers would make an application permanently unapprovable, since there is nothing for the user to fix.
+
+Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten.
+
+Measured against a real Greenhouse posting with a 17-field form, 14 fields resolved without a single model call: 10 from stored profile facts, 2 from the answer bank, plus the CV and the cover letter.
+
 ## Applications and referral attribution
 
 Application statuses are:
@@ -593,6 +619,11 @@ Authorization: Bearer <token>
 | `POST` | `/api/cv/{id}/approve` | Approve or unapprove a CV for sending |
 | `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
 | `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
+| `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval |
+| `GET` | `/api/outbox` | The approval queue; `?status=` filters |
+| `GET` | `/api/outbox/{id}` | One composed application in full |
+| `POST` | `/api/outbox/{id}/approve` | Release an application for sending |
+| `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
 | `DELETE` | `/api/cv/{id}` | Remove a CV |
 
 ### Application and dashboard endpoints
@@ -621,6 +652,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `007_llm.sql` | Completion cache for the optional AI adapter |
 | `008_answer_bank.sql` | Reusable, approval-gated application answers |
 | `009_cv_documents.sql` | Uploaded and generated CVs, extracted text, parse result, approval |
+| `010_outbox.sql` | Composed applications held for approval, with blockers and notices |
 
 Core entities:
 
@@ -803,7 +835,8 @@ These are known gaps, not hidden surprises:
 2. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
 3. **Source management UI:** sources can be added, validated, and deleted. Rich editing, enable/disable toggles, and per-source schedules can be improved.
 4. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
-5. **Automated submission:** not implemented yet. The planned tiers are email apply, public ATS apply APIs, and browser autofill on the employer's own form. Nothing may bypass CAPTCHA or automate job-board portals.
+5. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
+9. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.
 7. **Production auth and operations:** see the security section above.
 8. **Official application APIs:** external submission is intentionally absent. Add only authorized ATS/employer integrations, never generic stealth automation.
@@ -831,6 +864,8 @@ Preserve these rules when extending the product:
 - Generated claims come only from stored candidate facts.
 - The application must continue to work with no LLM key; every AI path needs a deterministic fallback.
 - A generated answer or CV is never reused or sent before the user approves it.
+- Composition never sends. Only an explicit approval may release an application.
+- Protected-characteristic and demographic questions are never auto-answered.
 - Tailoring may reorder and select, never add, rewrite, or drop a role.
 - Simple facts (name, contact, city, country) are derived once, deterministically, and reused; a model is never asked to re-derive them.
 - A CV parser must leave a field it cannot read empty and warn, never guess.

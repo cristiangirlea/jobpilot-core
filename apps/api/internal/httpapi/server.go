@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/generator"
@@ -24,6 +25,7 @@ type Server struct {
 	Store       *store.Store
 	Discovery   *discovery.Service
 	LLM         *llm.Client
+	ATS         *ats.Reader
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
@@ -49,6 +51,11 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/cv/{id}/import", p(s.importCV))
 	m.Handle("DELETE /api/cv/{id}", p(s.deleteCV))
 	m.Handle("POST /api/jobs/{id}/cv", p(s.cvForJob))
+	m.Handle("POST /api/jobs/{id}/compose", p(s.compose))
+	m.Handle("GET /api/outbox", p(s.listOutbox))
+	m.Handle("GET /api/outbox/{id}", p(s.getOutboxEntry))
+	m.Handle("POST /api/outbox/{id}/approve", p(s.approveOutboxEntry))
+	m.Handle("POST /api/outbox/{id}/cancel", p(s.cancelOutboxEntry))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", p(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))
@@ -730,3 +737,6 @@ func nonNil(in []string) []string {
 func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"enabled": s.LLM.Enabled(), "provider": s.LLM.Describe()})
 }
+
+// isNotFound reports whether an error is a missing row rather than a refusal.
+func isNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

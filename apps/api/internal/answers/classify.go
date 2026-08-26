@@ -16,6 +16,10 @@ import (
 // the same answer, which is what lets one stored answer serve many postings.
 const (
 	KeyFullName          = "full_name"
+	KeyFirstName         = "first_name"
+	KeyLastName          = "last_name"
+	KeyPreferredName     = "preferred_name"
+	KeyWorkedHere        = "worked_here_before"
 	KeyEmail             = "email"
 	KeyPhone             = "phone"
 	KeyLocation          = "location"
@@ -70,6 +74,7 @@ type rule struct {
 // Order matters: the most specific reading of a question wins. "why do you want
 // to work at acme" is a company question, not a generic role question.
 var rules = []rule{
+	{KeyWorkedHere, regexp.MustCompile(`previously worked (at|for)|worked at or consulted for|(been|were you) employed (at|by)|former (employee|contractor) of|worked (here|with us) before`)},
 	{KeyWhyCompany, regexp.MustCompile(`why (do you want to |would you like to )?(work|join|apply).*(at|for|with) (us|our|this comp|the comp)|why (us|our company|this company)|what (interests|excites|attracts) you about (us|our|this comp)`)},
 	{KeyWhyRole, regexp.MustCompile(`why (are you |do you )?(interested|excited|applying).*(role|position|job|opportunity)|what (interests|attracts|excites) you about (this|the) (role|position)|why (this|the) (role|position)`)},
 	{KeyWhyFit, regexp.MustCompile(`why (are you |do you think you are |would you be )?(a )?(good |great |strong |the right )?(fit|match|candidate)|what makes you (a )?(good|great|strong|the right)|why should we (hire|consider)`)},
@@ -82,19 +87,22 @@ var rules = []rule{
 	{KeyRelocation, regexp.MustCompile(`relocat|willing to move|open to moving`)},
 	{KeyRemotePreference, regexp.MustCompile(`remote|hybrid|onsite|on site|in office|work from home|working arrangement|time ?zone`)},
 	{KeyYearsExperience, regexp.MustCompile(`how many years|years of (professional )?experience|total experience`)},
-	{KeyTechExperience, regexp.MustCompile(`experience (with|in|using)|describe your experience|rate your (skill|proficiency|experience)|have you (used|worked with)|familiar with`)},
+	{KeyTechExperience, regexp.MustCompile(`experience (with|in|using)|describe your experience|rate your (skill|proficiency|experience)|(strong |solid |practical |hands.on )?(proficiency|fluency|expertise|familiarity) (with|in|across)|have you (used|worked with)|familiar with|comfortable with|do you know`)},
 	{KeyEnglishLevel, regexp.MustCompile(`english (level|proficiency|fluency)|level of english|do you speak english|language proficiency`)},
 	{KeyReferralSource, regexp.MustCompile(`how did you (hear|find out|learn) about|where did you (hear|find)|referred by|referral source`)},
 	{KeyConsent, regexp.MustCompile(`consent|gdpr|privacy policy|store your data|process your (personal )?data|agree to the terms`)},
 	{KeyStrengths, regexp.MustCompile(`(greatest |biggest |key )?strength|what are you (best|good) at|proudest (achievement|accomplishment)|biggest achievement`)},
 	{KeyChallenge, regexp.MustCompile(`describe a (time|situation|project)|tell (us|me) about a (time|challenge|project)|most challenging|difficult (problem|situation)|example of`)},
-	{KeyLinkedIn, regexp.MustCompile(`linkedin`)},
-	{KeyGitHub, regexp.MustCompile(`github|gitlab|bitbucket`)},
+	{KeyLinkedIn, regexp.MustCompile(`linkedin\s*(profile|url|link|handle|username)|^(your )?linkedin\b`)},
+	{KeyGitHub, regexp.MustCompile(`(github|gitlab|bitbucket)\s*(profile|url|link|handle|username|repo)|^(your )?(github|gitlab|bitbucket)\b`)},
 	{KeyPortfolio, regexp.MustCompile(`portfolio|personal (website|site)|your website`)},
+	{KeyPreferredName, regexp.MustCompile(`preferred name|name you.{0,20}prefer|prefer (us|we) to (use|call)|what should we call you|goes by`)},
+	{KeyFirstName, regexp.MustCompile(`^first name|^given name|^forename|^legal first name`)},
+	{KeyLastName, regexp.MustCompile(`^last name|^surname|^family name|^legal last name`)},
 	{KeyFullName, regexp.MustCompile(`^(your |full |first and last )?name$|^full name|^legal name`)},
 	{KeyEmail, regexp.MustCompile(`^(your )?e ?mail|email address`)},
 	{KeyPhone, regexp.MustCompile(`phone|mobile number|telephone`)},
-	{KeyCountry, regexp.MustCompile(`country of (residence|origin)|which country|what country|country you (are |re )?(currently )?(located|based|living|residing)|country of employment`)},
+	{KeyCountry, regexp.MustCompile(`country of (residence|origin|employment)|which country|what country|country (in which|where) you|country you (are |re )?(currently )?(located|based|living|residing)`)},
 	{KeyCity, regexp.MustCompile(`which city|what city|city of residence|city you (are |re )?(currently )?(located|based|living)`)},
 	{KeyLocation, regexp.MustCompile(`^(your )?(current )?(location|city|country)|where (are|do) you (based|live|located)`)},
 	{KeyAdditionalContext, regexp.MustCompile(`anything else|additional (information|context|comments)|further comments|cover letter|message to (the )?(hiring|recruiter|team)`)},

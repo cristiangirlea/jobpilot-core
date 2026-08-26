@@ -423,3 +423,84 @@ func TestFreeTextIsNeverSubmittedIntoASelect(t *testing.T) {
 		t.Fatalf("free text was submitted into a select: %+v", resolution)
 	}
 }
+
+func TestNameQuestionsSplitTheStoredName(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s := subject()
+	s.Profile.Name = "Octavian Pîrvan"
+	cases := map[string]string{
+		"First Name":                            "Octavian",
+		"Last Name":                             "Pîrvan",
+		"What name would you prefer us to use?": "Octavian",
+	}
+	for question, want := range cases {
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: question}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Source != SourceProfile || resolution.Answer != want {
+			t.Errorf("%q = %q from %q, want %q from profile", question, resolution.Answer, resolution.Source, want)
+		}
+	}
+}
+
+func TestPreviousEmployerQuestionUsesTheStoredHistory(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s := subject()
+	s.Profile.Experiences = []models.WorkExperience{{Title: "Engineer", Company: "Brightloom Ltd."}}
+
+	// A company the candidate has not worked at.
+	s.Job.Company = "GitLab"
+	resolution, err := service.Resolve(context.Background(), "u1",
+		Question{Text: "Have you previously worked at or consulted for GitLab?", Options: []string{"Yes", "No"}}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Source != SourceProfile || resolution.Answer != "No" {
+		t.Fatalf("expected a deterministic No, got %+v", resolution)
+	}
+
+	// One they have, matched through the company normaliser.
+	s.Job.Company = "Brightloom"
+	resolution, err = service.Resolve(context.Background(), "u1",
+		Question{Text: "Have you previously worked at Brightloom?", Options: []string{"Yes", "No"}}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Answer != "Yes" {
+		t.Fatalf("expected Yes for a previous employer, got %+v", resolution)
+	}
+}
+
+func TestSponsorshipNeedsAnExplicitStatement(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(nil, nil, 0, 0)}
+	visa := []string{"No", "Yes, EU Blue Card"}
+
+	s := subject()
+	s.Profile.WorkAuthorization = "EU citizen, no sponsorship required"
+	resolution, _ := service.Resolve(context.Background(), "u1",
+		Question{Text: "Will you now or in the future require sponsorship for a visa?", Options: visa}, s)
+	if resolution.Answer != "No" {
+		t.Errorf("an explicit statement should resolve, got %+v", resolution)
+	}
+
+	// A citizenship alone says nothing about the jurisdiction the role is in.
+	s.Profile.WorkAuthorization = "Romanian citizen"
+	resolution, _ = service.Resolve(context.Background(), "u1",
+		Question{Text: "Will you now or in the future require sponsorship for a visa?", Options: visa}, s)
+	if resolution.Answer == "No" {
+		t.Errorf("citizenship alone must not answer a sponsorship question, got %+v", resolution)
+	}
+}
+
+func TestCountryQuestionWordingVariants(t *testing.T) {
+	for _, question := range []string{
+		"What is your current country of residence?",
+		"Please choose the country in which you are located.",
+		"Country where you are based",
+	} {
+		if got := Classify(question); got != KeyCountry {
+			t.Errorf("Classify(%q) = %q, want %q", question, got, KeyCountry)
+		}
+	}
+}
