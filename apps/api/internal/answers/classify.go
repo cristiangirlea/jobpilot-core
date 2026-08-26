@@ -19,6 +19,8 @@ const (
 	KeyEmail             = "email"
 	KeyPhone             = "phone"
 	KeyLocation          = "location"
+	KeyCountry           = "country"
+	KeyCity              = "city"
 	KeyLinkedIn          = "linkedin_url"
 	KeyGitHub            = "github_url"
 	KeyPortfolio         = "portfolio_url"
@@ -92,6 +94,8 @@ var rules = []rule{
 	{KeyFullName, regexp.MustCompile(`^(your |full |first and last )?name$|^full name|^legal name`)},
 	{KeyEmail, regexp.MustCompile(`^(your )?e ?mail|email address`)},
 	{KeyPhone, regexp.MustCompile(`phone|mobile number|telephone`)},
+	{KeyCountry, regexp.MustCompile(`country of (residence|origin)|which country|what country|country you (are |re )?(currently )?(located|based|living|residing)|country of employment`)},
+	{KeyCity, regexp.MustCompile(`which city|what city|city of residence|city you (are |re )?(currently )?(located|based|living)`)},
 	{KeyLocation, regexp.MustCompile(`^(your )?(current )?(location|city|country)|where (are|do) you (based|live|located)`)},
 	{KeyAdditionalContext, regexp.MustCompile(`anything else|additional (information|context|comments)|further comments|cover letter|message to (the )?(hiring|recruiter|team)`)},
 }

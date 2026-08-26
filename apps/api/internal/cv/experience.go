@@ -24,15 +24,28 @@ func (p *Parsed) parseExperience(lines []string) {
 		body              []string
 	}
 	var blocks []block
+	previous := ""
 	for _, line := range lines {
 		if title, start, end, ok := roleHeading(line); ok {
 			blocks = append(blocks, block{title: title, start: start, end: end})
+			previous = line
+			continue
+		}
+		// Plenty of layouts put the dates on their own line under the job title.
+		// The title is then the line just above, provided that line is not an
+		// academic entry: "M.A. Computer Engineering" over "2009 - 2012" is a
+		// degree, not a job, and turning it into one would both invent a role and
+		// exclude a university as though it were an employer.
+		if start, end, ok := bareDateRange(line); ok && isRoleTitleLine(previous) {
+			blocks = append(blocks, block{title: strings.TrimSpace(previous), start: start, end: end})
+			previous = line
 			continue
 		}
 		if len(blocks) > 0 && isRoleContent(line) {
 			current := &blocks[len(blocks)-1]
 			current.body = append(current.body, line)
 		}
+		previous = line
 	}
 	for index, b := range blocks {
 		experience := models.WorkExperience{
@@ -76,6 +89,45 @@ func roleHeading(line string) (title, start, end string, ok bool) {
 		return "", "", "", false
 	}
 	return title, strings.TrimSpace(match[1]), strings.TrimSpace(match[2]), true
+}
+
+// bareDateRange matches a line that is nothing but a period, such as
+// "Dec 2022 - Present".
+func bareDateRange(line string) (start, end string, ok bool) {
+	match := datePeriod.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return "", "", false
+	}
+	if strings.TrimSpace(strings.Replace(line, match[0], "", 1)) != "" {
+		return "", "", false
+	}
+	return strings.TrimSpace(match[1]), strings.TrimSpace(match[2]), true
+}
+
+// academicTerms mark a line as a qualification rather than a job title.
+var academicTerms = []string{"university", "universitatea", "college", "faculty", "school",
+	"bachelor", "master", "m.a.", "m.sc", "b.sc", "b.a.", "mba", "phd", "doctorate", "diploma", "certificate"}
+
+// isRoleTitleLine reports whether a line could be the job title sitting above a
+// date range.
+func isRoleTitleLine(line string) bool {
+	line = strings.TrimSpace(line)
+	if line == "" || strings.HasPrefix(line, "-") || strings.HasPrefix(line, "•") {
+		return false
+	}
+	if len(line) > 80 || !hasLetter(line) || len(strings.Fields(line)) > 12 {
+		return false
+	}
+	if _, _, ok := bareDateRange(line); ok {
+		return false
+	}
+	lower := strings.ToLower(line)
+	for _, term := range academicTerms {
+		if strings.Contains(lower, term) {
+			return false
+		}
+	}
+	return true
 }
 
 // isRoleContent keeps a role's own text and rejects the one- and two-word

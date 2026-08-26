@@ -48,6 +48,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/cv/{id}/approve", p(s.approveCV))
 	m.Handle("POST /api/cv/{id}/import", p(s.importCV))
 	m.Handle("DELETE /api/cv/{id}", p(s.deleteCV))
+	m.Handle("POST /api/jobs/{id}/cv", p(s.cvForJob))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", p(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))

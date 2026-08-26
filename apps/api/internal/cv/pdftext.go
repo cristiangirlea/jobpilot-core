@@ -55,6 +55,20 @@ func extractPDF(data []byte) (string, error) {
 		if len(chunks) == 0 {
 			continue
 		}
+		// Some writers emit text with no usable coordinates at all. Their runs
+		// still arrive one logical line at a time, so those boundaries are the
+		// only structure available, and honouring them beats fusing the whole
+		// page into a single line.
+		if !hasPageGeometry(chunks) {
+			for _, c := range chunks {
+				if line := strings.TrimSpace(c.s); line != "" {
+					out.WriteString(line)
+					out.WriteByte('\n')
+				}
+			}
+			out.WriteByte('\n')
+			continue
+		}
 		for _, column := range splitColumns(chunks) {
 			out.WriteString(renderColumn(column))
 			out.WriteByte('\n')
@@ -62,6 +76,17 @@ func extractPDF(data []byte) (string, error) {
 		out.WriteByte('\n')
 	}
 	return tidySpacing(out.String()), nil
+}
+
+// hasPageGeometry reports whether a page carries any positional information.
+// A page whose chunks all sit at the origin has none.
+func hasPageGeometry(chunks []chunk) bool {
+	for _, c := range chunks {
+		if c.x != 0 || c.y != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // collectChunks flattens a page into positioned glyph runs.

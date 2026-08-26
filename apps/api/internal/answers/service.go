@@ -87,35 +87,52 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	resolution := Resolution{Question: text, QuestionKey: key, Technologies: signature}
 
 	// 1. Stored profile facts. These are verifiable, so they need no review.
+	//
+	// A question with a fixed option list must be answered with one of its own
+	// options. Matching a stored fact onto that list is a lookup, so a country
+	// select with two hundred entries and every yes/no question resolve here,
+	// at no cost. A fact that does not match cleanly falls through rather than
+	// submitting free text into a select.
 	if answer, ok := profileAnswer(key, subject.Profile); ok {
-		resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
-		return resolution, nil
+		if len(question.Options) == 0 {
+			resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
+			return resolution, nil
+		}
+		if option, matched := MatchOption(answer, question.Options); matched {
+			resolution.Answer, resolution.Source, resolution.Approved = option, SourceProfile, true
+			return resolution, nil
+		}
 	}
 
 	// 2. This exact question, answered before for this role family.
 	if s.Bank != nil {
 		if entry, found, err := s.Bank.FindAnswer(ctx, userID, normalized, family); err == nil && found && entry.Approved {
-			_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
-			resolution.Answer, resolution.Source = entry.Answer, SourceBank
-			resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
-			return resolution, nil
+			if answer, usable := fitToOptions(entry.Answer, question.Options); usable {
+				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
+				resolution.Answer, resolution.Source = answer, SourceBank
+				resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
+				return resolution, nil
+			}
 		}
 	}
 
 	// 3. The same kind of question, answered for a sufficiently similar stack.
 	if s.Bank != nil && key != "" {
 		if entry, ok := s.bestSimilar(ctx, userID, key, family, signature); ok {
-			_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
-			resolution.Answer, resolution.Source = entry.Answer, SourceBankSimilar
-			resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
-			return resolution, nil
+			if answer, usable := fitToOptions(entry.Answer, question.Options); usable {
+				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
+				resolution.Answer, resolution.Source = answer, SourceBankSimilar
+				resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
+				return resolution, nil
+			}
 		}
 	}
 
 	// 4. Generate. Stored unapproved so it cannot be reused until reviewed.
 	if s.LLM.Enabled() {
 		answer, err := s.generate(ctx, question, subject, key)
-		if err == nil && answer != "" {
+		if fitted, usable := fitToOptions(answer, question.Options); err == nil && answer != "" && usable {
+			answer = fitted
 			resolution.Answer, resolution.Source, resolution.NeedsReview = answer, SourceAI, true
 			if s.Bank != nil {
 				entry := models.AnswerEntry{
@@ -315,6 +332,10 @@ func profileAnswer(key string, p models.Profile) (string, bool) {
 		return nonEmpty(p.Phone)
 	case KeyLocation:
 		return nonEmpty(p.Location)
+	case KeyCountry:
+		return nonEmpty(Country(p.Location))
+	case KeyCity:
+		return nonEmpty(City(p.Location))
 	case KeyLinkedIn:
 		return nonEmpty(p.LinkedIn)
 	case KeyGitHub:
@@ -385,4 +406,18 @@ func listOrNone(items []string) string {
 		return "(none recorded)"
 	}
 	return strings.Join(items, ", ")
+}
+
+// fitToOptions constrains an answer to a question's own option list. A question
+// with no options accepts the answer as written; a select accepts it only if it
+// maps cleanly onto one of its choices, so a stale or free-text answer is sent
+// to review instead of into a dropdown it does not belong in.
+func fitToOptions(answer string, options []string) (string, bool) {
+	if strings.TrimSpace(answer) == "" {
+		return "", false
+	}
+	if len(options) == 0 {
+		return answer, true
+	}
+	return MatchOption(answer, options)
 }

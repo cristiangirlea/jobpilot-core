@@ -328,3 +328,98 @@ func TestTechnologySignatureKeepsTheMostMentioned(t *testing.T) {
 		t.Fatalf("signature = %v, want the two most-mentioned technologies", signature)
 	}
 }
+
+func TestSplitLocationDerivesCountryDeterministically(t *testing.T) {
+	cases := []struct{ in, city, country string }{
+		{"București, Romania", "București", "Romania"},
+		{"Berlin, Germany", "Berlin", "Germany"},
+		{"Austin, TX, USA", "Austin, TX", "United States"},
+		{"London, UK", "London", "United Kingdom"},
+		{"Amsterdam, The Netherlands", "Amsterdam", "Netherlands"},
+		// No comma means no country: guessing one answers an eligibility
+		// question wrongly.
+		{"Remote", "Remote", ""},
+		{"", "", ""},
+	}
+	for _, c := range cases {
+		city, country := SplitLocation(c.in)
+		if city != c.city || country != c.country {
+			t.Errorf("SplitLocation(%q) = (%q, %q), want (%q, %q)", c.in, city, country, c.city, c.country)
+		}
+	}
+}
+
+func TestMatchOptionAnswersLongSelectsWithoutAI(t *testing.T) {
+	countries := []string{"Portugal", "Qatar", "Romania", "Russia", "Rwanda"}
+	if got, ok := MatchOption("Romania", countries); !ok || got != "Romania" {
+		t.Errorf("MatchOption = (%q, %v), want Romania", got, ok)
+	}
+	// A different spelling of the same country still resolves.
+	if got, ok := MatchOption("UK", []string{"Ukraine", "United Kingdom", "Uruguay"}); !ok || got != "United Kingdom" {
+		t.Errorf("MatchOption(UK) = (%q, %v), want United Kingdom", got, ok)
+	}
+}
+
+func TestMatchOptionHandlesYesNo(t *testing.T) {
+	if got, ok := MatchOption("No", []string{"Yes", "No"}); !ok || got != "No" {
+		t.Errorf("MatchOption = (%q, %v), want No", got, ok)
+	}
+	// The real GitLab sponsorship question: one "No" and several "Yes, <scheme>".
+	visa := []string{"No", "Yes, Netherlands Highly Skilled Migrant Visa", "Yes, EU Blue Card"}
+	if got, ok := MatchBoolean(false, visa); !ok || got != "No" {
+		t.Errorf("MatchBoolean(false) = (%q, %v), want No", got, ok)
+	}
+	// Which "Yes" applies is not something to infer, so it must not guess.
+	if got, ok := MatchBoolean(true, visa); ok {
+		t.Errorf("an ambiguous yes must not resolve, got %q", got)
+	}
+}
+
+func TestMatchOptionRefusesAmbiguity(t *testing.T) {
+	if got, ok := MatchOption("Ireland", []string{"Ireland", "Northern Ireland"}); !ok || got != "Ireland" {
+		t.Errorf("an exact match must win over a substring: got (%q,%v)", got, ok)
+	}
+	if _, ok := MatchOption("Ger", []string{"Germany", "Germany (remote)"}); ok {
+		t.Error("two candidates must not resolve")
+	}
+	if _, ok := MatchOption("Atlantis", []string{"Romania", "Germany"}); ok {
+		t.Error("an unknown value must not resolve")
+	}
+}
+
+func TestSelectQuestionsResolveFromStoredFacts(t *testing.T) {
+	provider := &countingProvider{}
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(provider, nil, 0, 0)}
+	s := subject()
+	s.Profile.Location = "București, Romania"
+
+	resolution, err := service.Resolve(context.Background(), "u1",
+		Question{Text: "What is your current country of residence?", Kind: "select",
+			Options: []string{"Poland", "Portugal", "Romania", "Spain"}}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Source != SourceProfile || resolution.Answer != "Romania" {
+		t.Fatalf("country select should resolve from the stored location, got %+v", resolution)
+	}
+	if provider.calls != 0 {
+		t.Fatalf("a two-hundred-option country select must cost nothing, got %d calls", provider.calls)
+	}
+}
+
+func TestFreeTextIsNeverSubmittedIntoASelect(t *testing.T) {
+	// An approved free-text answer must not be poured into a dropdown.
+	bank := &fakeBank{entries: []models.AnswerEntry{{
+		ID: "e1", QuestionKey: KeyWhyFit, QuestionNormalized: Normalize("Why are you a good fit?"),
+		Answer: "A long prose answer about my background.", RoleFamily: "backend", Approved: true,
+	}}}
+	service := &Service{Bank: bank, LLM: llm.New(nil, nil, 0, 0)}
+	resolution, err := service.Resolve(context.Background(), "u1",
+		Question{Text: "Why are you a good fit?", Options: []string{"Yes", "No"}}, subject())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Answer == "A long prose answer about my background." {
+		t.Fatalf("free text was submitted into a select: %+v", resolution)
+	}
+}

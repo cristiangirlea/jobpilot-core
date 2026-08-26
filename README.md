@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-08-20**.
+Last verified: **2026-08-26**.
 
 ## Current status
 
@@ -24,6 +24,7 @@ The full local stack is implemented and usable:
 - Optional, pluggable AI adapter with a completion cache; disabled by default.
 - Reusable answer bank that resolves application questions deterministically first.
 - CV upload with deterministic PDF/DOCX parsing, user approval, and profile import.
+- CV tailoring per posting, with approve-once-reuse-many for similar roles.
 
 The product works without Redis and without an LLM API key. Manual job import remains available as a fallback, but discovery is the primary workflow.
 
@@ -477,6 +478,31 @@ The approval gate:
 
 The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ.
 
+## CV tailoring and reuse
+
+`POST /api/jobs/{id}/cv` decides which CV an application should carry, and returns one of three decisions:
+
+| Decision | Meaning |
+|---|---|
+| `base` | The approved base CV already covers enough of the posting's technologies |
+| `reused` | A tailored CV already approved for this kind of role covers this one too |
+| `generated` | A new tailored CV was built. It is stored **unapproved** and cannot be sent until reviewed |
+
+Tailoring re-emphasises what the candidate already has. It never adds and never removes:
+
+- Every role, employer, title and date is carried through unchanged. Dropping an employer for relevance, or letting a gap close, would be a lie told on the candidate's behalf.
+- Bullets are **selected and reordered** from the ones already written, never rewritten, so no achievement can drift.
+- Skills are reordered so the posting's technologies lead. A technology the posting wants and the candidate lacks is reported as `missing`, never listed as a skill.
+- Only the summary is newly worded, and only from stored facts. With no provider configured it falls back to deterministic wording.
+
+Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical CV reuses the existing approval instead of resetting it.
+
+### Rendering
+
+Tailored CVs render as a single column, and the font is embedded.
+
+Both choices are load-bearing rather than aesthetic. A two-column CV interleaves its sidebar with the main text when a machine reads it - the failure this project's own parser had to be taught around - and the machine reading a submitted CV is usually the employer's ATS. The embedded font exists because the first renderer written here emitted an identity ToUnicode map, which silently turned "București" into a control character for every reader, including an ATS. Any replacement renderer must be verified by reading its own output back; `TestRenderedPDFIsMachineReadable` does exactly that.
+
 ## Applications and referral attribution
 
 Application statuses are:
@@ -566,6 +592,7 @@ Authorization: Bearer <token>
 | `GET` | `/api/cv/{id}/file` | Download the original bytes |
 | `POST` | `/api/cv/{id}/approve` | Approve or unapprove a CV for sending |
 | `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
+| `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
 | `DELETE` | `/api/cv/{id}` | Remove a CV |
 
 ### Application and dashboard endpoints
@@ -593,7 +620,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `006_discovery_exclusions.sql` | Source-level NOT queries and source uniqueness rules |
 | `007_llm.sql` | Completion cache for the optional AI adapter |
 | `008_answer_bank.sql` | Reusable, approval-gated application answers |
-| `009_cv_documents.sql` | Uploaded CVs, extracted text, parse result, approval |
+| `009_cv_documents.sql` | Uploaded and generated CVs, extracted text, parse result, approval |
 
 Core entities:
 
@@ -804,6 +831,8 @@ Preserve these rules when extending the product:
 - Generated claims come only from stored candidate facts.
 - The application must continue to work with no LLM key; every AI path needs a deterministic fallback.
 - A generated answer or CV is never reused or sent before the user approves it.
+- Tailoring may reorder and select, never add, rewrite, or drop a role.
+- Simple facts (name, contact, city, country) are derived once, deterministically, and reused; a model is never asked to re-derive them.
 - A CV parser must leave a field it cannot read empty and warn, never guess.
 - Provider fetches are explicit, bounded, cancellable, and terms-conscious.
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.

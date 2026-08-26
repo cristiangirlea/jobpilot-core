@@ -120,3 +120,46 @@ func (s *Store) ApprovedBaseCV(ctx context.Context, userID string) (models.CVDoc
 	return scanCV(s.DB.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents
 		WHERE user_id=$1 AND kind='base' AND approved ORDER BY approved_at DESC NULLS LAST, created_at DESC LIMIT 1`, userID))
 }
+
+// ApprovedTailoredCVs returns approved tailored CVs for reuse, the ones written
+// for the same kind of role first. Only approved rows are returned, so an
+// unreviewed draft can never be attached to an application.
+func (s *Store) ApprovedTailoredCVs(ctx context.Context, userID, roleFamily string, limit int) ([]models.CVDocument, error) {
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+	rows, err := s.DB.Query(ctx, `SELECT `+cvColumns+` FROM cv_documents
+		WHERE user_id=$1 AND kind='tailored' AND approved
+		ORDER BY (role_family=$2) DESC, approved_at DESC NULLS LAST LIMIT $3`, userID, roleFamily, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []models.CVDocument{}
+	for rows.Next() {
+		doc, scanErr := scanCV(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		doc.ExtractedText = ""
+		out = append(out, doc)
+	}
+	return out, rows.Err()
+}
+
+// CVByFingerprint finds a stored CV by its exact bytes. Regenerating a CV that
+// is byte-identical to one already approved must reuse that approval rather
+// than reset it.
+func (s *Store) CVByFingerprint(ctx context.Context, userID, fingerprint string) (models.CVDocument, bool, error) {
+	if fingerprint == "" {
+		return models.CVDocument{}, false, nil
+	}
+	doc, err := scanCV(s.DB.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND fingerprint=$2`, userID, fingerprint))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return models.CVDocument{}, false, nil
+	}
+	if err != nil {
+		return models.CVDocument{}, false, err
+	}
+	return doc, true, nil
+}
