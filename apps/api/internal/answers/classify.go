@@ -20,6 +20,11 @@ const (
 	KeyLastName          = "last_name"
 	KeyPreferredName     = "preferred_name"
 	KeyWorkedHere        = "worked_here_before"
+	KeyLocatedIn         = "located_in"
+	KeyCurrentEmployer   = "current_employer"
+	KeyCurrentTitle      = "current_title"
+	KeyCountryTimezone   = "country_and_timezone"
+	KeySpokenLanguages   = "spoken_languages"
 	KeyEmail             = "email"
 	KeyPhone             = "phone"
 	KeyLocation          = "location"
@@ -74,6 +79,11 @@ type rule struct {
 // Order matters: the most specific reading of a question wins. "why do you want
 // to work at acme" is a company question, not a generic role question.
 var rules = []rule{
+	{KeyLocatedIn, regexp.MustCompile(`(are|do) you\s+(currently\s+)?(located|based|living|residing|reside|live|work(ing)?)\s*(in|from|out of)\s`)},
+	{KeyCountryTimezone, regexp.MustCompile(`country and time ?zone|time ?zone and country|what country and`)},
+	{KeyCurrentEmployer, regexp.MustCompile(`^current employer|who is your current employer|name of your current employer|present employer`)},
+	{KeyCurrentTitle, regexp.MustCompile(`^current (job )?title|current role|your present (job )?title`)},
+	{KeySpokenLanguages, regexp.MustCompile(`languages you speak|which languages|languages? (do you|you) speak|select all the languages`)},
 	{KeyWorkedHere, regexp.MustCompile(`previously worked (at|for)|worked at or consulted for|(been|were you) employed (at|by)|former (employee|contractor) of|worked (here|with us) before`)},
 	{KeyWhyCompany, regexp.MustCompile(`why (do you want to |would you like to )?(work|join|apply).*(at|for|with) (us|our|this comp|the comp)|why (us|our company|this company)|what (interests|excites|attracts) you about (us|our|this comp)`)},
 	{KeyWhyRole, regexp.MustCompile(`why (are you |do you )?(interested|excited|applying).*(role|position|job|opportunity)|what (interests|attracts|excites) you about (this|the) (role|position)|why (this|the) (role|position)`)},
@@ -95,8 +105,8 @@ var rules = []rule{
 	{KeyChallenge, regexp.MustCompile(`describe a (time|situation|project)|tell (us|me) about a (time|challenge|project)|most challenging|difficult (problem|situation)|example of`)},
 	{KeyLinkedIn, regexp.MustCompile(`linkedin\s*(profile|url|link|handle|username)|^(your )?linkedin\b`)},
 	{KeyGitHub, regexp.MustCompile(`(github|gitlab|bitbucket)\s*(profile|url|link|handle|username|repo)|^(your )?(github|gitlab|bitbucket)\b`)},
-	{KeyPortfolio, regexp.MustCompile(`portfolio|personal (website|site)|your website`)},
-	{KeyPreferredName, regexp.MustCompile(`preferred name|name you.{0,20}prefer|prefer (us|we) to (use|call)|what should we call you|goes by`)},
+	{KeyPortfolio, regexp.MustCompile(`portfolio|personal (website|site)|your website|^website$|^website url|personal url`)},
+	{KeyPreferredName, regexp.MustCompile(`preferred (first |given )?name|name you.{0,20}prefer|prefer (us|we) to (use|call)|what should we call you|goes by`)},
 	{KeyFirstName, regexp.MustCompile(`^first name|^given name|^forename|^legal first name`)},
 	{KeyLastName, regexp.MustCompile(`^last name|^surname|^family name|^legal last name`)},
 	{KeyFullName, regexp.MustCompile(`^(your |full |first and last )?name$|^full name|^legal name`)},

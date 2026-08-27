@@ -504,3 +504,83 @@ func TestCountryQuestionWordingVariants(t *testing.T) {
 		}
 	}
 }
+
+// The location gate is deliberately asymmetric: claiming to live somewhere the
+// candidate does not would be a false statement to an employer, while failing
+// to answer only costs a click.
+func TestLocationGateAsymmetry(t *testing.T) {
+	const home = "București, Romania"
+	cases := []struct {
+		question string
+		yes, ok  bool
+		why      string
+	}{
+		{"Are you currently located in Romania?", true, true, "their own country"},
+		{"Are you based in București?", true, true, "their own city"},
+		{"Are you based in the EU?", true, true, "a region containing their country"},
+		{"Are you based in Europe?", true, true, "geographic Europe"},
+		{"Are you currently located in Bangalore?", false, true, "an unrecognised city is somewhere they are not"},
+		{"Are you currently located in the United States?", false, true, "a different country"},
+		{"Are you based in Germany, Spain, Sweden, Ireland or the UK?", false, true, "a list they are not in"},
+		{"Are you based in Germany, Romania or Spain?", true, true, "a list including their country"},
+		{"Are you based in APAC?", false, true, "a region their country is not in"},
+		// Groupings with no membership test must not be answered either way.
+		{"Are you based in the Nordics?", false, false, "an unevaluable grouping"},
+		{"Are you based in the Balkans?", false, false, "an unevaluable grouping"},
+		{"Are you based in Eastern Europe?", false, false, "an unevaluable grouping"},
+		// Not a location gate at all.
+		{"What is your favourite editor?", false, false, "not a location question"},
+	}
+	for _, c := range cases {
+		yes, ok := LocationGate(c.question, home)
+		if yes != c.yes || ok != c.ok {
+			t.Errorf("LocationGate(%q) = (%v,%v), want (%v,%v) — %s", c.question, yes, ok, c.yes, c.ok, c.why)
+		}
+	}
+}
+
+func TestLocationGateNeedsAKnownLocation(t *testing.T) {
+	if _, ok := LocationGate("Are you currently located in Berlin?", ""); ok {
+		t.Error("with no stored location nothing can be concluded")
+	}
+}
+
+func TestEmployerQuestionNamesWinOverThePostingCompany(t *testing.T) {
+	cases := map[string]string{
+		"Have you previously worked at or consulted for GitLab?": "GitLab",
+		"Have you been employed by Mozilla before?":              "Mozilla",
+		"Have you previously worked at Acme Corp?":               "Acme Corp",
+		"Why do you want this job?":                              "",
+	}
+	for question, want := range cases {
+		if got := employerFromQuestion(question); got != want {
+			t.Errorf("employerFromQuestion(%q) = %q, want %q", question, got, want)
+		}
+	}
+}
+
+func TestMultiSelectResolvesEveryMatchingValue(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s := subject()
+	s.Profile.Languages = []string{"English", "Romanian"}
+	resolution, err := service.Resolve(context.Background(), "u1", Question{
+		Text: "Please select all the languages you speak fluently.", Kind: "multiselect",
+		Options: []string{"English", "French", "Romanian", "German"}}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Source != SourceProfile || resolution.Answer != "English, Romanian" {
+		t.Fatalf("got %+v, want both stored languages from the profile", resolution)
+	}
+}
+
+// A partial guess on a multi-select is still a wrong answer.
+func TestMultiSelectRefusesWhenNothingMatches(t *testing.T) {
+	if _, ok := MatchAll("Klingon, Dothraki", []string{"English", "French"}); ok {
+		t.Error("no overlap must not resolve")
+	}
+	matched, ok := MatchAll("English, Klingon", []string{"English", "French"})
+	if !ok || len(matched) != 1 || matched[0] != "English" {
+		t.Errorf("expected only the value that could be placed, got %v", matched)
+	}
+}

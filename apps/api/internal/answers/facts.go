@@ -184,3 +184,24 @@ func optionGroup(option string) string {
 	group, _ := booleanGroupExact(normalizeOption(option))
 	return group
 }
+
+// MatchAll maps a multi-valued answer onto every option it matches, for the
+// "select all that apply" questions. It returns only the values it could place
+// exactly, and reports false when it placed none: a partial guess on a
+// multi-select is still a wrong answer.
+func MatchAll(value string, options []string) ([]string, bool) {
+	if strings.TrimSpace(value) == "" || len(options) == 0 {
+		return nil, false
+	}
+	var matched []string
+	seen := map[string]bool{}
+	for _, part := range strings.Split(value, ",") {
+		option, ok := MatchOption(part, options)
+		if !ok || seen[option] {
+			continue
+		}
+		seen[option] = true
+		matched = append(matched, option)
+	}
+	return matched, len(matched) > 0
+}

@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-08-27**.
+Last verified: **2026-08-28**.
 
 ## Current status
 
@@ -531,6 +531,25 @@ Two kinds of question are never answered automatically, and both are matched on 
 
 A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. The Discovery page offers both.
 
+### Where the deterministic boundary sits
+
+Application questions fall into three kinds, and the split is asserted by tests rather than left to judgement:
+
+| Kind | Example | Handling |
+|---|---|---|
+| A stored fact answers it | country of residence, previous employer, sponsorship, a location gate | Resolved locally. A provider must never be consulted |
+| Only the candidate can answer | high-school results, post-employment restrictions, accessibility needs, how they heard about the role | Left unanswered and flagged. Nothing is invented |
+| It needs writing | why this role, describe your experience with X | A provider is legitimate; without one it falls back to deterministic wording, always flagged |
+
+`internal/answers/corpus_test.go` holds 50 question labels read from live Greenhouse boards (Canonical, Grafana Labs, GitLab, Mozilla, Datadog), each tagged with its kind. Three tests enforce the boundary in both directions: stored facts must resolve with no provider configured, personal questions must **not** resolve from stored facts, and writing questions must always ask for review. `TestDeterministicCoverage` is a ratchet - it fails both when coverage drops and when *more* questions resolve than are declared as facts, so neither erosion nor over-reach passes silently.
+
+Measured on GitLab's real 17-field form: 13 fields resolve with no model call, and blockers fall from 10 to 3.
+
+Two rules earn their own note, because the failure modes are not symmetric:
+
+- **Location gates** ("Are you currently located in Bangalore?") resolve Yes for a place the candidate is in, and No for a specific place they are plainly not in. A grouping with no membership test - "the Nordics", "the Balkans" - is left unanswered, because it might contain them. Claiming to live somewhere they do not would be a false statement to an employer; failing to answer only costs a click.
+- **Eligibility and sponsorship** resolve only from an explicit authorization statement. A citizenship alone is never enough: an EU citizen still needs sponsorship for a role based in the US, so inferring from it would answer for the wrong jurisdiction.
+
 ## The outbox
 
 `POST /api/jobs/{id}/compose` assembles a whole application - the CV, the cover letter, and every form answer - and queues it. **Composition never sends.** The user reviews exactly what an employer would receive.
@@ -885,7 +904,8 @@ Preserve these rules when extending the product:
 - Composition never sends. Only an explicit approval may release an application.
 - Protected-characteristic and demographic questions are never auto-answered.
 - Tailoring may reorder and select, never add, rewrite, or drop a role.
-- Simple facts (name, contact, city, country) are derived once, deterministically, and reused; a model is never asked to re-derive them.
+- Simple facts (name, contact, city, country, employer, eligibility) are derived once, deterministically, and reused; a model is never asked to re-derive them.
+- A question only the candidate can answer is left unanswered, never guessed from stored facts.
 - A CV parser must leave a field it cannot read empty and warn, never guess.
 - Provider fetches are explicit, bounded, cancellable, and terms-conscious.
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.

@@ -3,6 +3,7 @@ package answers
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -57,6 +58,10 @@ type Subject struct {
 	Job       models.Job
 	Match     models.Evaluation
 	Documents models.Documents
+	// Question is the wording currently being resolved. A few deterministic
+	// answers depend on it - a location gate names the places it is asking
+	// about - so it travels with the facts rather than being passed separately.
+	Question string
 }
 
 // Resolution is one answered question plus its provenance.
@@ -82,6 +87,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	}
 	key := Classify(text)
 	normalized := Normalize(text)
+	subject.Question = text
 	family := RoleFamily(subject.Job.Title)
 	signature := TechnologySignature(12, subject.Job.Title, subject.Job.Description)
 
@@ -95,7 +101,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	// at no cost. A fact that does not match cleanly falls through rather than
 	// submitting free text into a select.
 	if answer, ok := subjectAnswer(key, subject); ok {
-		if fitted, usable := fitToOptions(answer, question.Options); usable {
+		if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
 			resolution.Answer, resolution.Source, resolution.Approved = fitted, SourceProfile, true
 			return resolution, nil
 		}
@@ -105,7 +111,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 			resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
 			return resolution, nil
 		}
-		if option, matched := MatchOption(answer, question.Options); matched {
+		if option, matched := fitToQuestion(answer, question.Options, question.Kind); matched {
 			resolution.Answer, resolution.Source, resolution.Approved = option, SourceProfile, true
 			return resolution, nil
 		}
@@ -114,7 +120,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	// 2. This exact question, answered before for this role family.
 	if s.Bank != nil {
 		if entry, found, err := s.Bank.FindAnswer(ctx, userID, normalized, family); err == nil && found && entry.Approved {
-			if answer, usable := fitToOptions(entry.Answer, question.Options); usable {
+			if answer, usable := fitToQuestion(entry.Answer, question.Options, question.Kind); usable {
 				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
 				resolution.Answer, resolution.Source = answer, SourceBank
 				resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
@@ -126,7 +132,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	// 3. The same kind of question, answered for a sufficiently similar stack.
 	if s.Bank != nil && key != "" {
 		if entry, ok := s.bestSimilar(ctx, userID, key, family, signature); ok {
-			if answer, usable := fitToOptions(entry.Answer, question.Options); usable {
+			if answer, usable := fitToQuestion(entry.Answer, question.Options, question.Kind); usable {
 				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
 				resolution.Answer, resolution.Source = answer, SourceBankSimilar
 				resolution.Approved, resolution.EntryID, resolution.Reused = true, entry.ID, true
@@ -138,7 +144,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	// 4. Generate. Stored unapproved so it cannot be reused until reviewed.
 	if s.LLM.Enabled() {
 		answer, err := s.generate(ctx, question, subject, key)
-		if fitted, usable := fitToOptions(answer, question.Options); err == nil && answer != "" && usable {
+		if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); err == nil && answer != "" && usable {
 			answer = fitted
 			resolution.Answer, resolution.Source, resolution.NeedsReview = answer, SourceAI, true
 			if s.Bank != nil {
@@ -357,6 +363,36 @@ func profileAnswer(key string, p models.Profile) (string, bool) {
 		return nonEmpty(Country(p.Location))
 	case KeyCity:
 		return nonEmpty(City(p.Location))
+	case KeyCurrentTitle:
+		return nonEmpty(p.CurrentTitle)
+	case KeyCountryTimezone:
+		// One field asking for both. The stored location answers it directly,
+		// with the timezone appended only when the profile states one.
+		country := Country(p.Location)
+		if country == "" {
+			return "", false
+		}
+		if len(p.PreferredTimezones) > 0 {
+			return country + " (" + p.PreferredTimezones[0] + ")", true
+		}
+		return country, true
+	case KeySpokenLanguages:
+		if len(p.Languages) > 0 {
+			return strings.Join(p.Languages, ", "), true
+		}
+	case KeyAuthorization:
+		// A yes/no eligibility question wants a decision, not the sentence
+		// stored on the profile; the caller maps this onto the form's options.
+		// Only an explicit statement counts, for the same reason sponsorship
+		// does: a citizenship says nothing about the role's jurisdiction.
+		authorization := strings.ToLower(p.WorkAuthorization)
+		for _, phrase := range []string{"authorized to work", "authorised to work", "eligible to work",
+			"right to work", "no sponsorship", "no visa required", "no work permit required"} {
+			if strings.Contains(authorization, phrase) {
+				return "Yes", true
+			}
+		}
+		return nonEmpty(p.WorkAuthorization)
 	case KeyLinkedIn:
 		return nonEmpty(p.LinkedIn)
 	case KeyGitHub:
@@ -369,8 +405,6 @@ func profileAnswer(key string, p models.Profile) (string, bool) {
 		}
 	case KeyNotice:
 		return nonEmpty(p.NoticePeriod)
-	case KeyAuthorization:
-		return nonEmpty(p.WorkAuthorization)
 	case KeySalary:
 		if p.SalaryExpectation > 0 {
 			return strings.TrimSpace(fmt.Sprintf("%.0f %s", p.SalaryExpectation, p.Currency)), true
@@ -434,11 +468,24 @@ func listOrNone(items []string) string {
 // maps cleanly onto one of its choices, so a stale or free-text answer is sent
 // to review instead of into a dropdown it does not belong in.
 func fitToOptions(answer string, options []string) (string, bool) {
+	return fitToQuestion(answer, options, "")
+}
+
+// fitToQuestion constrains an answer to a question's own options. A
+// "select all that apply" question accepts several, so a list of languages can
+// resolve there while a single-choice question still takes exactly one.
+func fitToQuestion(answer string, options []string, kind string) (string, bool) {
 	if strings.TrimSpace(answer) == "" {
 		return "", false
 	}
 	if len(options) == 0 {
 		return answer, true
+	}
+	if kind == "multiselect" {
+		if matched, ok := MatchAll(answer, options); ok {
+			return strings.Join(matched, ", "), true
+		}
+		return "", false
 	}
 	return MatchOption(answer, options)
 }
@@ -448,13 +495,40 @@ func fitToOptions(answer string, options []string) (string, bool) {
 // reach a provider.
 func subjectAnswer(key string, subject Subject) (string, bool) {
 	switch key {
+	case KeyCurrentEmployer:
+		// The current role is the one the CV marks as ongoing.
+		for _, experience := range subject.Profile.Experiences {
+			if experience.Current && strings.TrimSpace(experience.Company) != "" {
+				return strings.TrimSpace(experience.Company), true
+			}
+		}
+		if len(subject.Profile.Experiences) > 0 {
+			return nonEmpty(subject.Profile.Experiences[0].Company)
+		}
+		return "", false
+	case KeyLocatedIn:
+		if yes, ok := LocationGate(subject.Question, subject.Profile.Location); ok {
+			if yes {
+				return "Yes", true
+			}
+			return "No", true
+		}
+		return "", false
 	case KeyWorkedHere:
 		// The candidate's own employment history already answers this, and it
 		// is the same list that drives company exclusion.
-		if strings.TrimSpace(subject.Job.Company) == "" {
+		//
+		// The company named in the question wins over the one on the posting:
+		// an ATS board and the hiring entity are not always the same name, and
+		// the question says plainly which employer it means.
+		name := employerFromQuestion(subject.Question)
+		if name == "" {
+			name = subject.Job.Company
+		}
+		if strings.TrimSpace(name) == "" {
 			return "", false
 		}
-		employer := company.Normalize(subject.Job.Company)
+		employer := company.Normalize(name)
 		if employer == "" {
 			return "", false
 		}
@@ -484,4 +558,33 @@ func lastName(name string) string {
 		return ""
 	}
 	return parts[len(parts)-1]
+}
+
+// employerNamePattern pulls the company out of "Have you previously worked at
+// or consulted for Acme?".
+var employerNamePattern = regexp.MustCompile(`(?i)(?:worked (?:at|for)|consulted for|employed (?:at|by)|employee of|contractor of)\s+([^?.,]+)`)
+
+// employerFromQuestion returns the company a previous-employment question names,
+// or "" when it names none.
+func employerFromQuestion(question string) string {
+	match := employerNamePattern.FindStringSubmatch(question)
+	if len(match) != 2 {
+		return ""
+	}
+	// "worked at or consulted for Acme" leaves the alternative inside the
+	// capture, because the first branch consumes the rest of the clause. Peeling
+	// repeatedly reaches the company itself.
+	name := strings.TrimSpace(match[1])
+	for range 3 {
+		inner := employerNamePattern.FindStringSubmatch(name)
+		if len(inner) != 2 {
+			break
+		}
+		name = strings.TrimSpace(inner[1])
+	}
+	name = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(name), "before"))
+	if len(name) > 60 {
+		return ""
+	}
+	return name
 }
