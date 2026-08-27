@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-08-26**.
+Last verified: **2026-08-27**.
 
 ## Current status
 
@@ -15,7 +15,9 @@ The full local stack is implemented and usable:
 - Multiple desired seniority levels.
 - Reusable filters with positive (OR) and negative (NOT) title and technology rules.
 - Shared job discovery through Remotive, Arbeitnow, Greenhouse, Lever, Ashby, and SmartRecruiters.
+- Curated starter employer boards, pasted careers URL detection, source validation, editing, and pause/resume controls.
 - Per-user filtering, rejection explanations, warnings, skill gaps, and 0-100 scoring.
+- Existing matches are re-evaluated when the main profile, experience, skills, projects, filters, or company exclusions change.
 - Deterministic recruiter messages, cover letters, candidate summaries, and common-question answers.
 - Application creation, status changes, event history, and outbound-click attribution.
 - Strict application lockout for rejected jobs.
@@ -27,6 +29,8 @@ The full local stack is implemented and usable:
 - CV tailoring per posting, with approve-once-reuse-many for similar roles.
 - Reading the employer's published application form (Greenhouse) and resolving it.
 - An outbox that composes a whole application and holds it for approval.
+- Curated employer boards and board-token extraction from a pasted careers URL.
+- Web pages for CVs, the answer bank, and the outbox.
 
 The product works without Redis and without an LLM API key. Manual job import remains available as a fallback, but discovery is the primary workflow.
 
@@ -152,6 +156,7 @@ apps/
     internal/company/normalize.go      company names, aliases, and domains
     internal/answers/                  question classification and answer reuse
     internal/ats/                      reads employers' published application forms
+    internal/boards/                   curated employer boards and URL token extraction
     internal/config/config.go          environment configuration
     internal/cv/                       CV text extraction and deterministic parsing
     internal/db/db.go                  PostgreSQL connection
@@ -227,6 +232,9 @@ Every job visible to a user is reached through that user's `job_matches` row. Pr
 | `/matches/[id]` | Detailed match breakdown |
 | `/applications` | Application pipeline |
 | `/applications/[id]` | Documents, outbound apply action, status, and history |
+| `/cv` | Upload a CV, review the parse, import it, approve it for sending |
+| `/answers` | The answer bank: review, edit and approve reusable answers |
+| `/outbox` | Composed applications, their blockers and notices, and approval |
 | `/settings` | Account and product settings |
 
 Authentication tokens are stored in browser `localStorage`. The API client sends them as bearer tokens; a `401` clears the token and redirects to login.
@@ -321,7 +329,7 @@ Discovery is the primary ingestion method. Manual import exists for sources not 
 | Ashby | Employer board name | Public posting API for one employer |
 | SmartRecruiters | Employer/company identifier | Public company postings API; currently capped at 25 plus detail requests |
 
-Employer-direct sources tend to have cleaner provenance and less aggregation churn. Source validation fetches a small sample before saving so a board token or company identifier can be checked.
+Employer-direct sources tend to have cleaner provenance and less aggregation churn. Source validation fetches a small sample before saving so a board token or company identifier can be checked. The Discovery page also exposes curated starter boards and can extract a supported board identifier from a pasted careers or posting URL.
 
 There is no generic HTML crawler. New providers should be implemented as explicit adapters in `apps/api/internal/discovery/fetcher.go`, use documented/public endpoints, have bounded timeouts and result counts, and include tests.
 
@@ -514,7 +522,14 @@ Greenhouse publishes a complete form schema: every question, its type, whether i
 
 Lever, Ashby and SmartRecruiters are detected so the composer can name the ATS, but they do not publish their schemas, so those jobs report `ErrUnsupported` and are applied to by hand.
 
-Equal-opportunity, veteran, disability and demographic questions are **never** auto-answered. They concern protected characteristics, they are voluntary, and answering them on someone's behalf is not a decision this software makes. They are reported as skipped so their absence is visible.
+Two kinds of question are never answered automatically, and both are matched on the **label** rather than on where the question sits:
+
+- **Protected characteristics** - gender, race, ethnicity, nationality, disability, veteran status and the like. These are dropped from the form entirely and reported as skipped. Greenhouse has dedicated compliance and demographic blocks, but employers are free to put the same questions in the ordinary list instead, and some do: Canonical asks for gender, nationality and race as regular *required* fields. Trusting the block alone let exactly those questions become answerable, which is why labels are checked.
+- **Declarations** - undertakings the applicant makes personally, such as confirming the wording is their own or accepting a policy. These stay on the form but are marked, and the composer leaves them. Ticking one would be making a statement in the user's name, which is a particularly poor thing for a tool that drafts text to do.
+
+### Finding boards
+
+A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. The Discovery page offers both.
 
 ## The outbox
 
@@ -596,8 +611,10 @@ Authorization: Bearer <token>
 |---|---|---|
 | `GET`, `PUT` | `/api/discovery/settings` | Read or save scheduler and auto-prepare settings |
 | `GET`, `POST` | `/api/discovery/sources` | List or create sources |
-| `DELETE` | `/api/discovery/sources/{id}` | Remove a source |
+| `PUT`, `DELETE` | `/api/discovery/sources/{id}` | Edit, pause/resume, or remove a source |
 | `POST` | `/api/discovery/validate` | Test a provider configuration and return sample jobs |
+| `GET` | `/api/discovery/suggestions` | Curated starter employer boards |
+| `POST` | `/api/discovery/detect` | Extract a source identifier from a supported careers URL |
 | `GET` | `/api/discovery/runs` | Run history and provider errors |
 | `POST` | `/api/discovery/run` | Run all active sources now |
 | `POST` | `/api/discovery/recommended` | Derive a profile-focused search and run active sources |
@@ -624,6 +641,8 @@ Authorization: Bearer <token>
 | `GET` | `/api/outbox/{id}` | One composed application in full |
 | `POST` | `/api/outbox/{id}/approve` | Release an application for sending |
 | `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
+| `GET` | `/api/discovery/suggestions` | Curated employer boards worth following |
+| `POST` | `/api/discovery/detect` | Read a board token out of a pasted careers URL |
 | `DELETE` | `/api/cv/{id}` | Remove a CV |
 
 ### Application and dashboard endpoints
@@ -794,10 +813,11 @@ The test suites cover:
 - Hard filter and blacklist behavior.
 - Multiple seniority choices.
 - Discovery parsing and query inclusion/exclusion behavior.
+- Discovery source editing, pause state, curated suggestions, and board URL detection.
 - Deterministic generation without invented profile data.
 - Full authentication/profile/filter/job/document/application/outbound API flow.
 - Shared catalog behavior across users.
-- Re-evaluation after profile, filter, and blacklist changes.
+- Re-evaluation after profile, experience, skill, project, filter, and blacklist changes.
 - Application action lockout for rejected companies/jobs.
 
 At the last verification point, Go tests, TypeScript typechecking, the production web build, the main smoke flow, and the regression smoke flow passed.
@@ -831,24 +851,22 @@ Before public production use, add secure cookies or another hardened token strat
 
 These are known gaps, not hidden surprises:
 
-1. **Re-evaluation triggers:** saving the main profile, filters, or blacklist re-evaluates jobs. Adding/removing a skill, project, or experience does not currently rescore every existing match immediately. Resaving the profile/filter or rerunning discovery refreshes it. A centralized `ReevaluateUserJobs` trigger should be added to those mutations.
-2. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
-3. **Source management UI:** sources can be added, validated, and deleted. Rich editing, enable/disable toggles, and per-source schedules can be improved.
-4. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
-5. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
-9. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
+1. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
+2. **Source management depth:** sources can be added, edited, validated, paused/resumed, and deleted. Per-source schedules and richer per-provider diagnostics can still be improved.
+3. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
+4. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
+5. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.
 7. **Production auth and operations:** see the security section above.
 8. **Official application APIs:** external submission is intentionally absent. Add only authorized ATS/employer integrations, never generic stealth automation.
 
 Suggested priority order:
 
-1. Rescore after experience/skill/project mutations.
-2. Add integration tests around store/HTTP authorization and rejected-job locks.
-3. Improve source editing/toggling and provider diagnostics.
-4. Add bounded pagination plus job archival/expiration.
-5. Harden authentication and operations for deployment.
-6. Add partner administration only after a real commercial agreement exists.
+1. Add integration tests around store/HTTP authorization and rejected-job locks.
+2. Improve provider diagnostics and add per-source schedules.
+3. Add bounded pagination plus job archival/expiration.
+4. Harden authentication and operations for deployment.
+5. Add partner administration only after a real commercial agreement exists.
 
 ## Contributor invariants
 
@@ -889,6 +907,15 @@ make migrate
 ```
 
 Migrations are idempotent. A normal restart should not require deleting data.
+
+### Make says `No rule to make target`
+
+Some Windows GNU Make builds may fail to auto-discover `Makefile` even when it is present. Use the explicit form:
+
+```bash
+make -f Makefile test
+make -f Makefile smoke-regression
+```
 
 ### Rebuild after dependency or Dockerfile changes
 

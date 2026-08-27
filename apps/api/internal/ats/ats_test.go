@@ -97,10 +97,17 @@ func fetchGreenhouseAgainst(t *testing.T, body string, status int) (Form, error)
 	}
 	form = Form{Provider: ProviderGreenhouse, Title: payload.Title, Company: payload.CompanyName}
 	for _, question := range payload.Questions {
+		if protectedPattern.MatchString(question.Label) {
+			form.Skipped = append(form.Skipped, question.Label)
+			continue
+		}
 		field, ok := convertGreenhouse(question)
 		if !ok {
 			form.Skipped = append(form.Skipped, question.Label)
 			continue
+		}
+		if declarationPattern.MatchString(question.Label) {
+			field.Role = RoleDeclaration
 		}
 		form.Fields = append(form.Fields, field)
 	}
@@ -190,5 +197,55 @@ func TestFetchRejectsUnsupportedURLs(t *testing.T) {
 	}
 	if form.Provider != ProviderLever {
 		t.Errorf("provider = %q, want lever", form.Provider)
+	}
+}
+
+// Employers do not reliably put protected-characteristic questions in the
+// demographic block. Canonical asks for gender, nationality and race as
+// ordinary required questions, so labels have to be checked too.
+func TestProtectedQuestionsAreSkippedWhereverTheyAppear(t *testing.T) {
+	payload := `{"title":"Engineer","company_name":"Acme","questions":[
+	  {"label":"First Name","required":true,"fields":[{"name":"first_name","type":"input_text"}]},
+	  {"label":"Which gender do you identify as?","required":true,"fields":[{"name":"q1","type":"multi_value_single_select","values":[{"label":"Man","value":1}]}]},
+	  {"label":"Please indicate your race or ethnicity:","required":true,"fields":[{"name":"q2","type":"input_text"}]},
+	  {"label":"Please indicate your nationality:","required":true,"fields":[{"name":"q3","type":"input_text"}]},
+	  {"label":"Do you have a disability?","required":true,"fields":[{"name":"q4","type":"input_text"}]}
+	]}`
+	form, err := fetchGreenhouseAgainst(t, payload, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range form.Fields {
+		if protectedPattern.MatchString(field.Label) {
+			t.Errorf("a protected-characteristic question became answerable: %q", field.Label)
+		}
+	}
+	if len(form.Fields) != 1 || form.Fields[0].Name != "first_name" {
+		t.Errorf("expected only the name field to survive, got %+v", form.Fields)
+	}
+	if len(form.Skipped) != 4 {
+		t.Errorf("expected 4 skipped questions, got %v", form.Skipped)
+	}
+}
+
+func TestDeclarationsAreMarkedNotAnswered(t *testing.T) {
+	payload := `{"title":"Engineer","company_name":"Acme","questions":[
+	  {"label":"During this application process I agree to use only my own words","required":true,"fields":[{"name":"d1","type":"multi_value_single_select","values":[{"label":"I agree","value":1}]}]},
+	  {"label":"Please confirm that you have read and agree to our Recruitment Privacy Notice","required":true,"fields":[{"name":"d2","type":"multi_value_single_select","values":[{"label":"Yes","value":1}]}]},
+	  {"label":"How many years of Go experience do you have?","required":true,"fields":[{"name":"q","type":"input_text"}]}
+	]}`
+	form, err := fetchGreenhouseAgainst(t, payload, 200)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roles := map[string]string{}
+	for _, field := range form.Fields {
+		roles[field.Name] = field.Role
+	}
+	if roles["d1"] != RoleDeclaration || roles["d2"] != RoleDeclaration {
+		t.Errorf("declarations not marked: %v", roles)
+	}
+	if roles["q"] != RoleQuestion {
+		t.Errorf("an ordinary question was mistaken for a declaration: %v", roles)
 	}
 }

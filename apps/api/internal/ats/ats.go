@@ -29,6 +29,12 @@ const (
 	ProviderLever           = "lever"
 	ProviderAshby           = "ashby"
 	ProviderSmartRecruiters = "smartrecruiters"
+
+	// Aggregators. Discovery can crawl these for jobs, but their links stay on
+	// the aggregator rather than reaching an employer's application form, so
+	// they are never returned by Detect.
+	ProviderRemotive  = "remotive"
+	ProviderArbeitnow = "arbeitnow"
 )
 
 // Field types, normalised across providers.
@@ -46,6 +52,9 @@ const (
 	RoleQuestion    = "question"
 	RoleResume      = "resume"
 	RoleCoverLetter = "cover_letter"
+	// RoleDeclaration marks an undertaking the applicant makes personally, such
+	// as confirming the writing is their own. Never answered automatically.
+	RoleDeclaration = "declaration"
 )
 
 var (
@@ -202,10 +211,17 @@ func (r *Reader) greenhouse(ctx context.Context, board, jobID, applyURL string) 
 		Title: payload.Title, Company: payload.CompanyName, ApplyURL: applyURL,
 	}
 	for _, question := range payload.Questions {
+		if protectedPattern.MatchString(question.Label) {
+			form.Skipped = append(form.Skipped, question.Label)
+			continue
+		}
 		field, ok := convertGreenhouse(question)
 		if !ok {
 			form.Skipped = append(form.Skipped, question.Label)
 			continue
+		}
+		if declarationPattern.MatchString(question.Label) {
+			field.Role = RoleDeclaration
 		}
 		form.Fields = append(form.Fields, field)
 	}

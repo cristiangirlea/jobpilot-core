@@ -50,10 +50,25 @@ if (-not $job.match.rejected -or $job.match.breakdown.seniority_match -ne 15) {
 }
 
 $filter.included_technologies = @("Rust")
+$filter.required_skills = @("Rust")
 Send-Request PUT "/filters/$($filter.id)" $filter | Out-Null
 $jobs = Send-Request GET "/jobs"
 $updated = $jobs | Where-Object { $_.job.id -eq $job.job.id }
 if (-not $updated -or $updated.match.rejected) { throw "Existing job was not re-evaluated after the filter changed" }
+if ($updated.match.missing_skills -notcontains "Rust") { throw "Expected Rust to be reported as a missing skill before it is added to the profile" }
+
+$skill = Send-Request POST "/skills" @{ name = "Rust"; level = "intermediate"; years = 2 }
+$jobs = Send-Request GET "/jobs"
+$skillMatched = $jobs | Where-Object { $_.job.id -eq $job.job.id }
+if ($skillMatched.match.matched_skills -notcontains "Rust" -or $skillMatched.match.breakdown.skill_match -ne 30) {
+    throw "Existing job was not re-evaluated after adding a matching skill"
+}
+Send-Request DELETE "/skills/$($skill.id)" | Out-Null
+$jobs = Send-Request GET "/jobs"
+$skillRemoved = $jobs | Where-Object { $_.job.id -eq $job.job.id }
+if ($skillRemoved.match.matched_skills -contains "Rust" -or $skillRemoved.match.missing_skills -notcontains "Rust") {
+    throw "Existing job was not re-evaluated after removing a matching skill"
+}
 $application = Send-Request POST "/applications" @{ job_id = $job.job.id }
 
 $exclusion = Send-Request POST "/blacklist" @{ company_name = "Regression Labs LLC"; company_domain = "regression.example"; reason = "Regression check" }
@@ -73,6 +88,20 @@ $jobs = Send-Request GET "/jobs"
 $unblocked = $jobs | Where-Object { $_.job.id -eq $job.job.id }
 if ($unblocked.match.rejected) { throw "Removing the company exclusion did not restore the existing match" }
 
+$experience = Send-Request POST "/experiences" @{
+    company = "Regression Labs"; company_domain = ""; title = "Backend Engineer"; start_date = "2021"; end_date = ""; current = $false
+    description = "Regression experience entry."
+}
+$jobs = Send-Request GET "/jobs"
+$experienceBlocked = $jobs | Where-Object { $_.job.id -eq $job.job.id }
+if (-not $experienceBlocked.match.rejected -or ($experienceBlocked.match.rejection_reasons -join " ") -notmatch "previous employer") {
+    throw "Adding experience did not re-evaluate and reject the existing job"
+}
+Send-Request DELETE "/experiences/$($experience.id)" | Out-Null
+$jobs = Send-Request GET "/jobs"
+$experienceRemoved = $jobs | Where-Object { $_.job.id -eq $job.job.id }
+if ($experienceRemoved.match.rejected) { throw "Removing experience did not restore the existing match" }
+
 $source = Send-Request POST "/discovery/sources" @{
     provider = "arbeitnow"; name = "Europe OR/NOT check"; identifier = ""; search_query = "Go, Rust"
     excluded_search_query = "PHP, WordPress"; active = $true
@@ -81,6 +110,21 @@ $sources = Send-Request GET "/discovery/sources"
 $savedSource = $sources | Where-Object { $_.id -eq $source.id }
 if ($savedSource.search_query -ne "Go, Rust" -or $savedSource.excluded_search_query -ne "PHP, WordPress") {
     throw "Discovery include/exclude rules were not persisted"
+}
+$source.active = $false
+$source.search_query = "Go"
+$source.excluded_search_query = "PHP"
+$updatedSource = Send-Request PUT "/discovery/sources/$($source.id)" $source
+if ($updatedSource.active -or $updatedSource.search_query -ne "Go" -or $updatedSource.excluded_search_query -ne "PHP") {
+    throw "Discovery source edits and pause state were not persisted"
+}
+$suggestions = Send-Request GET "/discovery/suggestions"
+if (-not ($suggestions | Where-Object { $_.provider -eq "greenhouse" -and $_.identifier -eq "grafanalabs" })) {
+    throw "Curated discovery suggestions did not include expected employer-direct boards"
+}
+$detected = Send-Request POST "/discovery/detect" @{ url = "https://job-boards.greenhouse.io/grafanalabs" }
+if ($detected.provider -ne "greenhouse" -or $detected.identifier -ne "grafanalabs" -or -not $detected.supported) {
+    throw "Discovery URL detection failed for a Greenhouse board"
 }
 
 Write-Host "Regression passed: excluded-company jobs stay visible but all application actions are locked."

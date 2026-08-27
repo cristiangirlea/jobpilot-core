@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
@@ -15,6 +16,7 @@ type Store struct{ DB *pgxpool.Pool }
 
 var ErrDuplicateJob = errors.New("discovered job already exists")
 var ErrApplicationBlocked = errors.New("application actions are blocked for this rejected job")
+var ErrDuplicateDiscoverySource = errors.New("a discovery source with the same provider, identifier, and query already exists")
 
 func New(db *pgxpool.Pool) *Store { return &Store{DB: db} }
 
@@ -565,7 +567,17 @@ func (s *Store) DiscoverySources(ctx context.Context, u string, activeOnly bool)
 	return out, rows.Err()
 }
 func (s *Store) AddDiscoverySource(ctx context.Context, u string, x models.DiscoverySource) (models.DiscoverySource, error) {
-	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_sources(user_id,provider,name,identifier,search_query,excluded_search_query,active) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,created_at`, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.CreatedAt)
+	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_sources(user_id,provider,name,identifier,search_query,excluded_search_query,active) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(user_id,provider,identifier,search_query,excluded_search_query) DO UPDATE SET name=EXCLUDED.name,active=EXCLUDED.active,last_error='' RETURNING id,provider,name,identifier,search_query,excluded_search_query,active,last_crawled_at,last_error,created_at`, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.Provider, &x.Name, &x.Identifier, &x.SearchQuery, &x.ExcludedSearchQuery, &x.Active, &x.LastCrawledAt, &x.LastError, &x.CreatedAt)
+	if isUniqueViolation(err) {
+		return x, ErrDuplicateDiscoverySource
+	}
+	return x, err
+}
+func (s *Store) UpdateDiscoverySource(ctx context.Context, u, id string, x models.DiscoverySource) (models.DiscoverySource, error) {
+	err := s.DB.QueryRow(ctx, `UPDATE discovery_sources SET provider=$3,name=$4,identifier=$5,search_query=$6,excluded_search_query=$7,active=$8,last_error='' WHERE id=$1 AND user_id=$2 RETURNING id,provider,name,identifier,search_query,excluded_search_query,active,last_crawled_at,last_error,created_at`, id, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.Provider, &x.Name, &x.Identifier, &x.SearchQuery, &x.ExcludedSearchQuery, &x.Active, &x.LastCrawledAt, &x.LastError, &x.CreatedAt)
+	if isUniqueViolation(err) {
+		return x, ErrDuplicateDiscoverySource
+	}
 	return x, err
 }
 func (s *Store) EnsureRecommendedSource(ctx context.Context, u, query string) (models.DiscoverySource, error) {
@@ -583,6 +595,10 @@ func (s *Store) DeleteDiscoverySource(ctx context.Context, u, id string) error {
 func (s *Store) UpdateDiscoverySourceResult(ctx context.Context, u, id, message string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE discovery_sources SET last_crawled_at=now(),last_error=$3 WHERE id=$1 AND user_id=$2`, id, u, message)
 	return err
+}
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 func (s *Store) StartDiscoveryRun(ctx context.Context, u string) (models.DiscoveryRun, error) {
 	var x models.DiscoveryRun

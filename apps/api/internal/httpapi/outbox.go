@@ -76,10 +76,23 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	}
 	if formErr == nil {
 		entry.Form = formToMap(form)
+		declarations := 0
 		for _, answer := range entry.Answers {
+			if answer.Source == "declaration" {
+				declarations++
+				// A declaration is the applicant's own statement. It blocks, but
+				// saying it "has no answer" would misdescribe why.
+				if answer.Required {
+					entry.Blockers = append(entry.Blockers, fmt.Sprintf("You have to make this declaration yourself on the employer's form: %q", answer.Label))
+				}
+				continue
+			}
 			if answer.Required && strings.TrimSpace(answer.Answer) == "" {
 				entry.Blockers = append(entry.Blockers, fmt.Sprintf("A required question has no answer yet: %q", answer.Label))
 			}
+		}
+		if declarations > 0 {
+			entry.Notices = append(entry.Notices, fmt.Sprintf("%d question(s) ask you to declare something personally, such as confirming the wording is your own. Read the letter and answers before agreeing.", declarations))
 		}
 		if len(form.Skipped) > 0 {
 			// These are voluntary and are the user's alone to answer. Treating
@@ -148,6 +161,10 @@ func (s *Server) answerForm(ctx context.Context, uid string, form ats.Form, prof
 			answer.Answer, answer.Source = "(the approved CV is attached)", "cv"
 		case ats.RoleCoverLetter:
 			answer.Answer, answer.Source = "(the composed cover letter is attached)", "cover_letter"
+		case ats.RoleDeclaration:
+			// An undertaking the applicant makes personally. Ticking it for them
+			// would be making a statement on their behalf.
+			answer.Source, answer.NeedsReview = "declaration", true
 		default:
 			resolution, err := service.Resolve(ctx, uid, answers.Question{
 				Text: field.Label, Kind: field.Type, Options: field.Options, MaxLength: field.MaxLength,

@@ -89,11 +89,14 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("PUT /api/discovery/settings", p(s.saveDiscoverySettings))
 	m.Handle("GET /api/discovery/sources", p(s.discoverySources))
 	m.Handle("POST /api/discovery/sources", p(s.addDiscoverySource))
+	m.Handle("PUT /api/discovery/sources/{id}", p(s.updateDiscoverySource))
 	m.Handle("POST /api/discovery/validate", p(s.validateDiscoverySource))
 	m.Handle("DELETE /api/discovery/sources/{id}", p(s.deleteDiscoverySource))
 	m.Handle("GET /api/discovery/runs", p(s.discoveryRuns))
 	m.Handle("POST /api/discovery/run", p(s.runDiscovery))
 	m.Handle("POST /api/discovery/recommended", p(s.runRecommendedDiscovery))
+	m.Handle("GET /api/discovery/suggestions", p(s.boardSuggestions))
+	m.Handle("POST /api/discovery/detect", p(s.detectBoard))
 	m.Handle("POST /api/jobs/{id}/outbound", p(s.outbound))
 	return s.cors(m)
 }
@@ -226,10 +229,13 @@ func (s *Server) addExperience(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddExperience(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
 func (s *Server) deleteExperience(w http.ResponseWriter, r *http.Request) {
-	s.delete(w, r, "work_experiences")
+	s.deleteAndReevaluate(w, r, "work_experiences", "Experience not found.")
 }
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Skills(r.Context(), auth.UserID(r.Context()))
@@ -245,9 +251,14 @@ func (s *Server) addSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddSkill(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
-func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) { s.delete(w, r, "skills") }
+func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	s.deleteAndReevaluate(w, r, "skills", "Skill not found.")
+}
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Projects(r.Context(), auth.UserID(r.Context()))
 	respond(w, x, e)
@@ -263,9 +274,14 @@ func (s *Server) addProject(w http.ResponseWriter, r *http.Request) {
 	}
 	x.Skills = nonNil(x.Skills)
 	x, e := s.Store.AddProject(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
-func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) { s.delete(w, r, "projects") }
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	s.deleteAndReevaluate(w, r, "projects", "Project not found.")
+}
 func (s *Server) listBlacklist(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Blacklist(r.Context(), auth.UserID(r.Context()))
 	respond(w, x, e)
@@ -286,25 +302,16 @@ func (s *Server) addBlacklist(w http.ResponseWriter, r *http.Request) {
 	respondCreated(w, x, e)
 }
 func (s *Server) deleteBlacklist(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteOwned(r.Context(), "company_blacklist", auth.UserID(r.Context()), r.PathValue("id"))
+	s.deleteAndReevaluate(w, r, "company_blacklist", "Excluded company not found.")
+}
+func (s *Server) deleteAndReevaluate(w http.ResponseWriter, r *http.Request, table, notFoundMessage string) {
+	err := s.Store.DeleteOwned(r.Context(), table, auth.UserID(r.Context()), r.PathValue("id"))
 	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Excluded company not found.")
+		problem(w, 404, notFoundMessage)
 		return
 	}
 	if err == nil {
 		err = s.reevaluateJobs(r)
-	}
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	w.WriteHeader(204)
-}
-func (s *Server) delete(w http.ResponseWriter, r *http.Request, table string) {
-	err := s.Store.DeleteOwned(r.Context(), table, auth.UserID(r.Context()), r.PathValue("id"))
-	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Record not found.")
-		return
 	}
 	if err != nil {
 		internal(w, err)
@@ -347,19 +354,7 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) deleteFilter(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteOwned(r.Context(), "filter_presets", auth.UserID(r.Context()), r.PathValue("id"))
-	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Filter not found.")
-		return
-	}
-	if err == nil {
-		err = s.reevaluateJobs(r)
-	}
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	s.deleteAndReevaluate(w, r, "filter_presets", "Filter not found.")
 }
 
 func (s *Server) reevaluateJobs(r *http.Request) error {
@@ -583,7 +578,34 @@ func (s *Server) addDiscoverySource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddDiscoverySource(r.Context(), auth.UserID(r.Context()), x)
-	respondCreated(w, x, e)
+	respondDiscoverySource(w, x, e, http.StatusCreated)
+}
+func (s *Server) updateDiscoverySource(w http.ResponseWriter, r *http.Request) {
+	var x models.DiscoverySource
+	if !decode(w, r, &x) {
+		return
+	}
+	if message := normalizeDiscoverySource(&x); message != "" {
+		problem(w, 422, message)
+		return
+	}
+	x, e := s.Store.UpdateDiscoverySource(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), x)
+	respondDiscoverySource(w, x, e, http.StatusOK)
+}
+func respondDiscoverySource(w http.ResponseWriter, x models.DiscoverySource, err error, status int) {
+	if errors.Is(err, store.ErrDuplicateDiscoverySource) {
+		problem(w, 409, err.Error())
+		return
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, 404, "Source not found.")
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	write(w, status, x)
 }
 func normalizeDiscoverySource(x *models.DiscoverySource) string {
 	x.Provider = strings.ToLower(strings.TrimSpace(x.Provider))

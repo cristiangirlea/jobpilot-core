@@ -1,11 +1,21 @@
+GOCACHE ?= $(CURDIR)/.cache/go-build
+
+ifeq ($(OS),Windows_NT)
+TEST_API = powershell -NoProfile -Command '$$env:GOCACHE="$(GOCACHE)"; Set-Location apps/api; go test ./...'
+TEST_WEB = powershell -NoProfile -Command 'Set-Location apps/web; npm run typecheck'
+else
+TEST_API = cd apps/api && GOCACHE="$(GOCACHE)" go test ./...
+TEST_WEB = cd apps/web && npm run typecheck
+endif
+
 .PHONY: dev test migrate seed smoke smoke-live smoke-regression build down logs
 
 dev:
 	docker compose up --build
 
 test:
-	cd apps/api && go test ./...
-	cd apps/web && npm run typecheck
+	$(TEST_API)
+	$(TEST_WEB)
 
 migrate:
 	docker compose run --rm migrate
