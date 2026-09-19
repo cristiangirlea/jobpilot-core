@@ -1,10 +1,11 @@
-.PHONY: dev test migrate seed smoke smoke-live smoke-regression build down logs
+.PHONY: dev test migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs
 
 dev:
 	docker compose up --build
 
 test:
 	cd apps/api && go test ./...
+	cd apps/mcp && go test ./...
 	cd apps/web && npm run typecheck
 
 migrate:
@@ -21,6 +22,12 @@ smoke-live:
 
 smoke-regression:
 	powershell -ExecutionPolicy Bypass -File scripts/seniority-filter-smoke.ps1
+
+smoke-mcp:
+	cd apps/mcp && go test -count=1 -v -run TestEndToEnd . -args -api http://localhost:8080
+
+mcp:
+	cd apps/mcp && go build -o jobpilot-mcp .
 
 build:
 	docker compose build
