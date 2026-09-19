@@ -524,7 +524,7 @@ Get a token from `POST /api/auth/login`, or let the server log in for you:
 |---|---|
 | `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
 | `JOBPILOT_TOKEN` | Bearer token from login or registration |
-| `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Alternative to a token; the server logs in on first use and once more after a `401`, which covers token expiry |
+| `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Alternative to a token; the server logs in on first use and once more after a `401`, which covers token expiry. Prefer a token: values passed with `claude mcp add -e` are stored in plaintext in the host's config, and a password never expires |
 
 The transport is stdio, so the binary logs to stderr only.
 
@@ -544,7 +544,7 @@ The transport is stdio, so the binary logs to stderr only.
 | `update_application_status` | write | Status change with history; keeps existing notes unless new notes are passed |
 | `run_discovery` | write | Run every active source now |
 
-List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` from the API is returned as a tool error with the rejection hint, so the model can explain it instead of retrying.
+List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the web UI does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` from the API is returned as a tool error with the rejection hint, so the model can explain it instead of retrying.
 
 Deliberately absent: `POST /api/jobs/{id}/outbound` (an agent must not fire attribution clicks), registration, deletes, and profile or filter edits.
 
@@ -650,7 +650,7 @@ go run ./cmd/api
 
 ### Native MCP server
 
-Requires Go 1.25 and a running API:
+Requires Go 1.25. The unit tests run against a fake API; only the binary itself needs a running API:
 
 ```bash
 cd apps/mcp

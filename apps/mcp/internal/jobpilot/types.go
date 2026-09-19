@@ -20,7 +20,7 @@ type Job struct {
 	EmploymentType string     `json:"employment_type"`
 	Industry       string     `json:"industry"`
 	Description    string     `json:"description"`
-	ApplyURL       string     `json:"apply_url" jsonschema:"The employer's real apply page. Tell the user to open it themselves; nothing here submits an application"`
+	ApplyURL       string     `json:"apply_url" jsonschema:"The employer's real apply page, empty when the job is rejected for this user. Tell the user to open it themselves; nothing here submits an application"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	DiscoveredAt   *time.Time `json:"discovered_at,omitempty"`
@@ -95,9 +95,15 @@ type MatchSummary struct {
 	MissingSkills    []string   `json:"missing_skills"`
 }
 
+// summarizeMatch builds the list view. Rejected jobs lose their apply URL,
+// matching the web UI, which withholds the apply action for them.
 func summarizeMatch(x JobWithMatch) MatchSummary {
 	x.Match.normalize()
-	return MatchSummary{Job: summarizeJob(x.Job), Score: x.Match.Score, Rejected: x.Match.Rejected, RejectionReasons: x.Match.RejectionReasons, Warnings: x.Match.Warnings, MatchedSkills: x.Match.MatchedSkills, MissingSkills: x.Match.MissingSkills}
+	job := summarizeJob(x.Job)
+	if x.Match.Rejected {
+		job.ApplyURL = ""
+	}
+	return MatchSummary{Job: job, Score: x.Match.Score, Rejected: x.Match.Rejected, RejectionReasons: x.Match.RejectionReasons, Warnings: x.Match.Warnings, MatchedSkills: x.Match.MatchedSkills, MissingSkills: x.Match.MissingSkills}
 }
 
 type Application struct {

@@ -25,6 +25,7 @@ const rejectedJob = `{"job":{"id":"job-b","title":"Backend Engineer","company":"
 const weakJob = `{"job":{"id":"job-c","title":"Platform Engineer","company":"Other Ltd","location":"Remote","remote_type":"remote","description":"Long description C.","apply_url":"https://example.test/apply-c","created_at":"2026-09-11T00:00:00Z"},"match":{"rejected":false,"rejection_reasons":[],"warnings":[],"score":65,"reasons":[],"matched_skills":["Go"],"missing_skills":[],"red_flags":[],"breakdown":{}},"match_id":"m-c"}`
 const application = `{"id":"app-1","job_id":"job-a","status":"ready","notes":"keep me","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-12T00:00:00Z","job":{"id":"job-a","title":"Senior Backend Engineer","company":"Fresh Systems GmbH","location":"Bucharest, Romania","remote_type":"remote","description":"Long description A about Go and PostgreSQL.","apply_url":"https://example.test/apply-a","created_at":"2026-09-11T00:00:00Z"}}`
 const appliedApplication = `{"id":"app-2","job_id":"job-c","status":"applied","notes":"","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-13T00:00:00Z","job":{"id":"job-c","title":"Platform Engineer","company":"Other Ltd","location":"Remote","remote_type":"remote","description":"Long description C.","apply_url":"https://example.test/apply-c","created_at":"2026-09-11T00:00:00Z"}}`
+const blockedApplication = `{"id":"app-blocked","job_id":"job-b","status":"ready","notes":"","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-12T00:00:00Z","job":{"id":"job-b","title":"Backend Engineer","company":"CurrentCo LLC","location":"Romania","remote_type":"remote","description":"Long description B.","apply_url":"https://example.test/apply-b","created_at":"2026-09-11T00:00:00Z"}}`
 const documents = `{"recruiter_message":"Hello recruiter","cover_letter":"Dear Fresh Systems","candidate_summary":"Summary","answers":{"Tell us about yourself":"I build backends."}}`
 const discoveryRun = `{"id":"run-1","status":"completed","jobs_seen":12,"jobs_added":3,"jobs_rejected":2,"applications_prepared":1,"duplicates_skipped":6,"started_at":"2026-09-14T00:00:00Z","completed_at":"2026-09-14T00:01:00Z"}`
 
@@ -77,11 +78,14 @@ func (f *fakeAPI) handler() http.Handler {
 		send(w, 201, `{"id":"app-new","job_id":"`+body["job_id"]+`","status":"draft","notes":"","created_at":"2026-09-15T00:00:00Z","updated_at":"2026-09-15T00:00:00Z"}`)
 	})
 	m.HandleFunc("GET /api/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
-		if r.PathValue("id") != "app-1" {
+		switch r.PathValue("id") {
+		case "app-1":
+			send(w, 200, `{"application":`+application+`,"documents":`+documents+`,"blocked":false,"block_reasons":[]}`)
+		case "app-blocked":
+			send(w, 200, `{"application":`+blockedApplication+`,"documents":`+documents+`,"blocked":true,"block_reasons":["Company matches your current employer."]}`)
+		default:
 			send(w, 404, `{"error":"Record not found."}`)
-			return
 		}
-		send(w, 200, `{"application":`+application+`,"documents":`+documents+`,"blocked":false,"block_reasons":[]}`)
 	})
 	m.HandleFunc("PATCH /api/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]string
@@ -113,10 +117,15 @@ func (f *fakeAPI) handler() http.Handler {
 // every assertion goes through the same JSON the host would see.
 func session(t *testing.T) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
+	return sessionWithToken(t, "test-token")
+}
+
+func sessionWithToken(t *testing.T, token string) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
 	fake := &fakeAPI{}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
-	client, err := NewClient(Options{BaseURL: srv.URL, Token: "test-token"})
+	client, err := NewClient(Options{BaseURL: srv.URL, Token: token})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +242,9 @@ func TestListJobsFiltersAndSummarizes(t *testing.T) {
 	if rejected == nil || !rejected.Rejected || len(rejected.RejectionReasons) != 1 {
 		t.Fatalf("rejected job must keep its reasons: %s", text)
 	}
+	if rejected.Job.ApplyURL != "" || got.Jobs[0].Job.ApplyURL != "https://example.test/apply-a" {
+		t.Fatalf("apply_url must be blanked only for rejected jobs: %s", text)
+	}
 
 	res, text = call(t, cs, "list_jobs", map[string]any{"state": "rejected"})
 	got = structured[listing](t, res)
@@ -261,6 +273,10 @@ func TestGetJobIncludesDescriptionAndBreakdown(t *testing.T) {
 	got := structured[JobWithMatch](t, res)
 	if got.Job.Description != "Long description A about Go and PostgreSQL." || got.Match.Breakdown["skill_match"] != 30 || got.Match.MissingSkills[0] != "Kafka" {
 		t.Fatalf("unexpected detail: %s", text)
+	}
+	res, text = call(t, cs, "get_job", map[string]any{"job_id": "job-b"})
+	if got := structured[JobWithMatch](t, res); !got.Match.Rejected || got.Job.ApplyURL != "" {
+		t.Fatalf("rejected job detail must not carry an apply URL: %s", text)
 	}
 	res, text = call(t, cs, "get_job", map[string]any{"job_id": "nope"})
 	if !res.IsError || !strings.Contains(text, "404") {
@@ -353,8 +369,21 @@ func TestApplicationsListAndDetail(t *testing.T) {
 		t.Fatal(text)
 	}
 	detail := structured[ApplicationView](t, res)
-	if detail.Application.ID != "app-1" || detail.Documents.RecruiterMessage != "Hello recruiter" || detail.Blocked {
+	if detail.Application.ID != "app-1" || detail.Documents.RecruiterMessage != "Hello recruiter" || detail.Blocked || detail.Application.Job.ApplyURL == "" {
 		t.Fatalf("unexpected detail: %s", text)
+	}
+	res, text = call(t, cs, "get_application", map[string]any{"application_id": "app-blocked"})
+	detail = structured[ApplicationView](t, res)
+	if !detail.Blocked || len(detail.BlockReasons) != 1 || detail.Application.Job == nil || detail.Application.Job.ApplyURL != "" {
+		t.Fatalf("blocked application must not carry an apply URL: %s", text)
+	}
+}
+
+func TestUnauthorizedSurfacesTokenHint(t *testing.T) {
+	cs, _ := sessionWithToken(t, "expired-token")
+	res, text := call(t, cs, "get_profile", nil)
+	if !res.IsError || !strings.Contains(text, "401") || !strings.Contains(text, "JOBPILOT_TOKEN") {
+		t.Fatalf("expected a 401 with the token hint, got %s", text)
 	}
 }
 

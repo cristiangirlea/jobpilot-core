@@ -6,10 +6,47 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
+
+func TestClientRejectsOversizedResponses(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[` + strings.Repeat(`{"job":{"id":"x"}},`, 50) + `{"job":{"id":"y"}}]`))
+	}))
+	defer srv.Close()
+	c, err := NewClient(Options{BaseURL: srv.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.maxBytes = 64
+	if _, err = c.Jobs(context.Background(), false); err == nil || !strings.Contains(err.Error(), "exceeded") {
+		t.Fatalf("expected a size error, got %v", err)
+	}
+}
+
+func TestClientTrimsNonJSONErrorBodies(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(502)
+		_, _ = w.Write([]byte("<html>" + strings.Repeat("x", 2000) + "</html>"))
+	}))
+	defer srv.Close()
+	c, err := NewClient(Options{BaseURL: srv.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = c.Profile(context.Background())
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != 502 {
+		t.Fatalf("expected a 502 APIError, got %v", err)
+	}
+	if len([]rune(apiErr.Message)) != maxErrorMessage+3 || !strings.HasPrefix(apiErr.Message, "<html>") {
+		t.Fatalf("message not trimmed: %d chars", len(apiErr.Message))
+	}
+}
 
 func TestNewClientNormalizesBaseURL(t *testing.T) {
 	for _, in := range []string{"http://localhost:8080", "http://localhost:8080/", "http://localhost:8080/api", "http://localhost:8080/api/"} {

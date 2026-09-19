@@ -77,8 +77,11 @@ func NewServer(c *Client, version string) *mcp.Server {
 	readOnly := func(title string) *mcp.ToolAnnotations {
 		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
 	}
-	write := func(title string, idempotent bool) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: idempotent, OpenWorldHint: ptr(false)}
+	// Every write except run_discovery is idempotent: documents regenerate
+	// deterministically, applications upsert, and a repeated status change
+	// is a no-op.
+	write := func(title string) *mcp.ToolAnnotations {
+		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)}
 	}
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -127,7 +130,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_job",
-		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The apply_url is for the user to open themselves.",
+		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The apply_url is for the user to open themselves and is empty for rejected jobs.",
 		Annotations: readOnly("Get job and match detail"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, JobWithMatch, error) {
 		if strings.TrimSpace(in.JobID) == "" {
@@ -138,6 +141,9 @@ func NewServer(c *Client, version string) *mcp.Server {
 			return nil, JobWithMatch{}, toolError(err)
 		}
 		x.Match.normalize()
+		if x.Match.Rejected {
+			x.Job.ApplyURL = ""
+		}
 		return nil, x, nil
 	})
 
@@ -177,7 +183,11 @@ func NewServer(c *Client, version string) *mcp.Server {
 			return nil, ApplicationView{}, toolError(err)
 		}
 		d.Documents.normalize()
-		return nil, ApplicationView{Application: summarizeApplication(d.Application), Documents: d.Documents, Blocked: d.Blocked, BlockReasons: nonNil(d.BlockReasons)}, nil
+		view := ApplicationView{Application: summarizeApplication(d.Application), Documents: d.Documents, Blocked: d.Blocked, BlockReasons: nonNil(d.BlockReasons)}
+		if view.Blocked && view.Application.Job != nil {
+			view.Application.Job.ApplyURL = ""
+		}
+		return nil, view, nil
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
@@ -217,7 +227,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_documents",
 		Description: "Generate and store the deterministic application documents for a job: recruiter message, cover letter, candidate summary, and common screening answers, built only from stored profile facts. Safe to repeat. Refused for rejected jobs.",
-		Annotations: write("Generate application documents", true),
+		Annotations: write("Generate application documents"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Documents, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, Documents{}, errors.New("job_id is required")
@@ -233,7 +243,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_application",
 		Description: "Create a draft application record for a job, or return the existing one. This only tracks intent inside JobPilot; it does not contact the employer. Refused for rejected jobs.",
-		Annotations: write("Create draft application", true),
+		Annotations: write("Create draft application"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Application, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, Application{}, errors.New("job_id is required")
@@ -249,7 +259,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_application_status",
 		Description: "Move an application to a new status and record the change in its history. Set applied only after the user confirms they submitted on the employer's site. Notes are kept unless you pass replacement notes. Moving a blocked application to applied is refused.",
-		Annotations: write("Update application status", true),
+		Annotations: write("Update application status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateStatusInput) (*mcp.CallToolResult, Application, error) {
 		if strings.TrimSpace(in.ApplicationID) == "" {
 			return nil, Application{}, errors.New("application_id is required")
@@ -298,7 +308,7 @@ func toolError(err error) error {
 	}
 	switch apiErr.Status {
 	case http.StatusConflict:
-		return fmt.Errorf("%w. Rejected jobs never receive documents or applications; call get_job to see the rejection reasons and tell the user", err)
+		return fmt.Errorf("%w. Rejected jobs never receive documents or applications; call get_job (or get_application for its block_reasons) and tell the user why", err)
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w. The MCP server's JOBPILOT_TOKEN is invalid or expired; the user must refresh it or configure JOBPILOT_EMAIL and JOBPILOT_PASSWORD", err)
 	}

@@ -30,6 +30,8 @@ var apiFlag = flag.String("api", os.Getenv("JOBPILOT_E2E_API_URL"), "JobPilot AP
 
 type rest struct {
 	t     *testing.T
+	ctx   context.Context
+	http  *http.Client
 	base  string
 	token string
 }
@@ -44,7 +46,7 @@ func (r *rest) call(method, path string, body, out any) {
 		}
 		reader = bytes.NewReader(raw)
 	}
-	req, err := http.NewRequest(method, r.base+path, reader)
+	req, err := http.NewRequestWithContext(r.ctx, method, r.base+path, reader)
 	if err != nil {
 		r.t.Fatal(err)
 	}
@@ -52,7 +54,7 @@ func (r *rest) call(method, path string, body, out any) {
 	if r.token != "" {
 		req.Header.Set("Authorization", "Bearer "+r.token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := r.http.Do(req)
 	if err != nil {
 		r.t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -89,7 +91,7 @@ func TestEndToEnd(t *testing.T) {
 	// Seed a fresh, isolated user the same way scripts/smoke.ps1 does.
 	email := fmt.Sprintf("mcp-e2e-%d@example.test", time.Now().UnixNano())
 	password := "mcp-e2e-password"
-	r := &rest{t: t, base: api}
+	r := &rest{t: t, ctx: ctx, http: &http.Client{Timeout: 30 * time.Second}, base: api}
 	var registered struct {
 		Token string `json:"token"`
 	}

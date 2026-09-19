@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,7 +54,9 @@ func main() {
 	defer stop()
 	server := jobpilot.NewServer(client, version)
 	logger.Info("JobPilot MCP server ready", "api", client.BaseURL(), "transport", "stdio")
-	if err = server.Run(ctx, &mcp.StdioTransport{}); err != nil {
+	// An interrupt cancels ctx and Run returns its error; that is a clean
+	// shutdown, not a failure.
+	if err = server.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
@@ -66,7 +69,7 @@ Serves JobPilot to an MCP host over stdio. Environment:
   JOBPILOT_API_URL   API origin (default http://localhost:8080)
   JOBPILOT_TOKEN     bearer token from POST /api/auth/login
   JOBPILOT_EMAIL     with JOBPILOT_PASSWORD, logs in and refreshes the token
-  JOBPILOT_PASSWORD
+  JOBPILOT_PASSWORD  prefer a token: the host stores -e values in plaintext
 
 Register with Claude Code:
   claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- <path to jobpilot-mcp>

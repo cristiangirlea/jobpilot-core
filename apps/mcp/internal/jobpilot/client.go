@@ -19,7 +19,12 @@ const (
 	// A discovery run fetches every active provider inside one request; the
 	// API's own write timeout is two minutes, so allow a little more than that.
 	discoveryTimeout = 3 * time.Minute
-	maxResponseBytes = 8 << 20
+	// The list endpoints are not paginated and carry full descriptions, so
+	// the cap is generous; exceeding it is reported, never silently cut.
+	maxResponseBytes = 32 << 20
+	// Error bodies that are not the API's JSON shape (a proxy's HTML page)
+	// are trimmed so they cannot flood the model's context.
+	maxErrorMessage = 300
 )
 
 // Options configures a Client. Either Token or both Email and Password must be
@@ -42,6 +47,7 @@ type Client struct {
 	email    string
 	password string
 	timeout  time.Duration
+	maxBytes int64
 
 	mu    sync.Mutex
 	token string
@@ -78,7 +84,7 @@ func NewClient(o Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, token: o.Token}, nil
+	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, maxBytes: maxResponseBytes, token: o.Token}, nil
 }
 
 func (c *Client) BaseURL() string { return c.base }
@@ -156,9 +162,12 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 		return fmt.Errorf("jobpilot api: %s %s: %w", method, path, err)
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, c.maxBytes+1))
 	if err != nil {
 		return fmt.Errorf("jobpilot api: %s %s: %w", method, path, err)
+	}
+	if int64(len(data)) > c.maxBytes {
+		return fmt.Errorf("jobpilot api: %s %s: response exceeded %d bytes; the catalog is too large for this unpaginated endpoint", method, path, c.maxBytes)
 	}
 	if resp.StatusCode >= 300 {
 		var problem struct {
@@ -171,6 +180,9 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 		}
 		if message == "" {
 			message = http.StatusText(resp.StatusCode)
+		}
+		if runes := []rune(message); len(runes) > maxErrorMessage {
+			message = string(runes[:maxErrorMessage]) + "..."
 		}
 		return &APIError{Status: resp.StatusCode, Message: message}
 	}
