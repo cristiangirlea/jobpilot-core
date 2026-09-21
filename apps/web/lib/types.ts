@@ -21,3 +21,5 @@ export type OutboxAnswer={field:string;label:string;type:string;required:boolean
 export type OutboxEntry={id:string;job_id:string;application_id?:string;status:'needs_review'|'ready'|'approved'|'sent'|'failed'|'cancelled';channel:'ats_form'|'email'|'manual';ats_provider?:string;cv_document_id?:string;cv_decision?:string;cover_letter:string;cover_letter_source:string;form?:Record<string,unknown>;answers:OutboxAnswer[];blockers:string[];notices:string[];needs_review:number;error?:string;created_at:string;updated_at:string;approved_at?:string;sent_at?:string;job?:Job};
 export type BoardSuggestion={provider:string;identifier:string;name:string;note:string;remote_friendly:boolean};
 export type DetectedBoard={provider:string;identifier:string;job_id?:string;supported:boolean};
+export type AgentToken={id:string;name:string;token_prefix:string;scopes:string[];created_at:string;last_used_at?:string;expires_at?:string;revoked_at?:string};
+export type AgentTokenCreated={token:string;agent_token:AgentToken};

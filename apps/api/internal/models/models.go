@@ -297,3 +297,17 @@ type OutboxEntry struct {
 	SentAt            *time.Time     `json:"sent_at,omitempty"`
 	Job               *Job           `json:"job,omitempty"`
 }
+
+// AgentToken is a long-lived credential for an agent host or script. The
+// token itself is returned once at creation and never again; everything here
+// is safe to list.
+type AgentToken struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	TokenPrefix string     `json:"token_prefix"`
+	Scopes      []string   `json:"scopes"`
+	CreatedAt   time.Time  `json:"created_at"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+}

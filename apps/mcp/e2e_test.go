@@ -140,8 +140,17 @@ func TestEndToEnd(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s", err, out)
 	}
+	// Run the server the recommended way: a scoped agent token, not the
+	// user's password.
+	var agent struct {
+		Token string `json:"token"`
+	}
+	r.call("POST", "/api/tokens", map[string]any{"name": "mcp-e2e", "scopes": []string{"read", "write"}}, &agent)
+	if !strings.HasPrefix(agent.Token, "jpat_") {
+		t.Fatalf("expected an agent token, got %q", agent.Token)
+	}
 	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "JOBPILOT_API_URL="+api, "JOBPILOT_TOKEN=", "JOBPILOT_EMAIL="+email, "JOBPILOT_PASSWORD="+password)
+	cmd.Env = append(os.Environ(), "JOBPILOT_API_URL="+api, "JOBPILOT_TOKEN="+agent.Token, "JOBPILOT_EMAIL=", "JOBPILOT_PASSWORD=")
 	cmd.Stderr = os.Stderr
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {
@@ -290,6 +299,38 @@ func TestEndToEnd(t *testing.T) {
 	_, text, isErr = call("list_discovery_runs", nil)
 	if isErr {
 		t.Fatalf("list_discovery_runs: %s", text)
+	}
+
+	// A read-only token must be refused a write tool, with a message that
+	// tells the model this is a permission limit rather than a product rule.
+	var readOnly struct {
+		Token string `json:"token"`
+	}
+	r.call("POST", "/api/tokens", map[string]any{"name": "mcp-e2e-read", "scopes": []string{"read"}}, &readOnly)
+	limited := exec.Command(bin)
+	limited.Env = append(os.Environ(), "JOBPILOT_API_URL="+api, "JOBPILOT_TOKEN="+readOnly.Token, "JOBPILOT_EMAIL=", "JOBPILOT_PASSWORD=")
+	limited.Stderr = os.Stderr
+	limitedSession, err := mcp.NewClient(&mcp.Implementation{Name: "e2e-read", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: limited}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer limitedSession.Close()
+	readRes, err := limitedSession.CallTool(ctx, &mcp.CallToolParams{Name: "get_profile"})
+	if err != nil || readRes.IsError {
+		t.Fatalf("a read token must still read: %v", err)
+	}
+	writeRes, err := limitedSession.CallTool(ctx, &mcp.CallToolParams{Name: "create_application", Arguments: map[string]any{"job_id": accepted.Job.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refusal strings.Builder
+	for _, c := range writeRes.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			refusal.WriteString(tc.Text)
+		}
+	}
+	if !writeRes.IsError || !strings.Contains(refusal.String(), "scope") {
+		t.Fatalf("a read token must be refused a write tool with a scope message: %s", refusal.String())
 	}
 
 	out, text, isErr = call("get_filters", nil)

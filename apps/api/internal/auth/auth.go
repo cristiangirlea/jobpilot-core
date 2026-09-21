@@ -64,19 +64,46 @@ func Parse(token, secret string) (string, error) {
 	}
 	return c.UserID, nil
 }
-func Middleware(secret string, next http.Handler) http.Handler {
+
+// Middleware authenticates a request as either a browser session or an agent
+// token, and puts the resulting principal in the context. A nil agents
+// verifier keeps session-only behaviour, which is what the tests and any
+// caller without a store use.
+func Middleware(secret string, agents TokenVerifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		header := r.Header.Get("Authorization")
 		if !strings.HasPrefix(header, "Bearer ") {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		id, err := Parse(strings.TrimPrefix(header, "Bearer "), secret)
+		raw := strings.TrimPrefix(header, "Bearer ")
+		principal, err := resolve(r.Context(), raw, secret, agents)
 		if err != nil {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), userKey, id)))
+		ctx := context.WithValue(r.Context(), principalKey, principal)
+		ctx = context.WithValue(ctx, userKey, principal.UserID)
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+func resolve(ctx context.Context, raw, secret string, agents TokenVerifier) (Principal, error) {
+	if strings.HasPrefix(raw, AgentTokenPrefix) {
+		if agents == nil {
+			return Principal{}, errors.New("agent tokens are not configured")
+		}
+		// Looked up by digest: the token itself is never stored, so a
+		// database copy cannot be replayed against the API.
+		return agents.AgentTokenPrincipal(ctx, HashAgentToken(raw))
+	}
+	id, err := Parse(raw, secret)
+	if err != nil {
+		return Principal{}, err
+	}
+	// A browser session is the user themselves, so it holds every scope and
+	// no token id, which is what RequireSession keys on.
+	return Principal{UserID: id, Scopes: []string{ScopeRead, ScopeWrite}}, nil
+}
+
 func UserID(ctx context.Context) string { id, _ := ctx.Value(userKey).(string); return id }
