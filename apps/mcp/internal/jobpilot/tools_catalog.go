@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -56,8 +57,13 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		if strings.TrimSpace(in.Title) == "" || strings.TrimSpace(in.Company) == "" || strings.TrimSpace(in.Description) == "" {
 			return nil, ImportedJob{}, errors.New("title, company, and description are required")
 		}
-		if in.ApplyURL != "" && !strings.HasPrefix(in.ApplyURL, "http://") && !strings.HasPrefix(in.ApplyURL, "https://") {
-			return nil, ImportedJob{}, fmt.Errorf("apply_url must be an http or https URL, not %q", in.ApplyURL)
+		if in.ApplyURL != "" {
+			// The same check the API makes, so a malformed URL is explained
+			// here rather than coming back as a 422.
+			parsed, err := url.ParseRequestURI(in.ApplyURL)
+			if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+				return nil, ImportedJob{}, fmt.Errorf("apply_url must be an http or https URL, not %q", in.ApplyURL)
+			}
 		}
 		if in.SalaryMin < 0 || in.SalaryMax < 0 || (in.SalaryMax > 0 && in.SalaryMin > in.SalaryMax) {
 			return nil, ImportedJob{}, errors.New("salary range is invalid: neither value may be negative and the minimum cannot exceed the maximum")

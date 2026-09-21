@@ -308,3 +308,44 @@ func TestRunDiscoveryReportsProgressOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("no token means no notifications, got %d", withoutToken)
 	}
 }
+
+// The API keeps NOT terms only for arbeitnow and clears them everywhere
+// else, so a source saved here must match what the user asked for.
+func TestSourceNormalizationKeepsNotTermsOnlyForArbeitnow(t *testing.T) {
+	yes := true
+	arbeitnow, err := normalizeSource(sourceInput{Provider: "Arbeitnow ", Name: " Europe ", SearchQuery: "Go, Rust", ExcludedSearchQuery: "PHP, WordPress", Active: &yes})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if arbeitnow.ExcludedSearchQuery != "PHP, WordPress" {
+		t.Fatalf("arbeitnow must keep its NOT terms, got %q", arbeitnow.ExcludedSearchQuery)
+	}
+	if arbeitnow.Provider != "arbeitnow" || arbeitnow.Name != "Europe" {
+		t.Fatalf("provider and name must be trimmed and lowercased, got %+v", arbeitnow)
+	}
+
+	remotive, err := normalizeSource(sourceInput{Provider: "remotive", Name: "Remote Go", SearchQuery: "go backend", ExcludedSearchQuery: "PHP"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remotive.ExcludedSearchQuery != "" {
+		t.Fatalf("every other provider ignores NOT terms, so they must not be sent, got %q", remotive.ExcludedSearchQuery)
+	}
+	if !remotive.Active {
+		t.Fatal("active must default to true when the caller omits it")
+	}
+
+	off := false
+	if paused, _ := normalizeSource(sourceInput{Provider: "remotive", Name: "Paused", SearchQuery: "go", Active: &off}); paused.Active {
+		t.Fatal("an explicit false must be honoured")
+	}
+}
+
+// The 409 hint is keyed on the API's wording, which lives in another module
+// and so cannot be checked by the compiler. This pins the expectation.
+func TestBlockedMessageMatchesTheAPIWording(t *testing.T) {
+	const fromAPI = "application actions are blocked for this rejected job"
+	if blockedMessage != fromAPI {
+		t.Fatalf("blockedMessage is %q but apps/api/internal/store.ErrApplicationBlocked says %q; update both together", blockedMessage, fromAPI)
+	}
+}

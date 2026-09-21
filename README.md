@@ -702,7 +702,7 @@ make mcp
 claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
 ```
 
-The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build and no absolute path. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
+The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
 
 Get a token from `POST /api/auth/login`, or let the server log in for you:
 
