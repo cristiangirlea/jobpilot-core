@@ -441,6 +441,11 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	matchID, getErr := s.Store.SaveJobMatch(ctx, uid, job.ID, evaluation, fid)
+	// This response is assembled here rather than read back through
+	// scanJobMatch, so it has to withhold the apply URL itself.
+	if evaluation.Rejected {
+		job.ApplyURL = ""
+	}
 	respondCreated(w, models.JobWithMatch{Job: job, Match: evaluation, MatchID: matchID}, getErr)
 }
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
@@ -527,7 +532,9 @@ func (s *Server) getApplication(w http.ResponseWriter, r *http.Request) {
 
 type applicationUpdate struct {
 	Status string `json:"status"`
-	Notes  string `json:"notes"`
+	// Notes is a pointer so an omitted field keeps the stored notes while an
+	// explicit empty string clears them.
+	Notes *string `json:"notes"`
 }
 
 func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {

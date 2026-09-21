@@ -63,6 +63,23 @@ if (-not $documents.cover_letter.Contains("Fresh Systems")) { throw "Template ge
 $application = Send-JobPilotRequest POST "/applications" @{ job_id = $accepted.job.id }
 $updated = Send-JobPilotRequest PATCH "/applications/$($application.id)" @{ status = "applied"; notes = "Smoke test" }
 if ($updated.status -ne "applied") { throw "Application status smoke check failed" }
+
+# A status-only PATCH must keep the stored notes, so a client that moves an
+# application forward cannot silently erase what the user wrote.
+$statusOnly = Send-JobPilotRequest PATCH "/applications/$($application.id)" @{ status = "interview" }
+if ($statusOnly.status -ne "interview" -or $statusOnly.notes -ne "Smoke test") {
+    throw "A status-only update must preserve notes, got '$($statusOnly.notes)'"
+}
+$cleared = Send-JobPilotRequest PATCH "/applications/$($application.id)" @{ status = "applied"; notes = "" }
+if ($cleared.notes -ne "") { throw "An explicit empty notes value must clear the notes" }
+
+# Rejected jobs are visible for explanation but carry no apply URL.
+$allJobs = Send-JobPilotRequest GET "/jobs"
+$rejectedJob = $allJobs | Where-Object { $_.job.id -eq $rejected.job.id }
+if (-not $rejectedJob.match.rejected) { throw "The excluded-employer job should still be rejected" }
+if ($rejectedJob.job.apply_url) { throw "A rejected job must not carry an apply URL" }
+$acceptedJob = $allJobs | Where-Object { $_.job.id -eq $accepted.job.id }
+if ($acceptedJob.job.apply_url -ne "https://example.test/apply") { throw "An accepted job must keep its apply URL" }
 $outbound = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/outbound"
 if ($outbound.url -ne "https://example.test/apply") { throw "Outbound attribution smoke check failed" }
 Send-JobPilotRequest PUT "/discovery/settings" @{ enabled = $false; interval_minutes = 360; auto_prepare = $true; min_score = 75; max_jobs_per_run = 50 } | Out-Null
@@ -91,4 +108,4 @@ $script:Headers = @{ Authorization = "Bearer $($second.token)" }
 $secondMatch = Send-JobPilotRequest POST "/jobs" $acceptedBody
 if ($secondMatch.job.id -ne $accepted.job.id) { throw "Shared catalog deduplication smoke check failed" }
 
-Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, and the outbox approval gate."
+Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, notes preservation, and the outbox approval gate."

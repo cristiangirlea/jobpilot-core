@@ -294,7 +294,7 @@ An exact normalized name, alias, or domain match rejects. Fuzzy similarity at or
 
 Rejected jobs remain visible in `/jobs` so the user can understand the decision, but they are removed from `/matches` and all application actions are locked:
 
-- No outbound apply URL.
+- No outbound apply URL. `apply_url` is withheld from every response that carries a rejected match, so a client cannot show an apply link the backend would refuse. `scanJobMatch` and `scanApplication` do this centrally; hiding the button in the UI is not relied upon.
 - No generated documents.
 - No new application record.
 - No transition of an existing draft to `applied` after the job becomes rejected.
@@ -683,6 +683,8 @@ Authorization: Bearer <token>
 | `GET`, `POST` | `/api/applications` | List or create applications |
 | `GET` | `/api/applications/{id}` | Application, documents, and history |
 | `PATCH` | `/api/applications/{id}` | Update status and application data |
+
+`PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
 | `GET` | `/api/dashboard` | User-specific metrics and recommendations |
 
 The HTTP layer uses strict JSON decoding with unknown fields rejected and a 2 MiB request-body limit. See `apps/api/internal/httpapi/server.go` for exact payload structs and validation messages.

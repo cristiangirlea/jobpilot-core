@@ -186,7 +186,8 @@ func (s *Service) prepare(ctx context.Context, userID string, job models.Job, ev
 	if err = s.Store.SaveDocuments(ctx, userID, job.ID, docs); err != nil {
 		return false, err
 	}
-	_, err = s.Store.UpdateApplication(ctx, userID, application.ID, "ready", "Automatically prepared from a discovered match. Review before submitting.")
+	prepared := "Automatically prepared from a discovered match. Review before submitting."
+	_, err = s.Store.UpdateApplication(ctx, userID, application.ID, "ready", &prepared)
 	return err == nil, err
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -16,8 +17,11 @@ import (
 // canned data and records write payloads so tests can assert what was sent.
 type fakeAPI struct {
 	mu      sync.Mutex
-	patches []map[string]string
+	patches []map[string]any
 	posts   []string
+	// detailGets counts reads of one application, so a test can prove the
+	// status tool no longer needs a read-back round trip.
+	detailGets atomic.Int32
 }
 
 const acceptedJob = `{"job":{"id":"job-a","title":"Senior Backend Engineer","company":"Fresh Systems GmbH","location":"Bucharest, Romania","remote_type":"remote","salary_min":95000,"salary_max":110000,"currency":"EUR","employment_type":"full-time","industry":"Software","description":"Long description A about Go and PostgreSQL.","apply_url":"https://example.test/apply-a","posted_at":"2026-09-10T00:00:00Z","created_at":"2026-09-11T00:00:00Z","source_name":"Remotive feed","source_provider":"remotive"},"match":{"rejected":false,"rejection_reasons":[],"warnings":["No salary band"],"score":82,"reasons":["The job title aligns with a desired role."],"matched_skills":["Go","PostgreSQL"],"missing_skills":["Kafka"],"red_flags":[],"breakdown":{"title_match":25,"skill_match":30}},"match_id":"m-a"}`
@@ -78,6 +82,7 @@ func (f *fakeAPI) handler() http.Handler {
 		send(w, 201, `{"id":"app-new","job_id":"`+body["job_id"]+`","status":"draft","notes":"","created_at":"2026-09-15T00:00:00Z","updated_at":"2026-09-15T00:00:00Z"}`)
 	})
 	m.HandleFunc("GET /api/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
+		f.detailGets.Add(1)
 		switch r.PathValue("id") {
 		case "app-1":
 			send(w, 200, `{"application":`+application+`,"documents":`+documents+`,"blocked":false,"block_reasons":[]}`)
@@ -88,12 +93,18 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 	})
 	m.HandleFunc("PATCH /api/applications/{id}", func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]string
+		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.mu.Lock()
 		f.patches = append(f.patches, body)
 		f.mu.Unlock()
-		send(w, 200, `{"id":"app-1","job_id":"job-a","status":"`+body["status"]+`","notes":"`+body["notes"]+`","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-16T00:00:00Z"}`)
+		status, _ := body["status"].(string)
+		// The API keeps the stored notes when the field is absent.
+		notes := "keep me"
+		if sent, ok := body["notes"].(string); ok {
+			notes = sent
+		}
+		send(w, 200, `{"id":"app-1","job_id":"job-a","status":"`+status+`","notes":"`+notes+`","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-16T00:00:00Z"}`)
 	})
 	m.HandleFunc("GET /api/dashboard", func(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, `{"profile_completeness":75,"jobs_imported":3,"jobs_rejected_blacklist":1,"jobs_rejected_filters":0,"good_matches":1,"applications_drafted":1,"applications_applied":1,"top_jobs":[`+acceptedJob+`],"next_actions":["Review your strongest job matches"]}`)
@@ -331,11 +342,17 @@ func TestUpdateStatusPreservesNotesUnlessGiven(t *testing.T) {
 	if len(fake.patches) != 2 {
 		t.Fatalf("expected two PATCH calls, got %d", len(fake.patches))
 	}
-	if fake.patches[0]["status"] != "applied" || fake.patches[0]["notes"] != "keep me" {
-		t.Fatalf("omitting notes must preserve the stored notes, sent %v", fake.patches[0])
+	if _, sent := fake.patches[0]["notes"]; sent {
+		t.Fatalf("omitting notes must send no notes field at all, sent %v", fake.patches[0])
+	}
+	if fake.patches[0]["status"] != "applied" {
+		t.Fatalf("status not sent, got %v", fake.patches[0])
 	}
 	if fake.patches[1]["status"] != "interview" || fake.patches[1]["notes"] != "Phone screen booked" {
 		t.Fatalf("explicit notes must be sent, got %v", fake.patches[1])
+	}
+	if got := fake.detailGets.Load(); got != 0 {
+		t.Fatalf("the API keeps omitted notes, so no read-back is needed; got %d reads", got)
 	}
 	res, text = call(t, cs, "update_application_status", map[string]any{"application_id": "app-1", "status": "hired"})
 	if !res.IsError || !strings.Contains(text, "status") {
