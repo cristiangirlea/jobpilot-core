@@ -52,7 +52,7 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	server := jobpilot.NewServer(client, version)
+	server := jobpilot.NewServer(client, version, logger)
 	logger.Info("JobPilot MCP server ready", "api", client.BaseURL(), "transport", "stdio")
 	// An interrupt cancels ctx and Run returns its error; that is a clean
 	// shutdown, not a failure.

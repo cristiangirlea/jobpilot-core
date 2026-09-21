@@ -19,6 +19,9 @@ const (
 	// A discovery run fetches every active provider inside one request; the
 	// API's own write timeout is two minutes, so allow a little more than that.
 	discoveryTimeout = 3 * time.Minute
+	// Validating a source fetches from the provider, so it needs more than
+	// the default timeout but far less than a whole discovery run.
+	validateTimeout = 90 * time.Second
 	// The list endpoints are not paginated and carry full descriptions, so
 	// the cap is generous; exceeding it is reported, never silently cut.
 	maxResponseBytes = 32 << 20
@@ -267,4 +270,33 @@ func (c *Client) DiscoveryRuns(ctx context.Context) ([]DiscoveryRun, error) {
 func (c *Client) RunDiscovery(ctx context.Context) (DiscoveryRun, error) {
 	var out DiscoveryRun
 	return out, c.do(ctx, http.MethodPost, "/api/discovery/run", nil, &out, discoveryTimeout)
+}
+
+// ImportJob adds one posting to the shared catalog and evaluates it for the
+// user. An existing catalog entry with the same fingerprint is reused.
+func (c *Client) ImportJob(ctx context.Context, in JobInput) (JobWithMatch, error) {
+	var out JobWithMatch
+	return out, c.do(ctx, http.MethodPost, "/api/jobs", in, &out, c.timeout)
+}
+
+func (c *Client) Filters(ctx context.Context) ([]FilterPreset, error) {
+	var out []FilterPreset
+	return out, c.get(ctx, "/api/filters", &out)
+}
+
+func (c *Client) DiscoverySources(ctx context.Context) ([]DiscoverySource, error) {
+	var out []DiscoverySource
+	return out, c.get(ctx, "/api/discovery/sources", &out)
+}
+
+// ValidateDiscoverySource fetches a small sample from the provider, so it is
+// given the longer provider timeout rather than the default one.
+func (c *Client) ValidateDiscoverySource(ctx context.Context, in DiscoverySource) (SourceValidation, error) {
+	var out SourceValidation
+	return out, c.do(ctx, http.MethodPost, "/api/discovery/validate", in, &out, validateTimeout)
+}
+
+func (c *Client) AddDiscoverySource(ctx context.Context, in DiscoverySource) (DiscoverySource, error) {
+	var out DiscoverySource
+	return out, c.do(ctx, http.MethodPost, "/api/discovery/sources", in, &out, c.timeout)
 }

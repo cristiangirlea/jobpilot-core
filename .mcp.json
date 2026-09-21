@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "jobpilot": {
+      "command": "go",
+      "args": ["-C", "apps/mcp", "run", "."],
+      "env": {
+        "JOBPILOT_API_URL": "${JOBPILOT_API_URL:-http://localhost:8080}",
+        "JOBPILOT_TOKEN": "${JOBPILOT_TOKEN}"
+      }
+    }
+  }
+}

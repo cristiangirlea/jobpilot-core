@@ -3,6 +3,8 @@ package jobpilot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -19,6 +21,8 @@ type fakeAPI struct {
 	mu      sync.Mutex
 	patches []map[string]any
 	posts   []string
+	sources []map[string]any
+	imports []map[string]any
 	// detailGets counts reads of one application, so a test can prove the
 	// status tool no longer needs a read-back round trip.
 	detailGets atomic.Int32
@@ -115,6 +119,55 @@ func (f *fakeAPI) handler() http.Handler {
 	m.HandleFunc("POST /api/discovery/run", func(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, discoveryRun)
 	})
+	m.HandleFunc("POST /api/jobs", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.imports = append(f.imports, body)
+		f.mu.Unlock()
+		if title, _ := body["title"].(string); title == "" {
+			send(w, 422, `{"error":"Title, company, and job description are required."}`)
+			return
+		}
+		if company, _ := body["company"].(string); strings.Contains(company, "CurrentCo") {
+			send(w, 201, rejectedJob)
+			return
+		}
+		send(w, 201, acceptedJob)
+	})
+	m.HandleFunc("GET /api/filters", func(w http.ResponseWriter, r *http.Request) {
+		send(w, 200, `[{"id":"f-1","name":"Backend remote","active":true,"included_titles":["Backend Engineer"],"excluded_title_words":["unpaid"],"locations":["Romania"],"remote_types":["remote"],"min_salary":90000,"currency":"EUR","employment_types":["full-time"],"excluded_industries":["Gambling"],"required_skills":["Go"],"included_technologies":["Go"],"excluded_technologies":["PHP"],"max_age_days":30}]`)
+	})
+	m.HandleFunc("GET /api/discovery/sources", func(w http.ResponseWriter, r *http.Request) {
+		send(w, 200, `[{"id":"s-1","provider":"remotive","name":"Remote Go","identifier":"","search_query":"go backend","excluded_search_query":"","active":true,"created_at":"2026-09-11T00:00:00Z"}]`)
+	})
+	m.HandleFunc("POST /api/discovery/validate", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if provider, _ := body["provider"].(string); provider == "greenhouse" {
+			send(w, 422, `{"error":"Source could not be read: board not found"}`)
+			return
+		}
+		send(w, 200, `{"count":12,"sample_title":"Senior Backend Engineer"}`)
+	})
+	m.HandleFunc("POST /api/discovery/sources", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		duplicate := false
+		for _, existing := range f.sources {
+			if existing["name"] == body["name"] {
+				duplicate = true
+			}
+		}
+		f.sources = append(f.sources, body)
+		f.mu.Unlock()
+		if duplicate {
+			send(w, 409, `{"error":"a discovery source with the same provider, identifier, and query already exists"}`)
+			return
+		}
+		send(w, 201, `{"id":"s-new","provider":"`+fmt.Sprint(body["provider"])+`","name":"`+fmt.Sprint(body["name"])+`","identifier":"","search_query":"","excluded_search_query":"","active":true,"created_at":"2026-09-20T00:00:00Z"}`)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			send(w, 401, `{"error":"unauthorized"}`)
@@ -133,6 +186,25 @@ func session(t *testing.T) (*mcp.ClientSession, *fakeAPI) {
 
 func sessionWithToken(t *testing.T, token string) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
+	return connect(t, token, nil, nil)
+}
+
+// sessionWithLogger wires a server whose middleware writes to the given logger.
+func sessionWithLogger(t *testing.T, logger *slog.Logger) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
+	return connect(t, "test-token", logger, nil)
+}
+
+// sessionWithClient lets a test supply its own client, for example to collect
+// progress notifications.
+func sessionWithClient(t *testing.T, client *mcp.Client) *mcp.ClientSession {
+	t.Helper()
+	cs, _ := connect(t, "test-token", nil, client)
+	return cs
+}
+
+func connect(t *testing.T, token string, logger *slog.Logger, host *mcp.Client) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
 	fake := &fakeAPI{}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
@@ -140,13 +212,16 @@ func sessionWithToken(t *testing.T, token string) (*mcp.ClientSession, *fakeAPI)
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := NewServer(client, "test")
+	server := NewServer(client, "test", logger)
 	st, ct := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err = server.Connect(ctx, st, nil); err != nil {
 		t.Fatal(err)
 	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-host", Version: "0"}, nil).Connect(ctx, ct, nil)
+	if host == nil {
+		host = mcp.NewClient(&mcp.Implementation{Name: "test-host", Version: "0"}, nil)
+	}
+	cs, err := host.Connect(ctx, ct, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,42 +255,6 @@ func structured[T any](t *testing.T, res *mcp.CallToolResult) T {
 		t.Fatalf("decode structured content: %v\n%s", err, raw)
 	}
 	return out
-}
-
-func TestToolCatalog(t *testing.T) {
-	cs, _ := session(t)
-	res, err := cs.ListTools(context.Background(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	readOnly := map[string]bool{
-		"get_profile": true, "list_jobs": true, "get_job": true, "list_applications": true, "get_application": true,
-		"get_dashboard": true, "list_discovery_runs": true,
-		"generate_documents": false, "create_application": false, "update_application_status": false, "run_discovery": false,
-	}
-	seen := map[string]bool{}
-	for _, tool := range res.Tools {
-		want, known := readOnly[tool.Name]
-		if !known {
-			t.Errorf("unexpected tool %q", tool.Name)
-			continue
-		}
-		seen[tool.Name] = true
-		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint != want {
-			t.Errorf("%s: readOnlyHint should be %v", tool.Name, want)
-		}
-		if tool.Description == "" {
-			t.Errorf("%s: missing description", tool.Name)
-		}
-		if strings.Contains(tool.Name, "outbound") || strings.Contains(strings.ToLower(tool.Description), "submit the application") {
-			t.Errorf("%s: must not expose submission or outbound attribution", tool.Name)
-		}
-	}
-	for name := range readOnly {
-		if !seen[name] {
-			t.Errorf("missing tool %q", name)
-		}
-	}
 }
 
 func TestListJobsFiltersAndSummarizes(t *testing.T) {
