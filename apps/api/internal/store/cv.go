@@ -111,8 +111,14 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 }
 
 func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id)
-	return err
+	tag, err := s.DB.Exec(ctx, `DELETE FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // ApprovedBaseCV returns the CV to attach when nothing more specific applies.

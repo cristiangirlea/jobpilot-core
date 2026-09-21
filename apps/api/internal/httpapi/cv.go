@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/cv"
@@ -117,6 +119,10 @@ func (s *Server) approveCV(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) deleteCV(w http.ResponseWriter, r *http.Request) {
 	if e := s.Store.DeleteCV(r.Context(), auth.UserID(r.Context()), r.PathValue("id")); e != nil {
+		if errors.Is(e, pgx.ErrNoRows) {
+			problem(w, 404, "CV not found.")
+			return
+		}
 		internal(w, e)
 		return
 	}

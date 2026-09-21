@@ -44,6 +44,16 @@ func scanOutbox(row pgx.Row) (models.OutboxEntry, error) {
 // Recomposing an entry the user already approved resets it to await approval
 // again: the CV, letter, or answers may have changed, and a prior approval was
 // given for what the entry said then, not for whatever it says now.
+// ErrOutboxSent is returned when a caller tries to rebuild an entry that has
+// already gone out. A sent application cannot be un-sent, so the row is
+// immutable rather than silently left alone.
+var ErrOutboxSent = errors.New("this application has already been sent and cannot be composed again")
+
+// ApprovalWithdrawnNotice is added to a recomposed entry that the user had
+// already approved. Rebuilding clears the approval, which is the safe
+// direction, but it must not happen quietly.
+const ApprovalWithdrawnNotice = "You had approved this application. Rebuilding it withdrew that approval, so it needs approving again."
+
 func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models.OutboxEntry) (models.OutboxEntry, error) {
 	form, err := json.Marshal(entry.Form)
 	if err != nil {
@@ -62,6 +72,21 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if entry.Notices == nil {
 		entry.Notices = []string{}
 	}
+	// Rebuilding clears approved_at. Say so on the new entry rather than
+	// letting an approval disappear without a word.
+	var previousStatus string
+	var wasApproved bool
+	err = s.DB.QueryRow(ctx, `SELECT status, approved_at IS NOT NULL FROM application_outbox WHERE user_id=$1 AND job_id=$2`, userID, entry.JobID).Scan(&previousStatus, &wasApproved)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return models.OutboxEntry{}, err
+	}
+	if previousStatus == models.OutboxSent {
+		return models.OutboxEntry{}, ErrOutboxSent
+	}
+	if wasApproved {
+		entry.Notices = append(entry.Notices, ApprovalWithdrawnNotice)
+	}
+
 	var application, cvDocument any
 	if entry.ApplicationID != "" {
 		application = entry.ApplicationID

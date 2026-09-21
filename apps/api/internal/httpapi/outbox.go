@@ -125,6 +125,10 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saved, err := s.Store.SaveOutboxEntry(ctx, uid, entry)
+	if errors.Is(err, store.ErrOutboxSent) {
+		problem(w, 409, err.Error())
+		return
+	}
 	if err != nil {
 		internal(w, err)
 		return
