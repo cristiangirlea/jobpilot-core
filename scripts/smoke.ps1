@@ -10,6 +10,15 @@ function Send-JobPilotRequest {
     Invoke-RestMethod @arguments
 }
 
+function Assert-Conflict {
+    param([scriptblock]$Action, [string]$Label)
+    $conflict = $false
+    try { & $Action | Out-Null } catch {
+        if ([int]$_.Exception.Response.StatusCode -eq 409) { $conflict = $true } else { throw }
+    }
+    if (-not $conflict) { throw "$Label was not blocked" }
+}
+
 $registration = Send-JobPilotRequest POST "/auth/register" @{ email = $Email; password = "smoke-test-password" }
 $script:Headers = @{ Authorization = "Bearer $($registration.token)" }
 
@@ -64,10 +73,22 @@ if ($sources.Count -lt 1) { throw "Discovery source listing smoke check failed" 
 $dashboard = Send-JobPilotRequest GET "/dashboard"
 if ($dashboard.jobs_imported -lt 2 -or $dashboard.applications_applied -lt 1) { throw "Dashboard smoke check failed" }
 
+# The apply engine must work with no AI provider configured, and the outbox
+# must refuse to release an application that still has blockers.
+$ai = Send-JobPilotRequest GET "/ai/status"
+if ($ai.enabled -ne $false) { throw "AI adapter should be disabled by default" }
+$entry = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/compose"
+if ($entry.status -ne "needs_review") { throw "Compose should need review for an unreadable employer form, got $($entry.status)" }
+if ($entry.blockers.Count -lt 1) { throw "Compose should record at least one blocker" }
+if (-not $entry.cover_letter) { throw "Compose should produce a cover letter without an AI provider" }
+$outboxList = Send-JobPilotRequest GET "/outbox"
+if (@($outboxList | Where-Object { $_.id -eq $entry.id }).Count -lt 1) { throw "Composed entry is missing from the outbox" }
+Assert-Conflict { Send-JobPilotRequest POST "/outbox/$($entry.id)/approve" } "Outbox approval with blockers"
+
 # Catalog jobs are global: another account evaluates and reuses the same job ID.
 $second = Send-JobPilotRequest POST "/auth/register" @{ email = "second-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())@example.test"; password = "smoke-test-password" }
 $script:Headers = @{ Authorization = "Bearer $($second.token)" }
 $secondMatch = Send-JobPilotRequest POST "/jobs" $acceptedBody
 if ($secondMatch.job.id -ne $accepted.job.id) { throw "Shared catalog deduplication smoke check failed" }
 
-Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking."
+Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, and the outbox approval gate."

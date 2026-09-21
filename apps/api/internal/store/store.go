@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
@@ -15,6 +16,7 @@ type Store struct{ DB *pgxpool.Pool }
 
 var ErrDuplicateJob = errors.New("discovered job already exists")
 var ErrApplicationBlocked = errors.New("application actions are blocked for this rejected job")
+var ErrDuplicateDiscoverySource = errors.New("a discovery source with the same provider, identifier, and query already exists")
 
 func New(db *pgxpool.Pool) *Store { return &Store{DB: db} }
 
@@ -56,6 +58,15 @@ func (s *Store) Profile(ctx context.Context, userID string) (models.Profile, err
 	return p, nil
 }
 func (s *Store) SaveProfile(ctx context.Context, u string, p models.Profile) error {
+	// The profile's list columns are NOT NULL. A caller that builds a profile in
+	// Go rather than decoding one from JSON leaves these nil, so they are
+	// normalised here instead of at every call site.
+	for _, list := range []*[]string{&p.DesiredTitles, &p.Seniorities, &p.Certifications, &p.Languages,
+		&p.WorkPreference, &p.PreferredCountries, &p.PreferredTimezones, &p.IndustryPreferences} {
+		if *list == nil {
+			*list = []string{}
+		}
+	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO user_profiles(user_id,name,email,phone,location,linkedin,github,portfolio,current_title,desired_titles,seniority,seniorities,years_experience,certifications,languages,salary_expectation,rate_expectation,currency,work_preference,preferred_countries,preferred_timezones,work_authorization,notice_period,industry_preferences,summary) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) ON CONFLICT(user_id) DO UPDATE SET name=EXCLUDED.name,email=EXCLUDED.email,phone=EXCLUDED.phone,location=EXCLUDED.location,linkedin=EXCLUDED.linkedin,github=EXCLUDED.github,portfolio=EXCLUDED.portfolio,current_title=EXCLUDED.current_title,desired_titles=EXCLUDED.desired_titles,seniority=EXCLUDED.seniority,seniorities=EXCLUDED.seniorities,years_experience=EXCLUDED.years_experience,certifications=EXCLUDED.certifications,languages=EXCLUDED.languages,salary_expectation=EXCLUDED.salary_expectation,rate_expectation=EXCLUDED.rate_expectation,currency=EXCLUDED.currency,work_preference=EXCLUDED.work_preference,preferred_countries=EXCLUDED.preferred_countries,preferred_timezones=EXCLUDED.preferred_timezones,work_authorization=EXCLUDED.work_authorization,notice_period=EXCLUDED.notice_period,industry_preferences=EXCLUDED.industry_preferences,summary=EXCLUDED.summary,updated_at=now()`, u, p.Name, p.Email, p.Phone, p.Location, p.LinkedIn, p.GitHub, p.Portfolio, p.CurrentTitle, p.DesiredTitles, p.Seniority, p.Seniorities, p.YearsExperience, p.Certifications, p.Languages, p.SalaryExpectation, p.RateExpectation, p.Currency, p.WorkPreference, p.PreferredCountries, p.PreferredTimezones, p.WorkAuthorization, p.NoticePeriod, p.IndustryPreferences, p.Summary)
 	return err
 }
@@ -252,6 +263,15 @@ func (s *Store) InsertJob(ctx context.Context, u string, in models.JobInput, e m
 		return models.JobWithMatch{}, err
 	}
 	return models.JobWithMatch{Job: j, Match: e, MatchID: matchID}, nil
+}
+
+// CatalogJob reads a job from the shared catalog by id, without a per-user
+// match. Callers that show a job alongside user-scoped data use it to label
+// that data; visibility itself is still governed by the user's job_matches row.
+func (s *Store) CatalogJob(ctx context.Context, id string) (models.Job, error) {
+	var j models.Job
+	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider FROM jobs WHERE id=$1`, id).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider)
+	return j, err
 }
 
 func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string) (models.Job, error) {
@@ -547,7 +567,17 @@ func (s *Store) DiscoverySources(ctx context.Context, u string, activeOnly bool)
 	return out, rows.Err()
 }
 func (s *Store) AddDiscoverySource(ctx context.Context, u string, x models.DiscoverySource) (models.DiscoverySource, error) {
-	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_sources(user_id,provider,name,identifier,search_query,excluded_search_query,active) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING id,created_at`, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.CreatedAt)
+	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_sources(user_id,provider,name,identifier,search_query,excluded_search_query,active) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(user_id,provider,identifier,search_query,excluded_search_query) DO UPDATE SET name=EXCLUDED.name,active=EXCLUDED.active,last_error='' RETURNING id,provider,name,identifier,search_query,excluded_search_query,active,last_crawled_at,last_error,created_at`, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.Provider, &x.Name, &x.Identifier, &x.SearchQuery, &x.ExcludedSearchQuery, &x.Active, &x.LastCrawledAt, &x.LastError, &x.CreatedAt)
+	if isUniqueViolation(err) {
+		return x, ErrDuplicateDiscoverySource
+	}
+	return x, err
+}
+func (s *Store) UpdateDiscoverySource(ctx context.Context, u, id string, x models.DiscoverySource) (models.DiscoverySource, error) {
+	err := s.DB.QueryRow(ctx, `UPDATE discovery_sources SET provider=$3,name=$4,identifier=$5,search_query=$6,excluded_search_query=$7,active=$8,last_error='' WHERE id=$1 AND user_id=$2 RETURNING id,provider,name,identifier,search_query,excluded_search_query,active,last_crawled_at,last_error,created_at`, id, u, x.Provider, x.Name, x.Identifier, x.SearchQuery, x.ExcludedSearchQuery, x.Active).Scan(&x.ID, &x.Provider, &x.Name, &x.Identifier, &x.SearchQuery, &x.ExcludedSearchQuery, &x.Active, &x.LastCrawledAt, &x.LastError, &x.CreatedAt)
+	if isUniqueViolation(err) {
+		return x, ErrDuplicateDiscoverySource
+	}
 	return x, err
 }
 func (s *Store) EnsureRecommendedSource(ctx context.Context, u, query string) (models.DiscoverySource, error) {
@@ -565,6 +595,10 @@ func (s *Store) DeleteDiscoverySource(ctx context.Context, u, id string) error {
 func (s *Store) UpdateDiscoverySourceResult(ctx context.Context, u, id, message string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE discovery_sources SET last_crawled_at=now(),last_error=$3 WHERE id=$1 AND user_id=$2`, id, u, message)
 	return err
+}
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
 func (s *Store) StartDiscoveryRun(ctx context.Context, u string) (models.DiscoveryRun, error) {
 	var x models.DiscoveryRun
@@ -664,5 +698,25 @@ func (s *Store) SeedFirstUser(ctx context.Context) error {
 		return err
 	}
 	_, err = s.DB.Exec(ctx, `INSERT INTO work_experiences(user_id,company,title,current,description) SELECT $1,'CurrentCo','Senior Backend Engineer',true,'Built reliable backend services.' WHERE NOT EXISTS(SELECT 1 FROM work_experiences WHERE user_id=$1)`, u)
+	return err
+}
+
+// LookupCompletion implements llm.Cache. A miss is not an error.
+func (s *Store) LookupCompletion(ctx context.Context, key string) (string, bool, error) {
+	var response string
+	err := s.DB.QueryRow(ctx, `UPDATE llm_cache SET hits=hits+1,last_used_at=now() WHERE cache_key=$1 RETURNING response`, key).Scan(&response)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return response, true, nil
+}
+
+// StoreCompletion implements llm.Cache.
+func (s *Store) StoreCompletion(ctx context.Context, key, task, provider, model, response string) error {
+	_, err := s.DB.Exec(ctx, `INSERT INTO llm_cache(cache_key,task,provider,model,response,hits) VALUES($1,$2,$3,$4,$5,1)
+		ON CONFLICT (cache_key) DO UPDATE SET response=EXCLUDED.response,last_used_at=now()`, key, task, provider, model, response)
 	return err
 }

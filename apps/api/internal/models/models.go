@@ -196,3 +196,104 @@ type DiscoveryRun struct {
 	StartedAt            time.Time  `json:"started_at"`
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 }
+
+// AnswerEntry is one reusable application answer. Answers are private per user
+// and are only reused once approved, so an unreviewed generated answer can
+// never reach an employer on its own.
+type AnswerEntry struct {
+	ID                 string     `json:"id,omitempty"`
+	QuestionKey        string     `json:"question_key"`
+	QuestionText       string     `json:"question_text"`
+	QuestionNormalized string     `json:"question_normalized,omitempty"`
+	Answer             string     `json:"answer"`
+	RoleFamily         string     `json:"role_family"`
+	Technologies       []string   `json:"technologies"`
+	Source             string     `json:"source"`
+	Approved           bool       `json:"approved"`
+	UsageCount         int        `json:"usage_count"`
+	CreatedAt          time.Time  `json:"created_at,omitempty"`
+	UpdatedAt          time.Time  `json:"updated_at,omitempty"`
+	LastUsedAt         *time.Time `json:"last_used_at,omitempty"`
+}
+
+// CVDocument is one stored CV: the original file, what was read out of it, and
+// whether the user has approved it for sending.
+//
+// Parsed is deliberately typed as a free-form map here so the models package
+// does not depend on the parser; the cv package owns that shape.
+type CVDocument struct {
+	ID            string         `json:"id"`
+	Kind          string         `json:"kind"`
+	Label         string         `json:"label,omitempty"`
+	Filename      string         `json:"filename"`
+	Format        string         `json:"format"`
+	ContentType   string         `json:"content_type,omitempty"`
+	SizeBytes     int            `json:"size_bytes"`
+	ExtractedText string         `json:"extracted_text,omitempty"`
+	Parsed        map[string]any `json:"parsed,omitempty"`
+	RoleFamily    string         `json:"role_family,omitempty"`
+	Technologies  []string       `json:"technologies,omitempty"`
+	Approved      bool           `json:"approved"`
+	ApprovedAt    *time.Time     `json:"approved_at,omitempty"`
+	ParentID      string         `json:"parent_id,omitempty"`
+	Fingerprint   string         `json:"fingerprint,omitempty"`
+	CreatedAt     time.Time      `json:"created_at"`
+	UpdatedAt     time.Time      `json:"updated_at"`
+}
+
+// Outbox statuses. Composition never sends: an entry waits at ready until the
+// user approves it.
+const (
+	OutboxNeedsReview = "needs_review" // something is missing or unapproved
+	OutboxReady       = "ready"        // complete, waiting for the user
+	OutboxApproved    = "approved"     // released by the user
+	OutboxSent        = "sent"
+	OutboxFailed      = "failed"
+	OutboxCancelled   = "cancelled"
+)
+
+// Channels an application can go out through.
+const (
+	ChannelATSForm = "ats_form" // the employer's own ATS form
+	ChannelEmail   = "email"
+	ChannelManual  = "manual" // the user applies themselves
+)
+
+// OutboxAnswer is one resolved form field, kept with its provenance so a review
+// shows where each answer came from.
+type OutboxAnswer struct {
+	Field       string   `json:"field"`
+	Label       string   `json:"label"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Answer      string   `json:"answer"`
+	Source      string   `json:"source"`
+	NeedsReview bool     `json:"needs_review"`
+	EntryID     string   `json:"entry_id,omitempty"`
+	Options     []string `json:"options,omitempty"`
+}
+
+// OutboxEntry is one application composed in full and held for approval.
+type OutboxEntry struct {
+	ID                string         `json:"id"`
+	JobID             string         `json:"job_id"`
+	ApplicationID     string         `json:"application_id,omitempty"`
+	Status            string         `json:"status"`
+	Channel           string         `json:"channel"`
+	ATSProvider       string         `json:"ats_provider,omitempty"`
+	CVDocumentID      string         `json:"cv_document_id,omitempty"`
+	CVDecision        string         `json:"cv_decision,omitempty"`
+	CoverLetter       string         `json:"cover_letter"`
+	CoverLetterSource string         `json:"cover_letter_source"`
+	Form              map[string]any `json:"form,omitempty"`
+	Answers           []OutboxAnswer `json:"answers"`
+	Blockers          []string       `json:"blockers"`
+	Notices           []string       `json:"notices"`
+	NeedsReview       int            `json:"needs_review"`
+	Error             string         `json:"error,omitempty"`
+	CreatedAt         time.Time      `json:"created_at"`
+	UpdatedAt         time.Time      `json:"updated_at"`
+	ApprovedAt        *time.Time     `json:"approved_at,omitempty"`
+	SentAt            *time.Time     `json:"sent_at,omitempty"`
+	Job               *Job           `json:"job,omitempty"`
+}

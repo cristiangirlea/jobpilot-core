@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-06-19**.
+Last verified: **2026-08-28**.
 
 ## Current status
 
@@ -15,13 +15,23 @@ The full local stack is implemented and usable:
 - Multiple desired seniority levels.
 - Reusable filters with positive (OR) and negative (NOT) title and technology rules.
 - Shared job discovery through Remotive, Arbeitnow, Greenhouse, Lever, Ashby, and SmartRecruiters.
+- Curated starter employer boards, pasted careers URL detection, source validation, editing, and pause/resume controls.
 - Per-user filtering, rejection explanations, warnings, skill gaps, and 0-100 scoring.
+- Existing matches are re-evaluated when the main profile, experience, skills, projects, filters, or company exclusions change.
 - Deterministic recruiter messages, cover letters, candidate summaries, and common-question answers.
 - Application creation, status changes, event history, and outbound-click attribution.
 - Strict application lockout for rejected jobs.
 - Dashboard metrics and recommended jobs.
 - Docker Compose, migrations, seed command, unit tests, and end-to-end smoke scripts.
 - An MCP server (`apps/mcp`) that lets agent hosts such as Claude Code read matches, generate documents, and track applications through the same API locks.
+- Optional, pluggable AI adapter with a completion cache; disabled by default.
+- Reusable answer bank that resolves application questions deterministically first.
+- CV upload with deterministic PDF/DOCX parsing, user approval, and profile import.
+- CV tailoring per posting, with approve-once-reuse-many for similar roles.
+- Reading the employer's published application form (Greenhouse) and resolving it.
+- An outbox that composes a whole application and holds it for approval.
+- Curated employer boards and board-token extraction from a pasted careers URL.
+- Web pages for CVs, the answer bank, and the outbox.
 
 The product works without Redis and without an LLM API key. Manual job import remains available as a fallback, but discovery is the primary workflow.
 
@@ -150,12 +160,17 @@ apps/
     cmd/seed/main.go                   sample-data seed command
     internal/auth/                     bcrypt and JWT
     internal/company/normalize.go      company names, aliases, and domains
+    internal/answers/                  question classification and answer reuse
+    internal/ats/                      reads employers' published application forms
+    internal/boards/                   curated employer boards and URL token extraction
     internal/config/config.go          environment configuration
+    internal/cv/                       CV text extraction and deterministic parsing
     internal/db/db.go                  PostgreSQL connection
     internal/discovery/fetcher.go      provider adapters
     internal/discovery/service.go      runs, scheduler, dedup, auto-prepare
     internal/generator/generator.go    deterministic application text
     internal/httpapi/server.go         REST router and handlers
+    internal/llm/                      optional AI providers, cache, call budget
     internal/matching/matching.go      hard filters and weighted score
     internal/models/models.go          shared domain models
     internal/store/store.go            SQL persistence and isolation
@@ -229,6 +244,9 @@ Every job visible to a user is reached through that user's `job_matches` row. Pr
 | `/matches/[id]` | Detailed match breakdown |
 | `/applications` | Application pipeline |
 | `/applications/[id]` | Documents, outbound apply action, status, and history |
+| `/cv` | Upload a CV, review the parse, import it, approve it for sending |
+| `/answers` | The answer bank: review, edit and approve reusable answers |
+| `/outbox` | Composed applications, their blockers and notices, and approval |
 | `/settings` | Account and product settings |
 
 Authentication tokens are stored in browser `localStorage`. The API client sends them as bearer tokens; a `401` clears the token and redirects to login.
@@ -323,7 +341,7 @@ Discovery is the primary ingestion method. Manual import exists for sources not 
 | Ashby | Employer board name | Public posting API for one employer |
 | SmartRecruiters | Employer/company identifier | Public company postings API; currently capped at 25 plus detail requests |
 
-Employer-direct sources tend to have cleaner provenance and less aggregation churn. Source validation fetches a small sample before saving so a board token or company identifier can be checked.
+Employer-direct sources tend to have cleaner provenance and less aggregation churn. Source validation fetches a small sample before saving so a board token or company identifier can be checked. The Discovery page also exposes curated starter boards and can extract a supported board identifier from a pasted careers or posting URL.
 
 There is no generic HTML crawler. New providers should be implemented as explicit adapters in `apps/api/internal/discovery/fetcher.go`, use documented/public endpoints, have bounded timeouts and result counts, and include tests.
 
@@ -419,7 +437,143 @@ Generation is deterministic and requires no API key. It produces:
 
 The generator may only use data already present in the profile, skills, projects, work experience, and computed match. It must never infer or invent experience. Copy buttons are available in the UI.
 
-There is currently no LLM integration. If one is added later, deterministic generation must remain the default fallback, input facts must be constrained to the same source data, and generated claims must be validated or clearly presented for user review.
+An optional LLM adapter now exists, but deterministic generation remains the default and the fallback. See **Optional AI adapter** and **Answer bank** below. The factuality boundary is unchanged: a provider is only ever given stored candidate facts, and anything it writes is stored unapproved until the user reviews it.
+
+## Optional AI adapter
+
+AI is off by default and the product must keep working with it off. A disabled client returns `ErrUnavailable`, which callers treat as "fall back", never as an error.
+
+Providers:
+
+| Provider | Behaviour |
+|---|---|
+| `none` | No AI. Every feature uses its deterministic path. |
+| `cli` | Runs an installed agent CLI (`claude`, `codex`) as a subprocess. Billed against a subscription rather than per token. |
+| `ollama` | A local Ollama server. Private, but output quality depends on local hardware. |
+
+Every completion is cached in `llm_cache`, keyed on provider, model, task, system prompt, and prompt, so an identical request is never paid for twice. Changing the model changes the key, so a switch cannot serve another model's answer. A rolling per-hour call budget bounds runaway usage; cache hits do not consume it.
+
+`GET /api/ai/status` reports what is actually wired up.
+
+## Answer bank
+
+Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
+
+1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed.
+2. **Exact reuse** - this same question, previously approved for this role family.
+3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
+4. **Provider** - only on a genuine miss. Stored unapproved.
+5. **Deterministic wording** - the existing generator output.
+
+The reuse keys are all deterministic and computed locally:
+
+- **Canonical question key** from a local pattern table, so "Why are you a good fit?" and "What makes you the right candidate?" resolve to the same stored answer.
+- **Role family** from the job title, matched on whole words.
+- **Technology signature** from a closed vocabulary, ranked by how often each technology is mentioned and then sorted, so the stored signature is stable and comparable across postings.
+
+Safety rules:
+
+- A generated answer is stored **unapproved** and is never served until the user approves it.
+- A question with no supporting fact is left unanswered rather than guessed. Consent and data-policy questions are always left to a human.
+- The rejected-job application lock applies here too: resolving answers for a rejected job returns `409`.
+
+## CV upload, parsing, and approval
+
+CV handling is deterministic. CV formats are machine-readable, so no model is involved in reading one, and a field the file does not contain stays empty and earns a warning rather than being invented.
+
+Supported uploads: PDF, DOCX, Markdown, and plain text, up to 12 MB. Format is detected from the file's own bytes, so a mislabelled extension is still read correctly. A scanned image CV is reported as such; there is no OCR.
+
+PDF text needs genuine reconstruction, because a PDF stores glyphs at coordinates rather than words in reading order:
+
+- Columns are separated by locating the blank vertical gutter, so a sidebar does not interleave with the main column.
+- Word breaks come from the document's own space runs where it has them. Those runs frequently carry no position, so each is folded into the run it follows; left standing they sort to the front of a line and fuse every word behind them.
+- Where a generator emits no spaces at all, breaks are inferred from glyph gaps, with the threshold adapting to whether that file reports real glyph advances.
+- A final repair pass fixes only unambiguous over-splits.
+
+Work experience is read from the whole document rather than the experience section alone, because a two-column CV places a page-two sidebar heading in the middle of the role list. A dated line must also carry a title to start a role, which is what keeps education entries from becoming jobs.
+
+The approval gate:
+
+1. Upload. The CV is stored **unapproved**, with the original bytes, the extracted text, and the parse.
+2. Review the parse and its warnings.
+3. `POST /api/cv/{id}/import` copies reviewed values into the profile. Only non-empty values are written, so a field the parser missed can never blank out something entered by hand. Importing experience is opt-in and reports which employers it just added, because those employers become hard exclusions.
+4. `POST /api/cv/{id}/approve` marks the CV as sendable.
+
+The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ.
+
+## CV tailoring and reuse
+
+`POST /api/jobs/{id}/cv` decides which CV an application should carry, and returns one of three decisions:
+
+| Decision | Meaning |
+|---|---|
+| `base` | The approved base CV already covers enough of the posting's technologies |
+| `reused` | A tailored CV already approved for this kind of role covers this one too |
+| `generated` | A new tailored CV was built. It is stored **unapproved** and cannot be sent until reviewed |
+
+Tailoring re-emphasises what the candidate already has. It never adds and never removes:
+
+- Every role, employer, title and date is carried through unchanged. Dropping an employer for relevance, or letting a gap close, would be a lie told on the candidate's behalf.
+- Bullets are **selected and reordered** from the ones already written, never rewritten, so no achievement can drift.
+- Skills are reordered so the posting's technologies lead. A technology the posting wants and the candidate lacks is reported as `missing`, never listed as a skill.
+- Only the summary is newly worded, and only from stored facts. With no provider configured it falls back to deterministic wording.
+
+Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical CV reuses the existing approval instead of resetting it.
+
+### Rendering
+
+Tailored CVs render as a single column, and the font is embedded.
+
+Both choices are load-bearing rather than aesthetic. A two-column CV interleaves its sidebar with the main text when a machine reads it - the failure this project's own parser had to be taught around - and the machine reading a submitted CV is usually the employer's ATS. The embedded font exists because the first renderer written here emitted an identity ToUnicode map, which silently turned "București" into a control character for every reader, including an ATS. Any replacement renderer must be verified by reading its own output back; `TestRenderedPDFIsMachineReadable` does exactly that.
+
+## Reading employer application forms
+
+`internal/ats` reads the form an employer's ATS publishes for a job, using read-only public endpoints. Nothing in that package submits anything.
+
+Greenhouse publishes a complete form schema: every question, its type, whether it is required, and the full option list for each select. Reading it up front is what makes automated applying tractable, because each question can be resolved against the answer bank before anything is submitted, and a select is answered with one of its own options rather than by guessing at a page's DOM.
+
+Lever, Ashby and SmartRecruiters are detected so the composer can name the ATS, but they do not publish their schemas, so those jobs report `ErrUnsupported` and are applied to by hand.
+
+Two kinds of question are never answered automatically, and both are matched on the **label** rather than on where the question sits:
+
+- **Protected characteristics** - gender, race, ethnicity, nationality, disability, veteran status and the like. These are dropped from the form entirely and reported as skipped. Greenhouse has dedicated compliance and demographic blocks, but employers are free to put the same questions in the ordinary list instead, and some do: Canonical asks for gender, nationality and race as regular *required* fields. Trusting the block alone let exactly those questions become answerable, which is why labels are checked.
+- **Declarations** - undertakings the applicant makes personally, such as confirming the wording is their own or accepting a policy. These stay on the form but are marked, and the composer leaves them. Ticking one would be making a statement in the user's name, which is a particularly poor thing for a tool that drafts text to do.
+
+### Finding boards
+
+A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. The Discovery page offers both.
+
+### Where the deterministic boundary sits
+
+Application questions fall into three kinds, and the split is asserted by tests rather than left to judgement:
+
+| Kind | Example | Handling |
+|---|---|---|
+| A stored fact answers it | country of residence, previous employer, sponsorship, a location gate | Resolved locally. A provider must never be consulted |
+| Only the candidate can answer | high-school results, post-employment restrictions, accessibility needs, how they heard about the role | Left unanswered and flagged. Nothing is invented |
+| It needs writing | why this role, describe your experience with X | A provider is legitimate; without one it falls back to deterministic wording, always flagged |
+
+`internal/answers/corpus_test.go` holds 50 question labels read from live Greenhouse boards (Canonical, Grafana Labs, GitLab, Mozilla, Datadog), each tagged with its kind. Three tests enforce the boundary in both directions: stored facts must resolve with no provider configured, personal questions must **not** resolve from stored facts, and writing questions must always ask for review. `TestDeterministicCoverage` is a ratchet - it fails both when coverage drops and when *more* questions resolve than are declared as facts, so neither erosion nor over-reach passes silently.
+
+Measured on GitLab's real 17-field form: 13 fields resolve with no model call, and blockers fall from 10 to 3.
+
+Two rules earn their own note, because the failure modes are not symmetric:
+
+- **Location gates** ("Are you currently located in Bangalore?") resolve Yes for a place the candidate is in, and No for a specific place they are plainly not in. A grouping with no membership test - "the Nordics", "the Balkans" - is left unanswered, because it might contain them. Claiming to live somewhere they do not would be a false statement to an employer; failing to answer only costs a click.
+- **Eligibility and sponsorship** resolve only from an explicit authorization statement. A citizenship alone is never enough: an EU citizen still needs sponsorship for a role based in the US, so inferring from it would answer for the wrong jurisdiction.
+
+## The outbox
+
+`POST /api/jobs/{id}/compose` assembles a whole application - the CV, the cover letter, and every form answer - and queues it. **Composition never sends.** The user reviews exactly what an employer would receive.
+
+An entry records two separate things:
+
+- **Blockers** stop approval: an unapproved tailored CV, a required question with no answer, a missing profile email. Approval is refused while any stands, and that check lives in the store rather than the handler, because it is a safety rule rather than a UI concern.
+- **Notices** inform without blocking: voluntary demographic questions left blank, or a cover letter that fell back to the template. Treating these as blockers would make an application permanently unapprovable, since there is nothing for the user to fix.
+
+Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten.
+
+Measured against a real Greenhouse posting with a 17-field form, 14 fields resolved without a single model call: 10 from stored profile facts, 2 from the answer bank, plus the CV and the cover letter.
 
 ## Applications and referral attribution
 
@@ -488,11 +642,39 @@ Authorization: Bearer <token>
 |---|---|---|
 | `GET`, `PUT` | `/api/discovery/settings` | Read or save scheduler and auto-prepare settings |
 | `GET`, `POST` | `/api/discovery/sources` | List or create sources |
-| `DELETE` | `/api/discovery/sources/{id}` | Remove a source |
+| `PUT`, `DELETE` | `/api/discovery/sources/{id}` | Edit, pause/resume, or remove a source |
 | `POST` | `/api/discovery/validate` | Test a provider configuration and return sample jobs |
+| `GET` | `/api/discovery/suggestions` | Curated starter employer boards |
+| `POST` | `/api/discovery/detect` | Extract a source identifier from a supported careers URL |
 | `GET` | `/api/discovery/runs` | Run history and provider errors |
 | `POST` | `/api/discovery/run` | Run all active sources now |
 | `POST` | `/api/discovery/recommended` | Derive a profile-focused search and run active sources |
+
+### AI, answer bank, and CV endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/ai/status` | Whether an AI provider is configured, and which |
+| `GET` | `/api/answers` | List the answer bank; `?status=pending` or `approved` |
+| `POST` | `/api/answers` | Store a hand-written answer |
+| `PATCH` | `/api/answers/{id}` | Edit and/or approve an answer |
+| `DELETE` | `/api/answers/{id}` | Remove an answer |
+| `POST` | `/api/jobs/{id}/answers` | Resolve application questions for one job |
+| `POST` | `/api/cv` | Upload a CV (multipart, field `file`) |
+| `GET` | `/api/cv` | List stored CVs |
+| `GET` | `/api/cv/{id}` | CV detail, extracted text, and parse |
+| `GET` | `/api/cv/{id}/file` | Download the original bytes |
+| `POST` | `/api/cv/{id}/approve` | Approve or unapprove a CV for sending |
+| `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
+| `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
+| `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval |
+| `GET` | `/api/outbox` | The approval queue; `?status=` filters |
+| `GET` | `/api/outbox/{id}` | One composed application in full |
+| `POST` | `/api/outbox/{id}/approve` | Release an application for sending |
+| `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
+| `GET` | `/api/discovery/suggestions` | Curated employer boards worth following |
+| `POST` | `/api/discovery/detect` | Read a board token out of a pasted careers URL |
+| `DELETE` | `/api/cv/{id}` | Remove a CV |
 
 ### Application and dashboard endpoints
 
@@ -567,6 +749,10 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `004_boards_and_technology_filters.sql` | Additional board providers and include/exclude technology filters |
 | `005_profile_seniorities.sql` | Multiple profile seniorities and legacy migration |
 | `006_discovery_exclusions.sql` | Source-level NOT queries and source uniqueness rules |
+| `007_llm.sql` | Completion cache for the optional AI adapter |
+| `008_answer_bank.sql` | Reusable, approval-gated application answers |
+| `009_cv_documents.sql` | Uploaded and generated CVs, extracted text, parse result, approval |
+| `010_outbox.sql` | Composed applications held for approval, with blockers and notices |
 
 Core entities:
 
@@ -609,6 +795,22 @@ When changing schema:
 | `JWT_SECRET` | Required secret; set it in `.env` |
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
+
+### AI environment
+
+All optional. `LLM_PROVIDER=none` is the default and keeps the API fully deterministic.
+
+| Variable | Purpose |
+|---|---|
+| `LLM_PROVIDER` | `none`, `cli`, or `ollama` |
+| `LLM_CLI_COMMAND` | Command for the `cli` provider, e.g. `claude` or `codex` |
+| `LLM_CLI_ARGS` | Arguments for it, e.g. `-p --output-format text`. The prompt goes to stdin unless an argument contains `{{prompt}}` |
+| `LLM_OLLAMA_URL` | Base URL for the `ollama` provider |
+| `LLM_MODEL` | Model name; optional for the CLI provider |
+| `LLM_TIMEOUT_SECONDS` | Per-call timeout, default `90` |
+| `LLM_CALLS_PER_HOUR` | Rolling call budget, default `120` |
+
+The `cli` provider bills against an existing subscription instead of per token, which makes it the cheapest option. It needs the CLI installed in the same environment as the API, so run the API natively rather than in Compose when using it.
 
 ### Frontend environment
 
@@ -714,10 +916,11 @@ The test suites cover:
 - Hard filter and blacklist behavior.
 - Multiple seniority choices.
 - Discovery parsing and query inclusion/exclusion behavior.
+- Discovery source editing, pause state, curated suggestions, and board URL detection.
 - Deterministic generation without invented profile data.
 - Full authentication/profile/filter/job/document/application/outbound API flow.
 - Shared catalog behavior across users.
-- Re-evaluation after profile, filter, and blacklist changes.
+- Re-evaluation after profile, experience, skill, project, filter, and blacklist changes.
 - Application action lockout for rejected companies/jobs.
 - MCP tool catalog, summaries, filters, blocked-action errors, and notes preservation against a fake API, plus a stdio end-to-end flow against a live API.
 
@@ -752,23 +955,22 @@ Before public production use, add secure cookies or another hardened token strat
 
 These are known gaps, not hidden surprises:
 
-1. **Re-evaluation triggers:** saving the main profile, filters, or blacklist re-evaluates jobs. Adding/removing a skill, project, or experience does not currently rescore every existing match immediately. Resaving the profile/filter or rerunning discovery refreshes it. A centralized `ReevaluateUserJobs` trigger should be added to those mutations.
-2. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
-3. **Source management UI:** sources can be added, validated, and deleted. Rich editing, enable/disable toggles, and per-source schedules can be improved.
-4. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
-5. **LLM enhancement:** no optional LLM adapter is implemented. Any future adapter must preserve the deterministic fallback and factuality boundary.
+1. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
+2. **Source management depth:** sources can be added, edited, validated, paused/resumed, and deleted. Per-source schedules and richer per-provider diagnostics can still be improved.
+3. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
+4. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
+5. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.
 7. **Production auth and operations:** see the security section above.
 8. **Official application APIs:** external submission is intentionally absent. Add only authorized ATS/employer integrations, never generic stealth automation.
 
 Suggested priority order:
 
-1. Rescore after experience/skill/project mutations.
-2. Add integration tests around store/HTTP authorization and rejected-job locks.
-3. Improve source editing/toggling and provider diagnostics.
-4. Add bounded pagination plus job archival/expiration.
-5. Harden authentication and operations for deployment.
-6. Add partner administration only after a real commercial agreement exists.
+1. Add integration tests around store/HTTP authorization and rejected-job locks.
+2. Improve provider diagnostics and add per-source schedules.
+3. Add bounded pagination plus job archival/expiration.
+4. Harden authentication and operations for deployment.
+5. Add partner administration only after a real commercial agreement exists.
 
 ## Contributor invariants
 
@@ -782,7 +984,14 @@ Preserve these rules when extending the product:
 - Current employers, previous employers, and manual blacklist entries are hard exclusions.
 - Positive title/technology selections use OR; negative selections use NOT.
 - Generated claims come only from stored candidate facts.
-- The application must continue to work with no LLM key.
+- The application must continue to work with no LLM key; every AI path needs a deterministic fallback.
+- A generated answer or CV is never reused or sent before the user approves it.
+- Composition never sends. Only an explicit approval may release an application.
+- Protected-characteristic and demographic questions are never auto-answered.
+- Tailoring may reorder and select, never add, rewrite, or drop a role.
+- Simple facts (name, contact, city, country, employer, eligibility) are derived once, deterministically, and reused; a model is never asked to re-derive them.
+- A question only the candidate can answer is left unanswered, never guessed from stored facts.
+- A CV parser must leave a field it cannot read empty and warn, never guess.
 - Provider fetches are explicit, bounded, cancellable, and terms-conscious.
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.
 - Keep PostgreSQL as the source of truth; introduce another service only for a demonstrated need.
@@ -804,6 +1013,15 @@ make migrate
 ```
 
 Migrations are idempotent. A normal restart should not require deleting data.
+
+### Make says `No rule to make target`
+
+Some Windows GNU Make builds may fail to auto-discover `Makefile` even when it is present. Use the explicit form:
+
+```bash
+make -f Makefile test
+make -f Makefile smoke-regression
+```
 
 ### Rebuild after dependency or Dockerfile changes
 

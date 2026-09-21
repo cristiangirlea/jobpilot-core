@@ -11,9 +11,11 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/generator"
+	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/matching"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
@@ -22,6 +24,8 @@ import (
 type Server struct {
 	Store       *store.Store
 	Discovery   *discovery.Service
+	LLM         *llm.Client
+	ATS         *ats.Reader
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
@@ -33,6 +37,25 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
 	p := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.Secret, h) }
+	m.Handle("GET /api/ai/status", p(s.aiStatus))
+	m.Handle("GET /api/answers", p(s.listAnswers))
+	m.Handle("POST /api/answers", p(s.saveAnswer))
+	m.Handle("PATCH /api/answers/{id}", p(s.updateAnswer))
+	m.Handle("DELETE /api/answers/{id}", p(s.deleteAnswer))
+	m.Handle("POST /api/jobs/{id}/answers", p(s.resolveJobAnswers))
+	m.Handle("POST /api/cv", p(s.uploadCV))
+	m.Handle("GET /api/cv", p(s.listCVs))
+	m.Handle("GET /api/cv/{id}", p(s.getCV))
+	m.Handle("GET /api/cv/{id}/file", p(s.downloadCV))
+	m.Handle("POST /api/cv/{id}/approve", p(s.approveCV))
+	m.Handle("POST /api/cv/{id}/import", p(s.importCV))
+	m.Handle("DELETE /api/cv/{id}", p(s.deleteCV))
+	m.Handle("POST /api/jobs/{id}/cv", p(s.cvForJob))
+	m.Handle("POST /api/jobs/{id}/compose", p(s.compose))
+	m.Handle("GET /api/outbox", p(s.listOutbox))
+	m.Handle("GET /api/outbox/{id}", p(s.getOutboxEntry))
+	m.Handle("POST /api/outbox/{id}/approve", p(s.approveOutboxEntry))
+	m.Handle("POST /api/outbox/{id}/cancel", p(s.cancelOutboxEntry))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", p(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))
@@ -66,11 +89,14 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("PUT /api/discovery/settings", p(s.saveDiscoverySettings))
 	m.Handle("GET /api/discovery/sources", p(s.discoverySources))
 	m.Handle("POST /api/discovery/sources", p(s.addDiscoverySource))
+	m.Handle("PUT /api/discovery/sources/{id}", p(s.updateDiscoverySource))
 	m.Handle("POST /api/discovery/validate", p(s.validateDiscoverySource))
 	m.Handle("DELETE /api/discovery/sources/{id}", p(s.deleteDiscoverySource))
 	m.Handle("GET /api/discovery/runs", p(s.discoveryRuns))
 	m.Handle("POST /api/discovery/run", p(s.runDiscovery))
 	m.Handle("POST /api/discovery/recommended", p(s.runRecommendedDiscovery))
+	m.Handle("GET /api/discovery/suggestions", p(s.boardSuggestions))
+	m.Handle("POST /api/discovery/detect", p(s.detectBoard))
 	m.Handle("POST /api/jobs/{id}/outbound", p(s.outbound))
 	return s.cors(m)
 }
@@ -203,10 +229,13 @@ func (s *Server) addExperience(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddExperience(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
 func (s *Server) deleteExperience(w http.ResponseWriter, r *http.Request) {
-	s.delete(w, r, "work_experiences")
+	s.deleteAndReevaluate(w, r, "work_experiences", "Experience not found.")
 }
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Skills(r.Context(), auth.UserID(r.Context()))
@@ -222,9 +251,14 @@ func (s *Server) addSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddSkill(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
-func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) { s.delete(w, r, "skills") }
+func (s *Server) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	s.deleteAndReevaluate(w, r, "skills", "Skill not found.")
+}
 func (s *Server) listProjects(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Projects(r.Context(), auth.UserID(r.Context()))
 	respond(w, x, e)
@@ -240,9 +274,14 @@ func (s *Server) addProject(w http.ResponseWriter, r *http.Request) {
 	}
 	x.Skills = nonNil(x.Skills)
 	x, e := s.Store.AddProject(r.Context(), auth.UserID(r.Context()), x)
+	if e == nil {
+		e = s.reevaluateJobs(r)
+	}
 	respondCreated(w, x, e)
 }
-func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) { s.delete(w, r, "projects") }
+func (s *Server) deleteProject(w http.ResponseWriter, r *http.Request) {
+	s.deleteAndReevaluate(w, r, "projects", "Project not found.")
+}
 func (s *Server) listBlacklist(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Blacklist(r.Context(), auth.UserID(r.Context()))
 	respond(w, x, e)
@@ -263,25 +302,16 @@ func (s *Server) addBlacklist(w http.ResponseWriter, r *http.Request) {
 	respondCreated(w, x, e)
 }
 func (s *Server) deleteBlacklist(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteOwned(r.Context(), "company_blacklist", auth.UserID(r.Context()), r.PathValue("id"))
+	s.deleteAndReevaluate(w, r, "company_blacklist", "Excluded company not found.")
+}
+func (s *Server) deleteAndReevaluate(w http.ResponseWriter, r *http.Request, table, notFoundMessage string) {
+	err := s.Store.DeleteOwned(r.Context(), table, auth.UserID(r.Context()), r.PathValue("id"))
 	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Excluded company not found.")
+		problem(w, 404, notFoundMessage)
 		return
 	}
 	if err == nil {
 		err = s.reevaluateJobs(r)
-	}
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	w.WriteHeader(204)
-}
-func (s *Server) delete(w http.ResponseWriter, r *http.Request, table string) {
-	err := s.Store.DeleteOwned(r.Context(), table, auth.UserID(r.Context()), r.PathValue("id"))
-	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Record not found.")
-		return
 	}
 	if err != nil {
 		internal(w, err)
@@ -324,19 +354,7 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (s *Server) deleteFilter(w http.ResponseWriter, r *http.Request) {
-	err := s.Store.DeleteOwned(r.Context(), "filter_presets", auth.UserID(r.Context()), r.PathValue("id"))
-	if errors.Is(err, pgx.ErrNoRows) {
-		problem(w, 404, "Filter not found.")
-		return
-	}
-	if err == nil {
-		err = s.reevaluateJobs(r)
-	}
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	w.WriteHeader(204)
+	s.deleteAndReevaluate(w, r, "filter_presets", "Filter not found.")
 }
 
 func (s *Server) reevaluateJobs(r *http.Request) error {
@@ -560,7 +578,34 @@ func (s *Server) addDiscoverySource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	x, e := s.Store.AddDiscoverySource(r.Context(), auth.UserID(r.Context()), x)
-	respondCreated(w, x, e)
+	respondDiscoverySource(w, x, e, http.StatusCreated)
+}
+func (s *Server) updateDiscoverySource(w http.ResponseWriter, r *http.Request) {
+	var x models.DiscoverySource
+	if !decode(w, r, &x) {
+		return
+	}
+	if message := normalizeDiscoverySource(&x); message != "" {
+		problem(w, 422, message)
+		return
+	}
+	x, e := s.Store.UpdateDiscoverySource(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), x)
+	respondDiscoverySource(w, x, e, http.StatusOK)
+}
+func respondDiscoverySource(w http.ResponseWriter, x models.DiscoverySource, err error, status int) {
+	if errors.Is(err, store.ErrDuplicateDiscoverySource) {
+		problem(w, 409, err.Error())
+		return
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, 404, "Source not found.")
+		return
+	}
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	write(w, status, x)
 }
 func normalizeDiscoverySource(x *models.DiscoverySource) string {
 	x.Provider = strings.ToLower(strings.TrimSpace(x.Provider))
@@ -707,3 +752,13 @@ func nonNil(in []string) []string {
 	}
 	return in
 }
+
+// aiStatus reports whether an optional AI provider is wired up. Deterministic
+// behaviour never depends on this; it exists so a test run can confirm which
+// provider, if any, is actually in use.
+func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) {
+	write(w, 200, map[string]any{"enabled": s.LLM.Enabled(), "provider": s.LLM.Describe()})
+}
+
+// isNotFound reports whether an error is a missing row rather than a refusal.
+func isNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }
