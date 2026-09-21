@@ -37,8 +37,9 @@ const instructions = `JobPilot is the user's self-hosted job search assistant. I
 
 Rules the API enforces and you must respect:
 - Jobs rejected by a hard rule (current or previous employer, excluded company, or an active filter) are visible for explanation only. Documents, applications, and the applied status are refused for them with a 409; do not retry.
-- Nothing here submits an application, opens a browser, or records an apply click. When the user is ready, give them the apply_url and let them apply themselves, then record the outcome with update_application_status.
-- When you write anything for the user, use only facts returned by get_profile, get_job, and generate_documents. Never invent experience, skills, or claims.
+- Nothing here submits an application, opens a browser, or records an apply click. compose_application assembles a whole application into the outbox for the user to review; approving it, and any sending, happen only in the web app. For a job whose form cannot be read, give the user the apply_url and let them apply themselves, then record the outcome with update_application_status.
+- Anything marked needs_review or unapproved, and every blocker, must be shown to the user in the exact words the tool returned. Never describe an application as approved, submitted, or sent.
+- When you write anything for the user, use only facts returned by get_profile, get_cv, get_job, and generate_documents. Never invent experience, skills, or claims. An answer or CV whose source is ai or template is a draft until the user reads it and approves it.
 - Listing tools return summaries without the job description; call get_job for the full text and the score breakdown.`
 
 var applicationStatuses = []string{"draft", "ready", "applied", "interview", "rejected", "offer", "withdrawn"}
@@ -322,6 +323,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	})
 
 	addCatalogTools(s, c)
+	addApplyTools(s, c)
 	return s
 }
 
