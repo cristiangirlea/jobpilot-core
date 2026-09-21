@@ -170,6 +170,11 @@ func TestEndToEnd(t *testing.T) {
 		"get_filters": true, "list_discovery_sources": true, "validate_discovery_source": true,
 		"generate_documents": true, "create_application": true, "update_application_status": true,
 		"run_discovery": true, "import_job": true, "add_discovery_source": true,
+		"get_ai_status": true, "list_answers": true, "resolve_screening_answers": true,
+		"save_answer": true, "approve_answer": true, "list_cvs": true, "get_cv": true,
+		"approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
+		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
+		"detect_board": true, "list_board_suggestions": true,
 	}
 	for _, tool := range tools.Tools {
 		if !want[tool.Name] {
@@ -289,6 +294,65 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if apps, _ := out["applications"].([]any); len(apps) != 1 {
 		t.Fatalf("expected one applied application: %s", text)
+	}
+
+	// The apply engine, end to end with no AI provider configured.
+	out, text, isErr = call("get_ai_status", nil)
+	if isErr || out["enabled"] != false {
+		t.Fatalf("the AI adapter should be disabled by default: %s", text)
+	}
+
+	out, text, isErr = call("compose_application", map[string]any{"job_id": accepted.Job.ID})
+	if isErr {
+		t.Fatalf("compose_application: %s", text)
+	}
+	// example.test is not a readable ATS, so the entry must hold for review.
+	if out["status"] != "needs_review" {
+		t.Fatalf("expected needs_review for an unreadable form, got %v", out["status"])
+	}
+	if blockers, _ := out["blockers"].([]any); len(blockers) == 0 {
+		t.Fatalf("an entry that cannot be sent must say why: %s", text)
+	}
+	if out["cover_letter"] == "" {
+		t.Fatal("a cover letter must be written even with no AI provider")
+	}
+	outboxID, _ := out["id"].(string)
+
+	out, text, isErr = call("get_outbox_entry", map[string]any{"outbox_id": outboxID})
+	if isErr || out["status"] != "needs_review" {
+		t.Fatalf("get_outbox_entry: %s", text)
+	}
+
+	out, text, isErr = call("resolve_screening_answers", map[string]any{
+		"job_id": accepted.Job.ID,
+		"questions": []any{
+			map[string]any{"text": "Tell us about yourself", "kind": "textarea"},
+			map[string]any{"text": "What is your gender?", "kind": "select", "options": []any{"Male", "Female", "Prefer not to say"}},
+		},
+	})
+	if isErr {
+		t.Fatalf("resolve_screening_answers: %s", text)
+	}
+	resolutions, _ := out["resolutions"].([]any)
+	if len(resolutions) != 2 {
+		t.Fatalf("expected one resolution per question: %s", text)
+	}
+	// A protected-characteristic question must never be answered.
+	for _, r := range resolutions {
+		m, _ := r.(map[string]any)
+		if strings.Contains(fmt.Sprint(m["question"]), "gender") && m["answer"] != "" {
+			t.Fatalf("a protected question must be left unanswered: %s", text)
+		}
+	}
+
+	_, text, isErr = call("cancel_outbox_entry", map[string]any{"outbox_id": outboxID})
+	if isErr {
+		t.Fatalf("cancel_outbox_entry: %s", text)
+	}
+
+	out, text, isErr = call("detect_board", map[string]any{"url": "https://job-boards.greenhouse.io/grafanalabs"})
+	if isErr || out["provider"] != "greenhouse" || out["identifier"] != "grafanalabs" {
+		t.Fatalf("detect_board: %s", text)
 	}
 
 	out, text, isErr = call("get_dashboard", nil)

@@ -745,9 +745,34 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 | `add_discovery_source` | write | Save a source for the scheduler; validate it first |
 | `run_discovery` | write | Run every active source now, reporting progress when the host asks for it |
 
+Apply engine:
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `get_ai_status` | read | Whether an AI provider is configured at all |
+| `list_answers` | read | The answer bank; pending answers are drafts awaiting approval |
+| `list_cvs`, `get_cv` | read | CVs and their extracted text, including what could not be parsed |
+| `list_outbox`, `get_outbox_entry` | read | Composed applications, their blockers and every answer's provenance |
+| `detect_board` | read | Work out the provider and identifier behind a careers URL |
+| `list_board_suggestions` | read | Curated employer boards known to work as sources |
+| `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
+| `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording |
+| `approve_answer` | write | Approve a saved answer, optionally replacing its text |
+| `approve_cv` | write | Approve a CV for reuse |
+| `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
+| `compose_application` | write | Assemble a whole application into the outbox for review |
+| `cancel_outbox_entry` | write | Withdraw a composed application; reversible |
+
 List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
 
-Deliberately absent: `POST /api/jobs/{id}/outbound` (an agent must not fire attribution clicks), registration, deletes, and profile or filter edits.
+**Deliberately absent, and worth keeping absent:**
+
+- `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Nothing sends today, but the gate that will authorise sending belongs with the user.
+- `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
+- CV upload, which is multipart and belongs in the web app.
+- Registration, deletes, and profile or filter edits.
+
+Server instructions tell the host that composing does not send, that blockers and anything marked `needs_review` must be shown to the user verbatim, and that an application must never be described as approved or sent. Protected-characteristic questions are never answered and declarations the user must make personally are left blank; both are enforced by the API, not by the model.
 
 ### Prompts
 

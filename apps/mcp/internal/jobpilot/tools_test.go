@@ -18,11 +18,15 @@ import (
 // fakeAPI is the smallest JobPilot REST surface the tools depend on. It serves
 // canned data and records write payloads so tests can assert what was sent.
 type fakeAPI struct {
-	mu      sync.Mutex
-	patches []map[string]any
-	posts   []string
-	sources []map[string]any
-	imports []map[string]any
+	mu            sync.Mutex
+	patches       []map[string]any
+	posts         []string
+	sources       []map[string]any
+	imports       []map[string]any
+	answers       []map[string]any
+	answerPatches []map[string]any
+	resolves      []map[string]any
+	cvApprovals   []map[string]any
 	// detailGets counts reads of one application, so a test can prove the
 	// status tool no longer needs a read-back round trip.
 	detailGets atomic.Int32
@@ -168,6 +172,7 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 		send(w, 201, `{"id":"s-new","provider":"`+fmt.Sprint(body["provider"])+`","name":"`+fmt.Sprint(body["name"])+`","identifier":"","search_query":"","excluded_search_query":"","active":true,"created_at":"2026-09-20T00:00:00Z"}`)
 	})
+	f.applyRoutes(m, send)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			send(w, 401, `{"error":"unauthorized"}`)

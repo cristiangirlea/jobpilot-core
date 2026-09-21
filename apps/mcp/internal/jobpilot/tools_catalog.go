@@ -39,10 +39,6 @@ type sourceInput struct {
 // addCatalogTools registers the tools that shape what the catalog contains:
 // manual import, the filters that explain rejections, and discovery sources.
 func addCatalogTools(s *mcp.Server, c *Client) {
-	readOnly := func(title string) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
-	}
-
 	mcp.AddTool(s, &mcp.Tool{
 		Name:  "import_job",
 		Title: "Import a job posting",
@@ -50,7 +46,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 			"A job the user's rules reject is still imported and returned with rejected set and its reasons listed; it stays visible for explanation but cannot be applied to. " +
 			"An identical posting already in the catalog is reused rather than duplicated.",
 		// Repeating an import re-uses the catalog row and upserts the match.
-		Annotations: &mcp.ToolAnnotations{Title: "Import a job posting", ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)},
+		Annotations: writeTool("Import a job posting", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in importJobInput) (*mcp.CallToolResult, ImportedJob, error) {
 		// These mirror the API's own validation so a malformed call is
 		// explained without a round trip.
@@ -150,7 +146,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		Title: "Add a discovery source",
 		Description: "Save a discovery source so the scheduler crawls it. Validate it first: a wrong board token saves cleanly and then quietly returns nothing. " +
 			"A source with the same provider, identifier and queries already exists is refused.",
-		Annotations: &mcp.ToolAnnotations{Title: "Add a discovery source", ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: false, OpenWorldHint: ptr(false)},
+		Annotations: writeTool("Add a discovery source", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sourceInput) (*mcp.CallToolResult, DiscoverySource, error) {
 		source, err := normalizeSource(in)
 		if err != nil {

@@ -37,8 +37,9 @@ const instructions = `JobPilot is the user's self-hosted job search assistant. I
 
 Rules the API enforces and you must respect:
 - Jobs rejected by a hard rule (current or previous employer, excluded company, or an active filter) are visible for explanation only. Documents, applications, and the applied status are refused for them with a 409; do not retry.
-- Nothing here submits an application, opens a browser, or records an apply click. When the user is ready, give them the apply_url and let them apply themselves, then record the outcome with update_application_status.
-- When you write anything for the user, use only facts returned by get_profile, get_job, and generate_documents. Never invent experience, skills, or claims.
+- Nothing here submits an application, opens a browser, or records an apply click. compose_application assembles a whole application into the outbox for the user to review; approving it, and any sending, happen only in the web app. For a job whose form cannot be read, give the user the apply_url and let them apply themselves, then record the outcome with update_application_status.
+- Anything marked needs_review or unapproved, and every blocker, must be shown to the user in the exact words the tool returned. Never describe an application as approved, submitted, or sent.
+- When you write anything for the user, use only facts returned by get_profile, get_cv, get_job, and generate_documents. Never invent experience, skills, or claims. An answer or CV whose source is ai or template is a draft until the user reads it and approves it.
 - Listing tools return summaries without the job description; call get_job for the full text and the score breakdown.`
 
 var applicationStatuses = []string{"draft", "ready", "applied", "interview", "rejected", "offer", "withdrawn"}
@@ -87,6 +88,20 @@ type RunList struct {
 // NewServer builds the MCP server over the given API client. Tool handlers
 // return plain errors; the SDK turns those into tool results the host model
 // can read and react to, rather than protocol failures.
+// readOnly and writeTool are the annotation policy for every tool, in one
+// place so the three registration files cannot drift apart. Nothing here is
+// destructive: no tool deletes anything.
+func readOnly(title string) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
+}
+
+// writeTool marks a tool that changes stored state. Most are idempotent:
+// documents regenerate deterministically, applications upsert, and a repeated
+// status change is a no-op.
+func writeTool(title string, idempotent bool) *mcp.ToolAnnotations {
+	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: idempotent, OpenWorldHint: ptr(false)}
+}
+
 func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -94,16 +109,6 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	s := mcp.NewServer(&mcp.Implementation{Name: "jobpilot", Version: version}, &mcp.ServerOptions{Instructions: instructions, Logger: logger})
 	s.AddReceivingMiddleware(logging(logger))
 	addPrompts(s)
-
-	readOnly := func(title string) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
-	}
-	// Every write except run_discovery is idempotent: documents regenerate
-	// deterministically, applications upsert, and a repeated status change
-	// is a no-op.
-	write := func(title string) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(false)}
-	}
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_profile",
@@ -256,7 +261,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		Name:        "generate_documents",
 		Title:       "Generate application documents",
 		Description: "Generate and store the deterministic application documents for a job: recruiter message, cover letter, candidate summary, and common screening answers, built only from stored profile facts. Safe to repeat. Refused for rejected jobs.",
-		Annotations: write("Generate application documents"),
+		Annotations: writeTool("Generate application documents", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Documents, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, Documents{}, errors.New("job_id is required")
@@ -273,7 +278,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		Name:        "create_application",
 		Title:       "Create draft application",
 		Description: "Create a draft application record for a job, or return the existing one. This only tracks intent inside JobPilot; it does not contact the employer. Refused for rejected jobs.",
-		Annotations: write("Create draft application"),
+		Annotations: writeTool("Create draft application", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Application, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, Application{}, errors.New("job_id is required")
@@ -290,7 +295,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		Name:        "update_application_status",
 		Title:       "Update application status",
 		Description: "Move an application to a new status and record the change in its history. Set applied only after the user confirms they submitted on the employer's site. Notes are kept unless you pass replacement notes. Moving a blocked application to applied is refused.",
-		Annotations: write("Update application status"),
+		Annotations: writeTool("Update application status", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateStatusInput) (*mcp.CallToolResult, Application, error) {
 		if strings.TrimSpace(in.ApplicationID) == "" {
 			return nil, Application{}, errors.New("application_id is required")
@@ -322,6 +327,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	})
 
 	addCatalogTools(s, c)
+	addApplyTools(s, c)
 	return s
 }
 

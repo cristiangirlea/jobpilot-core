@@ -162,11 +162,12 @@ func TestToolCatalogV2(t *testing.T) {
 		"generate_documents": false, "create_application": false, "update_application_status": false,
 		"run_discovery": false, "import_job": false, "add_discovery_source": false,
 	}
+	// The core tools and their hints. The apply-engine set, and which tools
+	// must never exist, are covered by TestApplyToolCatalog.
 	seen := map[string]bool{}
 	for _, tool := range res.Tools {
 		readOnly, known := want[tool.Name]
 		if !known {
-			t.Errorf("unexpected tool %q", tool.Name)
 			continue
 		}
 		seen[tool.Name] = true
