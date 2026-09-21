@@ -1,20 +1,24 @@
 GOCACHE ?= $(CURDIR)/.cache/go-build
 
 ifeq ($(OS),Windows_NT)
+EXE := .exe
 TEST_API = powershell -NoProfile -Command '$$env:GOCACHE="$(GOCACHE)"; Set-Location apps/api; go test ./...'
+TEST_MCP = powershell -NoProfile -Command '$$env:GOCACHE="$(GOCACHE)"; Set-Location apps/mcp; go test ./...'
 TEST_WEB = powershell -NoProfile -Command 'Set-Location apps/web; npm run typecheck'
 else
 TEST_API = cd apps/api && GOCACHE="$(GOCACHE)" go test ./...
+TEST_MCP = cd apps/mcp && GOCACHE="$(GOCACHE)" go test ./...
 TEST_WEB = cd apps/web && npm run typecheck
 endif
 
-.PHONY: dev test migrate seed smoke smoke-live smoke-regression build down logs
+.PHONY: dev test migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs
 
 dev:
 	docker compose up --build
 
 test:
 	$(TEST_API)
+	$(TEST_MCP)
 	$(TEST_WEB)
 
 migrate:
@@ -31,6 +35,12 @@ smoke-live:
 
 smoke-regression:
 	powershell -ExecutionPolicy Bypass -File scripts/seniority-filter-smoke.ps1
+
+smoke-mcp:
+	cd apps/mcp && go test -count=1 -v -run TestEndToEnd . -args -api $(or $(JOBPILOT_E2E_API_URL),http://localhost:8080)
+
+mcp:
+	cd apps/mcp && go build -o jobpilot-mcp$(EXE) .
 
 build:
 	docker compose build

@@ -23,6 +23,7 @@ The full local stack is implemented and usable:
 - Strict application lockout for rejected jobs.
 - Dashboard metrics and recommended jobs.
 - Docker Compose, migrations, seed command, unit tests, and end-to-end smoke scripts.
+- An MCP server (`apps/mcp`) that lets agent hosts such as Claude Code read matches, generate documents, and track applications through the same API locks.
 - Optional, pluggable AI adapter with a completion cache; disabled by default.
 - Reusable answer bank that resolves application questions deterministically first.
 - CV upload with deterministic PDF/DOCX parsing, user approval, and profile import.
@@ -112,7 +113,8 @@ Recommended reading order:
 6. `apps/api/internal/discovery/service.go` - discovery orchestration and scheduler.
 7. `apps/api/internal/discovery/fetcher.go` - supported provider adapters.
 8. `apps/web/lib/api.ts`, `apps/web/components`, and the affected page.
-9. The latest SQL migration plus any migration touching the relevant entity.
+9. `apps/mcp/internal/jobpilot/tools.go` - the agent-facing tool set over the REST API.
+10. The latest SQL migration plus any migration touching the relevant entity.
 
 Before changing anything, run:
 
@@ -126,10 +128,14 @@ Do not assume uncommitted changes are disposable. They may belong to the user.
 ## Architecture
 
 ```text
-Browser (Next.js + React + Tailwind)
-              |
-              | JSON REST + bearer JWT
-              v
+Browser (Next.js + React + Tailwind)     Agent host (Claude Code)
+              |                                    |
+              |                          stdio MCP |
+              |                                    v
+              |                          jobpilot-mcp (Go, apps/mcp)
+              |                                    |
+              | JSON REST + bearer JWT             | JSON REST + bearer JWT
+              v                                    v
 Go API (net/http)
   |-- auth and validation
   |-- profile/filter/application services
@@ -143,7 +149,7 @@ PostgreSQL
   |-- per-user profiles, matches, filters, applications, and documents
 ```
 
-Redis is not used. Discovery jobs are intentionally small and run in the API process. PostgreSQL is the only required stateful service.
+Redis is not used. Discovery jobs are intentionally small and run in the API process. PostgreSQL is the only required stateful service. The MCP server is a second client of the API, not a second back end: it holds no state and never touches the database.
 
 ### Repository map
 
@@ -173,6 +179,12 @@ apps/
     components/                        navigation, forms, chips, UI helpers
     lib/api.ts                         authenticated API client
     lib/types.ts                       frontend data types
+  mcp/                                 separate Go module (Go 1.25)
+    main.go                            stdio MCP server entrypoint
+    internal/jobpilot/client.go        REST client: bearer token or login
+    internal/jobpilot/tools.go         tool set and host instructions
+    internal/jobpilot/types.go         wire mirrors and agent-facing summaries
+    e2e_test.go                        stdio test against a running API
 migrations/                            idempotent PostgreSQL migrations
 scripts/                               PowerShell smoke and regression tests
 docker-compose.yml                     local PostgreSQL, migrations, API, web
@@ -675,6 +687,56 @@ Authorization: Bearer <token>
 
 The HTTP layer uses strict JSON decoding with unknown fields rejected and a 2 MiB request-body limit. See `apps/api/internal/httpapi/server.go` for exact payload structs and validation messages.
 
+## MCP server
+
+`apps/mcp` is a Model Context Protocol server that lets an agent host such as Claude Code work with JobPilot through typed tools. It is a client of the REST API and nothing more: every call carries the user's bearer token, so user isolation, the rejection locks, and the no-submission boundary are enforced by the API exactly as they are for the web UI.
+
+It is its own Go module because the MCP SDK requires Go 1.25 and brings dependencies the API does not need. The API module and its Go 1.23 container build are unchanged.
+
+### Build and register
+
+```bash
+make mcp
+claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
+```
+
+Get a token from `POST /api/auth/login`, or let the server log in for you:
+
+| Variable | Purpose |
+|---|---|
+| `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
+| `JOBPILOT_TOKEN` | Bearer token from login or registration |
+| `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Alternative to a token; the server logs in on first use and once more after a `401`, which covers token expiry. Prefer a token: values passed with `claude mcp add -e` are stored in plaintext in the host's config, and a password never expires |
+
+The transport is stdio, so the binary logs to stderr only.
+
+### Tools
+
+| Tool | Kind | Purpose |
+|---|---|---|
+| `get_profile` | read | Candidate facts the agent may use when writing |
+| `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit` |
+| `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
+| `list_applications` | read | Applications with their job, optionally filtered by status |
+| `get_application` | read | One application with its generated documents and blocked state |
+| `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
+| `list_discovery_runs` | read | Recent run history |
+| `generate_documents` | write | Deterministic documents for a job; refused for rejected jobs |
+| `create_application` | write | Draft application record; idempotent; refused for rejected jobs |
+| `update_application_status` | write | Status change with history; keeps existing notes unless new notes are passed |
+| `run_discovery` | write | Run every active source now |
+
+List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the web UI does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` from the API is returned as a tool error with the rejection hint, so the model can explain it instead of retrying.
+
+Deliberately absent: `POST /api/jobs/{id}/outbound` (an agent must not fire attribution clicks), registration, deletes, and profile or filter edits.
+
+### Verification
+
+```bash
+cd apps/mcp && go test ./...   # unit tests against a fake API; no stack needed
+make smoke-mcp                 # builds the binary and drives it over stdio against http://localhost:8080
+```
+
 ## Database and migrations
 
 PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are rerun safely by the `migrate` service.
@@ -762,12 +824,14 @@ No LLM, Redis, Kafka, Elasticsearch, or Kubernetes configuration is required.
 
 ```bash
 make dev              # build and run PostgreSQL, migrations, API, and web
-make test             # Go tests and frontend TypeScript typecheck
+make test             # Go tests (API and MCP) and frontend TypeScript typecheck
 make migrate          # rerun SQL migrations
 make seed             # add sample data to the first registered user
 make smoke            # full local API workflow
 make smoke-live       # capped live Remotive discovery and auto-prepare flow
 make smoke-regression # seniority, reevaluation, OR/NOT, blacklist, and lockout checks
+make smoke-mcp        # drive the MCP server over stdio against the running API
+make mcp              # build apps/mcp/jobpilot-mcp
 make build            # build production containers
 make logs             # follow API and web logs
 make down              # stop services without deleting persistent data
@@ -784,6 +848,16 @@ cd apps/api
 go mod download
 go test ./...
 go run ./cmd/api
+```
+
+### Native MCP server
+
+Requires Go 1.25. The unit tests run against a fake API; only the binary itself needs a running API:
+
+```bash
+cd apps/mcp
+go test ./...
+go build -o jobpilot-mcp .
 ```
 
 ### Native frontend
@@ -824,6 +898,16 @@ For discovery/provider changes:
 make smoke-live
 ```
 
+For MCP server changes with the stack running:
+
+```bash
+make smoke-mcp
+```
+
+### Continuous integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI.
+
 The test suites cover:
 
 - JWT/password behavior.
@@ -838,6 +922,7 @@ The test suites cover:
 - Shared catalog behavior across users.
 - Re-evaluation after profile, experience, skill, project, filter, and blacklist changes.
 - Application action lockout for rejected companies/jobs.
+- MCP tool catalog, summaries, filters, blocked-action errors, and notes preservation against a fake API, plus a stdio end-to-end flow against a live API.
 
 At the last verification point, Go tests, TypeScript typechecking, the production web build, the main smoke flow, and the regression smoke flow passed.
 
@@ -910,6 +995,7 @@ Preserve these rules when extending the product:
 - Provider fetches are explicit, bounded, cancellable, and terms-conscious.
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.
 - Keep PostgreSQL as the source of truth; introduce another service only for a demonstrated need.
+- The MCP server is a client of the REST API: it never reads the database, never bypasses the API's authorization, and never exposes outbound attribution or any submission action.
 
 ## Troubleshooting
 
