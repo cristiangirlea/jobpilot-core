@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"net/http"
 )
 
@@ -113,9 +114,8 @@ func RequireSession(next http.Handler) http.Handler {
 func deny(w http.ResponseWriter, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`{"error":` + quote(message) + `}`))
+	// Encoded rather than concatenated: the scope name is interpolated into
+	// the message, and a hand-rolled quote would break on the first caller
+	// that passes something less tame than a constant.
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
-
-// quote is a minimal JSON string encoder for the fixed messages above, which
-// never contain characters needing an escape.
-func quote(s string) string { return `"` + s + `"` }

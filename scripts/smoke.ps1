@@ -126,6 +126,10 @@ $script:Headers = @{ Authorization = "Bearer $($readToken.token)" }
 Send-JobPilotRequest GET "/profile" | Out-Null
 Assert-Forbidden { Send-JobPilotRequest POST "/applications" @{ job_id = $accepted.job.id } } "A read token writing"
 Assert-Forbidden { Send-JobPilotRequest GET "/tokens" } "An agent token listing tokens"
+# validate and detect change nothing, so read may reach them; this pins the
+# two deliberate exceptions to the write-scope rule.
+$readValidation = Send-JobPilotRequest POST "/discovery/validate" @{ provider = "remotive"; name = "Scope check"; identifier = ""; search_query = "go backend engineer"; active = $true }
+if ($null -eq $readValidation.count) { throw "A read token should be able to validate a source" }
 
 $script:Headers = @{ Authorization = "Bearer $($writeToken.token)" }
 $agentDocs = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/generate"

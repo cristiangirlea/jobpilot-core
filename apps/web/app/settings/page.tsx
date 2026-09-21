@@ -18,9 +18,13 @@ function Tokens(){
       setCreated(made);setName("");setCanWrite(false);setDays(0);load();
     }catch(e){setError((e as Error).message)}
   };
-  const revoke=async(id:string)=>{
+  const revoke=async(t:AgentToken)=>{
+    // Revocation is immediate and cannot be undone, and the backend has no
+    // way to tell a misclick from an intention, so the confirm is the only
+    // guard there is.
+    if(!confirm(`Revoke "${t.name}"? Anything using it stops working on its next request, and this cannot be undone.`))return;
     setError("");
-    try{await api(`/tokens/${id}`,{method:"DELETE"});load()}catch(e){setError((e as Error).message)}
+    try{await api(`/tokens/${t.id}`,{method:"DELETE"});load()}catch(e){setError((e as Error).message)}
   };
   const live=tokens.filter(t=>!t.revoked_at);
   return <section className="card md:col-span-2">
@@ -41,7 +45,7 @@ function Tokens(){
       <button className="btn-primary" disabled={!name.trim()} onClick={create}>Create token</button>
     </div>
     {live.length>0&&<table className="mt-5 w-full text-sm"><thead><tr className="text-left text-xs uppercase tracking-wide text-ink/45"><th className="pb-2">Name</th><th className="pb-2">Token</th><th className="pb-2">Access</th><th className="pb-2">Last used</th><th className="pb-2">Expires</th><th className="pb-2"></th></tr></thead><tbody>
-      {live.map(t=><tr key={t.id} className="border-t border-black/5"><td className="py-2 font-semibold">{t.name}</td><td className="py-2"><code className="text-xs">jpat_{t.token_prefix}…</code></td><td className="py-2">{t.scopes.includes("write")?"Read and write":"Read only"}</td><td className="py-2">{when(t.last_used_at)}</td><td className="py-2">{t.expires_at?when(t.expires_at):"Never"}</td><td className="py-2 text-right"><button className="btn-secondary !px-3 !py-1.5 text-xs" onClick={()=>revoke(t.id)}>Revoke</button></td></tr>)}
+      {live.map(t=><tr key={t.id} className="border-t border-black/5"><td className="py-2 font-semibold">{t.name}</td><td className="py-2"><code className="text-xs">jpat_{t.token_prefix}…</code></td><td className="py-2">{t.scopes.includes("write")?"Read and write":"Read only"}</td><td className="py-2">{when(t.last_used_at)}</td><td className="py-2">{t.expires_at?when(t.expires_at):"Never"}</td><td className="py-2 text-right"><button className="btn-secondary !px-3 !py-1.5 text-xs" onClick={()=>revoke(t)}>Revoke</button></td></tr>)}
     </tbody></table>}
     {live.length===0&&<p className="muted mt-4 text-sm">No active tokens.</p>}
   </section>;

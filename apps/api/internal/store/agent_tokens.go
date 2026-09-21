@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,7 +31,11 @@ func (s *Store) AgentTokenPrincipal(ctx context.Context, hash string) (auth.Prin
 	}
 	// Recorded at most once a minute: this runs on every request, and the
 	// exact second a token was last used is not worth a write each time.
-	_, _ = s.DB.Exec(ctx, `UPDATE agent_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`, p.TokenID)
+	// A failure here must not fail the request, but it is logged, because a
+	// blank last-used column is what the user reads before revoking.
+	if _, err := s.DB.Exec(ctx, `UPDATE agent_tokens SET last_used_at=now() WHERE id=$1 AND (last_used_at IS NULL OR last_used_at < now() - interval '1 minute')`, p.TokenID); err != nil {
+		slog.Warn("could not record agent token use", "token_id", p.TokenID, "error", err)
+	}
 	return p, nil
 }
 
