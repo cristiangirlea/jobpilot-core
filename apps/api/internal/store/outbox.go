@@ -39,11 +39,6 @@ func scanOutbox(row pgx.Row) (models.OutboxEntry, error) {
 	return entry, nil
 }
 
-// SaveOutboxEntry composes or recomposes the queued application for one job.
-//
-// Recomposing an entry the user already approved resets it to await approval
-// again: the CV, letter, or answers may have changed, and a prior approval was
-// given for what the entry said then, not for whatever it says now.
 // ErrOutboxSent is returned when a caller tries to rebuild an entry that has
 // already gone out. A sent application cannot be un-sent, so the row is
 // immutable rather than silently left alone.
@@ -54,6 +49,17 @@ var ErrOutboxSent = errors.New("this application has already been sent and canno
 // direction, but it must not happen quietly.
 const ApprovalWithdrawnNotice = "You had approved this application. Rebuilding it withdrew that approval, so it needs approving again."
 
+// SaveOutboxEntry composes or recomposes the queued application for one job.
+//
+// Recomposing an entry the user already approved resets it to await approval
+// again: the CV, letter, or answers may have changed, and a prior approval was
+// given for what the entry said then, not for whatever it says now. The
+// notice is tied to that transition, so a second rebuild carries none: by
+// then there is no approval left to withdraw.
+//
+// The read and the write share a transaction, and the read locks the row, so
+// a sender marking the entry sent cannot slip between them and turn a clear
+// conflict back into an unexplained failure.
 func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models.OutboxEntry) (models.OutboxEntry, error) {
 	form, err := json.Marshal(entry.Form)
 	if err != nil {
@@ -72,11 +78,17 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if entry.Notices == nil {
 		entry.Notices = []string{}
 	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	defer tx.Rollback(ctx)
+
 	// Rebuilding clears approved_at. Say so on the new entry rather than
 	// letting an approval disappear without a word.
 	var previousStatus string
 	var wasApproved bool
-	err = s.DB.QueryRow(ctx, `SELECT status, approved_at IS NOT NULL FROM application_outbox WHERE user_id=$1 AND job_id=$2`, userID, entry.JobID).Scan(&previousStatus, &wasApproved)
+	err = tx.QueryRow(ctx, `SELECT status, approved_at IS NOT NULL FROM application_outbox WHERE user_id=$1 AND job_id=$2 FOR UPDATE`, userID, entry.JobID).Scan(&previousStatus, &wasApproved)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return models.OutboxEntry{}, err
 	}
@@ -94,7 +106,7 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if entry.CVDocumentID != "" {
 		cvDocument = entry.CVDocumentID
 	}
-	return scanOutbox(s.DB.QueryRow(ctx, `INSERT INTO application_outbox
+	saved, err := scanOutbox(tx.QueryRow(ctx, `INSERT INTO application_outbox
 		(user_id,job_id,application_id,status,channel,ats_provider,cv_document_id,cv_decision,cover_letter,cover_letter_source,form,answers,blockers,notices,needs_review)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (user_id,job_id) DO UPDATE SET
@@ -109,6 +121,10 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 		userID, entry.JobID, application, entry.Status, entry.Channel, entry.ATSProvider,
 		cvDocument, entry.CVDecision, entry.CoverLetter, entry.CoverLetterSource,
 		form, answers, entry.Blockers, entry.Notices, entry.NeedsReview))
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	return saved, tx.Commit(ctx)
 }
 
 // OutboxEntries lists the queue. status "" means every entry.
