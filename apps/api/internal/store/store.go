@@ -373,11 +373,17 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	json.Unmarshal(missing, &x.Match.MissingSkills)
 	json.Unmarshal(red, &x.Match.RedFlags)
 	json.Unmarshal(breakdown, &x.Match.Breakdown)
+	// A rejected match cannot be applied to, so the apply URL is withheld
+	// here rather than in each client. The value returned by this helper is
+	// therefore a read model: never write it back to the catalog row.
+	if x.Match.Rejected {
+		x.Job.ApplyURL = ""
+	}
 	return x, nil
 }
 
 func (s *Store) Applications(ctx context.Context, u string) ([]models.Application, error) {
-	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false) FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -393,12 +399,16 @@ func (s *Store) Applications(ctx context.Context, u string) ([]models.Applicatio
 	return out, rows.Err()
 }
 func (s *Store) Application(ctx context.Context, u, id string) (models.Application, error) {
-	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at FROM applications a JOIN jobs j ON j.id=a.job_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
+	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false) FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
 }
 func scanApplication(row scanner) (models.Application, error) {
 	var a models.Application
 	var j models.Job
-	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt)
+	var rejected bool
+	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected)
+	if rejected {
+		j.ApplyURL = ""
+	}
 	a.Job = &j
 	return a, err
 }
@@ -418,7 +428,11 @@ func (s *Store) CreateApplication(ctx context.Context, u, jobID string) (models.
 	}
 	return a, err
 }
-func (s *Store) UpdateApplication(ctx context.Context, u, id, status, notes string) (models.Application, error) {
+
+// UpdateApplication changes an application's status and, when notes is
+// non-nil, replaces its notes. A nil notes keeps the stored text, so a caller
+// that only moves the status cannot silently erase what the user wrote.
+func (s *Store) UpdateApplication(ctx context.Context, u, id, status string, notes *string) (models.Application, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return models.Application{}, err
@@ -441,7 +455,7 @@ func (s *Store) UpdateApplication(ctx context.Context, u, id, status, notes stri
 		}
 	}
 	var a models.Application
-	err = tx.QueryRow(ctx, `UPDATE applications SET status=$3,notes=$4,updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING id,job_id,status,notes,created_at,updated_at`, id, u, status, notes).Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt)
+	err = tx.QueryRow(ctx, `UPDATE applications SET status=$3,notes=COALESCE($4,notes),updated_at=now() WHERE id=$1 AND user_id=$2 RETURNING id,job_id,status,notes,created_at,updated_at`, id, u, status, notes).Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return a, err
 	}

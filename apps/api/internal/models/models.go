@@ -103,7 +103,7 @@ type JobInput struct {
 	EmploymentType string     `json:"employment_type"`
 	Industry       string     `json:"industry"`
 	Description    string     `json:"description"`
-	ApplyURL       string     `json:"apply_url"`
+	ApplyURL       string     `json:"apply_url,omitempty"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 }
 

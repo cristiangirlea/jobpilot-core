@@ -242,9 +242,15 @@ func (c *Client) CreateApplication(ctx context.Context, jobID string) (Applicati
 
 // UpdateApplication sends both fields because the API replaces notes on every
 // update; callers that want to keep the stored notes must pass them back.
-func (c *Client) UpdateApplication(ctx context.Context, id, status, notes string) (Application, error) {
+// UpdateApplication changes an application's status. A nil notes omits the
+// field, which the API reads as "keep the stored notes"; a non-nil value
+// replaces them, and an empty string clears them.
+func (c *Client) UpdateApplication(ctx context.Context, id, status string, notes *string) (Application, error) {
 	var out Application
-	body := map[string]string{"status": status, "notes": notes}
+	body := struct {
+		Status string  `json:"status"`
+		Notes  *string `json:"notes,omitempty"`
+	}{Status: status, Notes: notes}
 	return out, c.do(ctx, http.MethodPatch, "/api/applications/"+url.PathEscape(id), body, &out, c.timeout)
 }
 

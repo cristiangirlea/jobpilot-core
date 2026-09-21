@@ -441,6 +441,11 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	matchID, getErr := s.Store.SaveJobMatch(ctx, uid, job.ID, evaluation, fid)
+	// This response is assembled here rather than read back through
+	// scanJobMatch, so it has to withhold the apply URL itself.
+	if evaluation.Rejected {
+		job.ApplyURL = ""
+	}
 	respondCreated(w, models.JobWithMatch{Job: job, Match: evaluation, MatchID: matchID}, getErr)
 }
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
@@ -527,7 +532,9 @@ func (s *Server) getApplication(w http.ResponseWriter, r *http.Request) {
 
 type applicationUpdate struct {
 	Status string `json:"status"`
-	Notes  string `json:"notes"`
+	// Notes is a pointer so an omitted field keeps the stored notes while an
+	// explicit empty string clears them.
+	Notes *string `json:"notes"`
 }
 
 func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
@@ -538,6 +545,12 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 	allowed := map[string]bool{"": true, "draft": true, "ready": true, "applied": true, "interview": true, "rejected": true, "offer": true, "withdrawn": true}
 	if !allowed[x.Status] {
 		problem(w, 422, "Invalid application status.")
+		return
+	}
+	// Both fields are optional individually, but a body carrying neither
+	// would touch the row and report success without changing anything.
+	if x.Status == "" && x.Notes == nil {
+		problem(w, 422, "Provide a status, notes, or both.")
 		return
 	}
 	a, e := s.Store.UpdateApplication(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), x.Status, x.Notes)

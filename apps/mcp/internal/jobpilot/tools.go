@@ -268,18 +268,9 @@ func NewServer(c *Client, version string) *mcp.Server {
 		if !validStatus(status) {
 			return nil, Application{}, fmt.Errorf("status must be one of %s, not %q", strings.Join(applicationStatuses, ", "), in.Status)
 		}
-		var notes string
-		if in.Notes != nil {
-			notes = *in.Notes
-		} else {
-			// The API replaces notes on every update, so read them back first.
-			current, err := c.Application(ctx, in.ApplicationID)
-			if err != nil {
-				return nil, Application{}, toolError(err)
-			}
-			notes = current.Application.Notes
-		}
-		a, err := c.UpdateApplication(ctx, in.ApplicationID, status, notes)
+		// Omitting notes tells the API to keep what is stored, so there is
+		// nothing to read back first.
+		a, err := c.UpdateApplication(ctx, in.ApplicationID, status, in.Notes)
 		if err != nil {
 			return nil, Application{}, toolError(err)
 		}
