@@ -1,0 +1,142 @@
+name: ci
+
+# Mirrors `make test` (split into parallel jobs) plus image builds and an
+# integration pass against a real API. Keep this file and the Makefile in step.
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Cancel superseded pull request runs, but let every master commit finish.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  go:
+    name: ${{ matrix.module }} (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [api, mcp]
+    defaults:
+      run:
+        working-directory: apps/${{ matrix.module }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: apps/${{ matrix.module }}/go.mod
+          cache-dependency-path: apps/${{ matrix.module }}/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go mod tidy
+        run: go mod tidy -diff
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  web:
+    name: web (typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+
+  images:
+    name: docker images
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build the API image
+        run: docker build apps/api
+      - name: Build the web image
+        run: docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web
+
+  integration:
+    name: integration (API, smoke scripts, MCP end-to-end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [go]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobpilot
+          POSTGRES_PASSWORD: jobpilot
+          POSTGRES_DB: jobpilot
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U jobpilot -d jobpilot"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PGPASSWORD: jobpilot
+      JOBPILOT_API_URL: http://localhost:8080/api
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          # Go 1.25 builds both modules; the go job already proves the API's own toolchain.
+          go-version-file: apps/mcp/go.mod
+          cache-dependency-path: |
+            apps/api/go.sum
+            apps/mcp/go.sum
+      - name: Apply migrations
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
+          for f in migrations/*.sql; do
+            psql -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d jobpilot -f "$f"
+          done
+      - name: Build and start the API
+        env:
+          API_ADDR: ":8080"
+          DATABASE_URL: postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable
+          JWT_SECRET: ci-only-secret
+          FRONTEND_URL: http://localhost:3000
+          TOKEN_TTL_HOURS: "1"
+          LLM_PROVIDER: none
+        run: |
+          (cd apps/api && go build -o "$RUNNER_TEMP/api" ./cmd/api)
+          nohup "$RUNNER_TEMP/api" > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fs http://localhost:8080/api/health && break
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/api/health
+      - name: Smoke flow
+        run: pwsh -File scripts/smoke.ps1
+      - name: Regression smoke flow
+        run: pwsh -File scripts/seniority-filter-smoke.ps1
+      - name: MCP end-to-end over stdio
+        working-directory: apps/mcp
+        run: go test -count=1 -v -run TestEndToEnd . -args -api http://localhost:8080
+      - name: Upload API log
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: api-log
+          path: ${{ runner.temp }}/api.log

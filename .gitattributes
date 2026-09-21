@@ -1,0 +1,5 @@
+# Keep LF in the working tree on every platform so gofmt -l and the CI gate agree.
+* text=auto eol=lf
+*.ttf binary
+*.png binary
+*.ico binary
