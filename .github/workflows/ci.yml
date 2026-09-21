@@ -1,0 +1,141 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/api/go.mod
+          cache-dependency-path: apps/api/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test ./...
+
+  mcp:
+    name: MCP server (Go)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/mcp
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/mcp/go.mod
+          cache-dependency-path: apps/mcp/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  web:
+    name: Web (typecheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: npm ci
+        run: npm ci
+      - name: typecheck
+        run: npm run typecheck
+
+  integration:
+    name: Integration (API, smoke scripts, MCP end-to-end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [api, mcp]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: jobpilot
+          POSTGRES_PASSWORD: jobpilot
+          POSTGRES_DB: jobpilot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jobpilot -d jobpilot"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PGPASSWORD: jobpilot
+      JOBPILOT_API_URL: http://localhost:8080/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Go 1.25 builds both modules; the api job already proves the API's own toolchain.
+          go-version-file: apps/mcp/go.mod
+          cache-dependency-path: |
+            apps/api/go.sum
+            apps/mcp/go.sum
+      - name: Apply migrations
+        run: |
+          command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
+          for f in migrations/*.sql; do
+            psql -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d jobpilot -f "$f"
+          done
+      - name: Build and start the API
+        env:
+          API_ADDR: ":8080"
+          DATABASE_URL: postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable
+          JWT_SECRET: ci-only-secret
+          FRONTEND_URL: http://localhost:3000
+          TOKEN_TTL_HOURS: "1"
+          LLM_PROVIDER: none
+        run: |
+          (cd apps/api && go build -o "$RUNNER_TEMP/api" ./cmd/api)
+          nohup "$RUNNER_TEMP/api" > "$RUNNER_TEMP/api.log" 2>&1 &
+          for i in $(seq 1 30); do
+            curl -fsS http://localhost:8080/api/health && break
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/api/health
+      - name: Smoke flow
+        run: pwsh -File scripts/smoke.ps1
+      - name: Regression smoke flow
+        run: pwsh -File scripts/seniority-filter-smoke.ps1
+      - name: MCP end-to-end over stdio
+        working-directory: apps/mcp
+        run: go test -count=1 -v -run TestEndToEnd . -args -api http://localhost:8080
+      - name: Upload API log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-log
+          path: ${{ runner.temp }}/api.log
