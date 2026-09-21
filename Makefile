@@ -1,4 +1,6 @@
 GOCACHE ?= $(CURDIR)/.cache/go-build
+# No tags yet, so this is a short commit SHA, or "dev" outside a checkout.
+MCP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 ifeq ($(OS),Windows_NT)
 EXE := .exe
@@ -40,7 +42,7 @@ smoke-mcp:
 	cd apps/mcp && go test -count=1 -v -run TestEndToEnd . -args -api $(or $(JOBPILOT_E2E_API_URL),http://localhost:8080)
 
 mcp:
-	cd apps/mcp && go build -o jobpilot-mcp$(EXE) .
+	cd apps/mcp && go build -ldflags "-X main.version=$(MCP_VERSION)" -o jobpilot-mcp$(EXE) .
 
 build:
 	docker compose build

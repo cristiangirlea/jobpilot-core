@@ -702,6 +702,8 @@ make mcp
 claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
 ```
 
+The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build and no absolute path. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
+
 Get a token from `POST /api/auth/login`, or let the server log in for you:
 
 | Variable | Purpose |
@@ -710,7 +712,7 @@ Get a token from `POST /api/auth/login`, or let the server log in for you:
 | `JOBPILOT_TOKEN` | Bearer token from login or registration |
 | `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Alternative to a token; the server logs in on first use and once more after a `401`, which covers token expiry. Prefer a token: values passed with `claude mcp add -e` are stored in plaintext in the host's config, and a password never expires |
 
-The transport is stdio, so the binary logs to stderr only.
+The transport is stdio, so the binary logs to stderr only. Each tool call is logged with its name, duration and whether it failed; arguments are never logged, because they carry profile facts and application text. `make mcp` stamps the build with `git describe`, which `--version` prints.
 
 ### Tools
 
@@ -719,18 +721,32 @@ The transport is stdio, so the binary logs to stderr only.
 | `get_profile` | read | Candidate facts the agent may use when writing |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit` |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
+| `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
 | `list_discovery_runs` | read | Recent run history |
+| `list_discovery_sources` | read | Configured sources with their queries and last crawl error |
+| `validate_discovery_source` | read | Sample-fetch a provider to check a board token before saving it |
 | `generate_documents` | write | Deterministic documents for a job; refused for rejected jobs |
 | `create_application` | write | Draft application record; idempotent; refused for rejected jobs |
 | `update_application_status` | write | Status change with history; keeps existing notes unless new notes are passed |
-| `run_discovery` | write | Run every active source now |
+| `import_job` | write | Add one posting by hand; a rejected import still returns with its reasons |
+| `add_discovery_source` | write | Save a source for the scheduler; validate it first |
+| `run_discovery` | write | Run every active source now, reporting progress when the host asks for it |
 
-List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the web UI does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` from the API is returned as a tool error with the rejection hint, so the model can explain it instead of retrying.
+List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
 
 Deliberately absent: `POST /api/jobs/{id}/outbound` (an agent must not fire attribution clicks), registration, deletes, and profile or filter edits.
+
+### Prompts
+
+| Prompt | Argument | Purpose |
+|---|---|---|
+| `prepare_application` | `job_id` (required) | Walk one job from its match explanation to a tracked application, stopping at a rejection and leaving the submission to the user |
+| `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next |
+
+Both encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
 
 ### Verification
 

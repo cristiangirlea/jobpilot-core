@@ -153,8 +153,26 @@ func TestEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != 11 {
-		t.Fatalf("expected 11 tools, got %d", len(tools.Tools))
+	// Compare the set, not the count, so adding a tool is a deliberate edit
+	// here rather than a number nobody can interpret.
+	want := map[string]bool{
+		"get_profile": true, "list_jobs": true, "get_job": true, "list_applications": true,
+		"get_application": true, "get_dashboard": true, "list_discovery_runs": true,
+		"get_filters": true, "list_discovery_sources": true, "validate_discovery_source": true,
+		"generate_documents": true, "create_application": true, "update_application_status": true,
+		"run_discovery": true, "import_job": true, "add_discovery_source": true,
+	}
+	for _, tool := range tools.Tools {
+		if !want[tool.Name] {
+			t.Errorf("unexpected tool %q", tool.Name)
+		}
+		delete(want, tool.Name)
+	}
+	for name := range want {
+		t.Errorf("missing tool %q", name)
+	}
+	if prompts, err := cs.ListPrompts(ctx, nil); err != nil || len(prompts.Prompts) != 2 {
+		t.Fatalf("expected both prompts, got %v (%v)", prompts, err)
 	}
 
 	call := func(name string, args map[string]any) (map[string]any, string, bool) {
@@ -272,5 +290,51 @@ func TestEndToEnd(t *testing.T) {
 	_, text, isErr = call("list_discovery_runs", nil)
 	if isErr {
 		t.Fatalf("list_discovery_runs: %s", text)
+	}
+
+	out, text, isErr = call("get_filters", nil)
+	if isErr {
+		t.Fatalf("get_filters: %s", text)
+	}
+	if filters, _ := out["filters"].([]any); len(filters) != 1 {
+		t.Fatalf("expected the seeded filter: %s", text)
+	}
+
+	// A manual import lands in the shared catalog and is evaluated.
+	out, text, isErr = call("import_job", map[string]any{
+		"title": "Staff Backend Engineer", "company": "Imported Systems BV",
+		"description": "Build reliable backend services with Go and PostgreSQL.",
+		"apply_url":   "https://example.test/apply-imported", "remote_type": "remote",
+		"location": "Bucharest, Romania", "employment_type": "full-time",
+		"salary_min": 95000, "salary_max": 120000, "currency": "EUR",
+		"posted_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if isErr {
+		t.Fatalf("import_job: %s", text)
+	}
+	job, _ := out["job"].(map[string]any)
+	match, _ := out["match"].(map[string]any)
+	if job["id"] == "" || match["rejected"] != false {
+		t.Fatalf("the imported job should be accepted: %s", text)
+	}
+	if strings.Contains(text, "Build reliable backend services with Go and PostgreSQL.") {
+		t.Fatal("import_job must not echo the description back")
+	}
+
+	// Importing a job at an excluded employer still succeeds, but rejected.
+	out, text, isErr = call("import_job", map[string]any{
+		"title": "Backend Engineer", "company": "CurrentCo",
+		"description": "Build services.", "apply_url": "https://example.test/apply-excluded",
+	})
+	if isErr {
+		t.Fatalf("import_job for an excluded employer should still return a result: %s", text)
+	}
+	match, _ = out["match"].(map[string]any)
+	job, _ = out["job"].(map[string]any)
+	if match["rejected"] != true {
+		t.Fatalf("an excluded employer must be rejected: %s", text)
+	}
+	if job["apply_url"] != nil && job["apply_url"] != "" {
+		t.Fatalf("a rejected import must not carry an apply URL: %s", text)
 	}
 }

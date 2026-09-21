@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -14,6 +17,19 @@ const (
 	defaultPageSize = 20
 	maxPageSize     = 100
 )
+
+// blockedMessage is the API's wording for a rejected job's lock. The 409 hint
+// is keyed on it so other conflicts, such as a duplicate discovery source,
+// are not mislabelled. Keep it in step with store.ErrApplicationBlocked.
+const blockedMessage = "application actions are blocked for this rejected job"
+
+// discoveryProviders mirrors the API's allowlist so a typo is caught before a
+// request is made.
+var discoveryProviders = []string{"remotive", "greenhouse", "lever", "ashby", "smartrecruiters", "arbeitnow"}
+
+// progressInterval paces progress notifications during a discovery run.
+// A variable so tests can shorten it.
+var progressInterval = 5 * time.Second
 
 // instructions is sent to the host once per session. It carries the product
 // invariants the tool descriptions cannot repeat on every call.
@@ -71,8 +87,13 @@ type RunList struct {
 // NewServer builds the MCP server over the given API client. Tool handlers
 // return plain errors; the SDK turns those into tool results the host model
 // can read and react to, rather than protocol failures.
-func NewServer(c *Client, version string) *mcp.Server {
-	s := mcp.NewServer(&mcp.Implementation{Name: "jobpilot", Version: version}, &mcp.ServerOptions{Instructions: instructions})
+func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	s := mcp.NewServer(&mcp.Implementation{Name: "jobpilot", Version: version}, &mcp.ServerOptions{Instructions: instructions, Logger: logger})
+	s.AddReceivingMiddleware(logging(logger))
+	addPrompts(s)
 
 	readOnly := func(title string) *mcp.ToolAnnotations {
 		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
@@ -86,6 +107,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_profile",
+		Title:       "Get candidate profile",
 		Description: "Return the user's candidate profile: contact details, current and desired titles, seniorities, skills, work history, projects, preferences, and constraints. These are the only facts you may use when writing on the user's behalf.",
 		Annotations: readOnly("Get candidate profile"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, Profile, error) {
@@ -95,6 +117,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_jobs",
+		Title:       "List evaluated jobs",
 		Description: "List jobs evaluated for the user as summaries, sorted by match score. By default only accepted matches are returned; ask for rejected or all to see jobs a hard rule excluded, together with the rejection reasons. Descriptions are omitted; call get_job for the full posting and score breakdown.",
 		Annotations: readOnly("List evaluated jobs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listJobsInput) (*mcp.CallToolResult, JobList, error) {
@@ -130,6 +153,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_job",
+		Title:       "Get job and match detail",
 		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The apply_url is for the user to open themselves and is empty for rejected jobs.",
 		Annotations: readOnly("Get job and match detail"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, JobWithMatch, error) {
@@ -149,6 +173,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_applications",
+		Title:       "List applications",
 		Description: "List the user's applications with the job each one targets, newest activity first. Filter by status to see, for example, everything still in draft or ready.",
 		Annotations: readOnly("List applications"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listApplicationsInput) (*mcp.CallToolResult, ApplicationList, error) {
@@ -172,6 +197,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_application",
+		Title:       "Get application and documents",
 		Description: "Return one application with its generated documents (recruiter message, cover letter, candidate summary, screening answers) and whether the job has since been blocked.",
 		Annotations: readOnly("Get application and documents"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in applicationInput) (*mcp.CallToolResult, ApplicationView, error) {
@@ -192,6 +218,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_dashboard",
+		Title:       "Get dashboard",
 		Description: "Return the user's pipeline at a glance: profile completeness, catalog and rejection counts, application counts, the top recommended jobs, and suggested next actions.",
 		Annotations: readOnly("Get dashboard"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, DashboardView, error) {
@@ -208,6 +235,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "list_discovery_runs",
+		Title:       "List discovery runs",
 		Description: "Return recent discovery runs with how many jobs each one saw, added, rejected, skipped as duplicates, and auto-prepared, plus any provider errors.",
 		Annotations: readOnly("List discovery runs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listRunsInput) (*mcp.CallToolResult, RunList, error) {
@@ -226,6 +254,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "generate_documents",
+		Title:       "Generate application documents",
 		Description: "Generate and store the deterministic application documents for a job: recruiter message, cover letter, candidate summary, and common screening answers, built only from stored profile facts. Safe to repeat. Refused for rejected jobs.",
 		Annotations: write("Generate application documents"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Documents, error) {
@@ -242,6 +271,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "create_application",
+		Title:       "Create draft application",
 		Description: "Create a draft application record for a job, or return the existing one. This only tracks intent inside JobPilot; it does not contact the employer. Refused for rejected jobs.",
 		Annotations: write("Create draft application"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, Application, error) {
@@ -258,6 +288,7 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "update_application_status",
+		Title:       "Update application status",
 		Description: "Move an application to a new status and record the change in its history. Set applied only after the user confirms they submitted on the employer's site. Notes are kept unless you pass replacement notes. Moving a blocked application to applied is refused.",
 		Annotations: write("Update application status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateStatusInput) (*mcp.CallToolResult, Application, error) {
@@ -280,14 +311,54 @@ func NewServer(c *Client, version string) *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "run_discovery",
+		Title:       "Run discovery now",
 		Description: "Fetch every active discovery source now, add new jobs to the catalog, evaluate them for the user, and auto-prepare applications when that setting is on. Bounded by the configured per-run limit and may take a minute or two. Returns the run summary.",
 		Annotations: &mcp.ToolAnnotations{Title: "Run discovery now", ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: false, OpenWorldHint: ptr(true)},
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, DiscoveryRun, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, DiscoveryRun, error) {
+		stop := reportProgress(ctx, req)
 		run, err := c.RunDiscovery(ctx)
+		stop()
 		return nil, run, toolError(err)
 	})
 
+	addCatalogTools(s, c)
 	return s
+}
+
+// reportProgress emits progress notifications while a slow tool runs, but
+// only when the host asked for them by sending a progress token. It returns a
+// stop function the caller must invoke when the work finishes.
+func reportProgress(ctx context.Context, req *mcp.CallToolRequest) func() {
+	token := req.Params.GetProgressToken()
+	if token == nil || req.Session == nil {
+		return func() {}
+	}
+	notify := func(elapsed time.Duration) {
+		_ = req.Session.NotifyProgress(ctx, &mcp.ProgressNotificationParams{
+			ProgressToken: token,
+			Message:       "Fetching discovery sources",
+			Progress:      elapsed.Seconds(),
+		})
+	}
+	notify(0)
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(progressInterval)
+		defer ticker.Stop()
+		start := time.Now()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				notify(time.Since(start))
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
 }
 
 // toolError keeps the API's message and adds the one hint the model needs to
@@ -299,7 +370,10 @@ func toolError(err error) error {
 	}
 	switch apiErr.Status {
 	case http.StatusConflict:
-		return fmt.Errorf("%w. Rejected jobs never receive documents or applications; call get_job (or get_application for its block_reasons) and tell the user why", err)
+		if strings.Contains(apiErr.Message, blockedMessage) {
+			return fmt.Errorf("%w. Rejected jobs never receive documents or applications; call get_job (or get_application for its block_reasons) and tell the user why", err)
+		}
+		return err
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%w. The MCP server's JOBPILOT_TOKEN is invalid or expired; the user must refresh it or configure JOBPILOT_EMAIL and JOBPILOT_PASSWORD", err)
 	}

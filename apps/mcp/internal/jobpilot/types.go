@@ -262,3 +262,76 @@ func nonNil(in []string) []string {
 	}
 	return in
 }
+
+// FilterPreset mirrors the API's filter shape. Positive lists are OR rules
+// and the excluded lists are NOT rules; only the active preset is applied.
+type FilterPreset struct {
+	ID                   string   `json:"id,omitempty"`
+	Name                 string   `json:"name"`
+	Active               bool     `json:"active" jsonschema:"Only the active preset is applied to matching"`
+	IncludedTitles       []string `json:"included_titles" jsonschema:"OR rule: at least one should match the job title"`
+	ExcludedTitleWords   []string `json:"excluded_title_words" jsonschema:"NOT rule: any match rejects the job"`
+	Locations            []string `json:"locations"`
+	RemoteTypes          []string `json:"remote_types"`
+	MinSalary            float64  `json:"min_salary"`
+	Currency             string   `json:"currency"`
+	EmploymentTypes      []string `json:"employment_types"`
+	ExcludedIndustries   []string `json:"excluded_industries"`
+	RequiredSkills       []string `json:"required_skills"`
+	IncludedTechnologies []string `json:"included_technologies" jsonschema:"OR rule: any listed technology is enough"`
+	ExcludedTechnologies []string `json:"excluded_technologies" jsonschema:"NOT rule: any match rejects the job"`
+	MaxAgeDays           int      `json:"max_age_days"`
+}
+
+type DiscoverySource struct {
+	ID                  string     `json:"id,omitempty"`
+	Provider            string     `json:"provider"`
+	Name                string     `json:"name"`
+	Identifier          string     `json:"identifier"`
+	SearchQuery         string     `json:"search_query" jsonschema:"Positive OR terms"`
+	ExcludedSearchQuery string     `json:"excluded_search_query" jsonschema:"Negative NOT terms; arbeitnow only"`
+	Active              bool       `json:"active"`
+	LastCrawledAt       *time.Time `json:"last_crawled_at,omitempty"`
+	LastError           string     `json:"last_error,omitempty"`
+	CreatedAt           time.Time  `json:"created_at,omitempty"`
+}
+
+// ImportedJob is what import_job returns: the catalog job as a summary plus
+// the user's evaluation of it. The description is omitted because the caller
+// just supplied it.
+type ImportedJob struct {
+	Job     JobSummary `json:"job"`
+	Match   Evaluation `json:"match"`
+	MatchID string     `json:"match_id,omitempty"`
+}
+
+type SourceValidation struct {
+	Count       int    `json:"count" jsonschema:"How many postings the sample fetch returned"`
+	SampleTitle string `json:"sample_title" jsonschema:"The first posting's title, to eyeball that the source is the right one"`
+}
+
+type FilterList struct {
+	Filters []FilterPreset `json:"filters"`
+}
+
+type SourceList struct {
+	Sources []DiscoverySource `json:"sources"`
+}
+
+// JobInput is the manual-import request body. The API decodes it with unknown
+// fields disallowed, so this must carry exactly the fields it accepts.
+type JobInput struct {
+	Title          string     `json:"title"`
+	Company        string     `json:"company"`
+	CompanyDomain  string     `json:"company_domain,omitempty"`
+	Location       string     `json:"location"`
+	RemoteType     string     `json:"remote_type"`
+	SalaryMin      float64    `json:"salary_min"`
+	SalaryMax      float64    `json:"salary_max"`
+	Currency       string     `json:"currency"`
+	EmploymentType string     `json:"employment_type"`
+	Industry       string     `json:"industry"`
+	Description    string     `json:"description"`
+	ApplyURL       string     `json:"apply_url"`
+	PostedAt       *time.Time `json:"posted_at,omitempty"`
+}
