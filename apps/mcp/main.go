@@ -5,7 +5,8 @@
 // Configuration is environment only:
 //
 //	JOBPILOT_API_URL   API origin, default http://localhost:8080
-//	JOBPILOT_TOKEN     bearer token from /api/auth/login (or register)
+//	JOBPILOT_TOKEN     agent token created in Settings (preferred), or a
+//	                   short-lived token from /api/auth/login
 //	JOBPILOT_EMAIL     with JOBPILOT_PASSWORD: log in instead of, or to
 //	JOBPILOT_PASSWORD  refresh, a token
 //
@@ -67,7 +68,7 @@ func usage() {
 
 Serves JobPilot to an MCP host over stdio. Environment:
   JOBPILOT_API_URL   API origin (default http://localhost:8080)
-  JOBPILOT_TOKEN     bearer token from POST /api/auth/login
+  JOBPILOT_TOKEN     agent token from Settings (preferred), or a login token
   JOBPILOT_EMAIL     with JOBPILOT_PASSWORD, logs in and refreshes the token
   JOBPILOT_PASSWORD  prefer a token: the host stores -e values in plaintext
 

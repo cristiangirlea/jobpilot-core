@@ -375,7 +375,9 @@ func toolError(err error) error {
 		}
 		return err
 	case http.StatusUnauthorized:
-		return fmt.Errorf("%w. The MCP server's JOBPILOT_TOKEN is invalid or expired; the user must refresh it or configure JOBPILOT_EMAIL and JOBPILOT_PASSWORD", err)
+		return fmt.Errorf("%w. JOBPILOT_TOKEN is invalid, expired, or revoked; the user can mint a new agent token under Settings and update the MCP server's configuration", err)
+	case http.StatusForbidden:
+		return fmt.Errorf("%w. This is a permission limit, not a product rule: the configured token lacks the scope this action needs, and the user can create one with write access under Settings", err)
 	}
 	return err
 }

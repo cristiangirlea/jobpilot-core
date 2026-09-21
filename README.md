@@ -687,6 +687,16 @@ Authorization: Bearer <token>
 `PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
 | `GET` | `/api/dashboard` | User-specific metrics and recommendations |
 
+### Agent token endpoints
+
+These are refused for agent tokens themselves, so a leaked token cannot mint siblings or revoke itself.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/tokens` | List agent tokens; never returns token values |
+| `POST` | `/api/tokens` | Mint a token and return it once |
+| `DELETE` | `/api/tokens/{id}` | Revoke a token, effective on the next request |
+
 The HTTP layer uses strict JSON decoding with unknown fields rejected and a 2 MiB request-body limit. See `apps/api/internal/httpapi/server.go` for exact payload structs and validation messages.
 
 ## MCP server
@@ -709,8 +719,8 @@ Get a token from `POST /api/auth/login`, or let the server log in for you:
 | Variable | Purpose |
 |---|---|
 | `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
-| `JOBPILOT_TOKEN` | Bearer token from login or registration |
-| `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Alternative to a token; the server logs in on first use and once more after a `401`, which covers token expiry. Prefer a token: values passed with `claude mcp add -e` are stored in plaintext in the host's config, and a password never expires |
+| `JOBPILOT_TOKEN` | An agent token created under **Settings > Agent tokens**, or a short-lived login token |
+| `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Fallback when no token is set; the server logs in on first use and once more after a `401`. Prefer an agent token: it is revocable and can be read-only, while a password is not and gives away the account |
 
 The transport is stdio, so the binary logs to stderr only. Each tool call is logged with its name, duration and whether it failed; arguments are never logged, because they carry profile facts and application text. `make mcp` stamps the build with `git describe`, which `--version` prints.
 
@@ -755,6 +765,19 @@ cd apps/mcp && go test ./...   # unit tests against a fake API; no stack needed
 make smoke-mcp                 # builds the binary and drives it over stdio against http://localhost:8080
 ```
 
+## Agent tokens
+
+A browser login returns a token that expires after `TOKEN_TTL_HOURS` and cannot be revoked on its own. That is the wrong shape for the MCP server or a script, which needs a credential that lasts, can be limited, and can be withdrawn. **Settings > Agent tokens** mints one.
+
+- The value is shown once at creation and never stored; only its SHA-256 digest is, so a copy of the database cannot be replayed against the API.
+- Tokens carry the `jpat_` prefix, which makes them recognisable in a config file or a log and lets the middleware route them without a lookup.
+- Scopes are `read` (every `GET`, plus `POST /api/discovery/validate` and `POST /api/discovery/detect`, which change nothing) or `read` and `write`. Write implies read.
+- Revocation takes effect on the next request. Expiry is optional, from 30 to 365 days, and defaults to never because a revocable token that stops working on a forgotten date is worse than one the user retires deliberately.
+- Twenty live tokens per user; `last_used_at` is recorded at most once a minute.
+- Agent tokens cannot reach `/api/tokens` at all. Token management requires a browser session.
+
+A browser session holds both scopes and no token id, which is exactly what those two rules key on.
+
 ## Database and migrations
 
 PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are rerun safely by the `migrate` service.
@@ -771,6 +794,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `008_answer_bank.sql` | Reusable, approval-gated application answers |
 | `009_cv_documents.sql` | Uploaded and generated CVs, extracted text, parse result, approval |
 | `010_outbox.sql` | Composed applications held for approval, with blockers and notices |
+| `011_agent_tokens.sql` | Revocable, scoped tokens for agents and scripts |
 
 Core entities:
 
@@ -792,6 +816,7 @@ discovery_settings
 discovery_sources
 discovery_runs
 outbound_clicks
+agent_tokens
 ```
 
 When changing schema:
@@ -960,9 +985,9 @@ Implemented safeguards:
 
 Local-MVP limitations:
 
-- JWTs are stored in `localStorage`, not secure HTTP-only cookies.
+- Browser tokens are stored in `localStorage`, not secure HTTP-only cookies, and cannot be revoked individually; rotating `JWT_SECRET` invalidates all of them. Agent tokens are revocable one by one and can be limited to read access.
 - Local Compose uses HTTP and a development database password.
-- There is no email verification, password reset, MFA, rate limiter, or session revocation list.
+- There is no email verification, password reset, MFA, or rate limiter.
 - The scheduler lock is process-local and is intended for one API instance.
 - Discovery APIs can change or rate-limit without notice.
 - This deployment is not hardened for an internet-facing production environment.

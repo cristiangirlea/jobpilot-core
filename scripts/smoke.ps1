@@ -10,6 +10,17 @@ function Send-JobPilotRequest {
     Invoke-RestMethod @arguments
 }
 
+function Assert-Status {
+    param([scriptblock]$Action, [int]$Expected, [string]$Label)
+    $matched = $false
+    try { & $Action | Out-Null } catch {
+        if ([int]$_.Exception.Response.StatusCode -eq $Expected) { $matched = $true } else { throw }
+    }
+    if (-not $matched) { throw "$Label was not refused with $Expected" }
+}
+function Assert-Forbidden { param([scriptblock]$Action, [string]$Label) Assert-Status $Action 403 $Label }
+function Assert-Unauthorized { param([scriptblock]$Action, [string]$Label) Assert-Status $Action 401 $Label }
+
 function Assert-Conflict {
     param([scriptblock]$Action, [string]$Label)
     $conflict = $false
@@ -102,10 +113,42 @@ $outboxList = Send-JobPilotRequest GET "/outbox"
 if (@($outboxList | Where-Object { $_.id -eq $entry.id }).Count -lt 1) { throw "Composed entry is missing from the outbox" }
 Assert-Conflict { Send-JobPilotRequest POST "/outbox/$($entry.id)/approve" } "Outbox approval with blockers"
 
+# Agent tokens: read can look but not touch, write can act, and neither can
+# manage tokens. Revocation takes effect on the next request.
+$readToken = Send-JobPilotRequest POST "/tokens" @{ name = "Smoke read"; scopes = @("read"); expires_in_days = 0 }
+if (-not $readToken.token.StartsWith("jpat_")) { throw "An agent token should carry the jpat_ prefix" }
+if ($readToken.agent_token.token_prefix.Length -ne 8) { throw "The listing prefix should be 8 characters" }
+$writeToken = Send-JobPilotRequest POST "/tokens" @{ name = "Smoke write"; scopes = @("write"); expires_in_days = 30 }
+if ($writeToken.agent_token.scopes -notcontains "read") { throw "A write token must also carry read" }
+
+$sessionHeaders = $script:Headers
+$script:Headers = @{ Authorization = "Bearer $($readToken.token)" }
+Send-JobPilotRequest GET "/profile" | Out-Null
+Assert-Forbidden { Send-JobPilotRequest POST "/applications" @{ job_id = $accepted.job.id } } "A read token writing"
+Assert-Forbidden { Send-JobPilotRequest GET "/tokens" } "An agent token listing tokens"
+# validate and detect change nothing, so read may reach them; this pins the
+# two deliberate exceptions to the write-scope rule.
+$readValidation = Send-JobPilotRequest POST "/discovery/validate" @{ provider = "remotive"; name = "Scope check"; identifier = ""; search_query = "go backend engineer"; active = $true }
+if ($null -eq $readValidation.count) { throw "A read token should be able to validate a source" }
+
+$script:Headers = @{ Authorization = "Bearer $($writeToken.token)" }
+$agentDocs = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/generate"
+if (-not $agentDocs.cover_letter) { throw "A write token should be able to generate documents" }
+Assert-Forbidden { Send-JobPilotRequest POST "/tokens" @{ name = "Nope"; scopes = @("read") } } "An agent token minting a token"
+
+$script:Headers = $sessionHeaders
+$tokens = Send-JobPilotRequest GET "/tokens"
+if (@($tokens).Count -lt 2) { throw "Both tokens should be listed" }
+if ($tokens | Where-Object { $_.PSObject.Properties.Name -contains "token" }) { throw "The listing must never return token values" }
+Send-JobPilotRequest DELETE "/tokens/$($readToken.agent_token.id)" | Out-Null
+$script:Headers = @{ Authorization = "Bearer $($readToken.token)" }
+Assert-Unauthorized { Send-JobPilotRequest GET "/profile" } "A revoked token"
+$script:Headers = $sessionHeaders
+
 # Catalog jobs are global: another account evaluates and reuses the same job ID.
 $second = Send-JobPilotRequest POST "/auth/register" @{ email = "second-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())@example.test"; password = "smoke-test-password" }
 $script:Headers = @{ Authorization = "Bearer $($second.token)" }
 $secondMatch = Send-JobPilotRequest POST "/jobs" $acceptedBody
 if ($secondMatch.job.id -ne $accepted.job.id) { throw "Shared catalog deduplication smoke check failed" }
 
-Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, notes preservation, and the outbox approval gate."
+Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, notes preservation, the outbox approval gate, and scoped agent tokens."
