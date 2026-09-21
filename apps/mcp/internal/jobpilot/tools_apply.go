@@ -64,13 +64,6 @@ type detectBoardInput struct {
 // the exact text it is asking about, so the user is approving something they
 // have read.
 func addApplyTools(s *mcp.Server, c *Client) {
-	readOnly := func(title string) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: true, IdempotentHint: true, OpenWorldHint: ptr(false)}
-	}
-	write := func(title string, idempotent bool) *mcp.ToolAnnotations {
-		return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: idempotent, OpenWorldHint: ptr(false)}
-	}
-
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "get_ai_status",
 		Title:       "Get AI adapter status",
@@ -113,7 +106,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 			"Every resolution says where it came from and whether it still needs review. Anything marked needs_review is a draft: show the user its exact wording before it is used anywhere, and approve it with approve_answer only once they confirm. " +
 			"Questions about protected characteristics are never answered, and declarations the user must make personally are left blank on purpose.",
 		// Drafts are persisted unapproved, which is a write.
-		Annotations: write("Answer screening questions", false),
+		Annotations: writeTool("Answer screening questions", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in resolveInput) (*mcp.CallToolResult, ResolvedAnswers, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, ResolvedAnswers{}, errors.New("job_id is required")
@@ -144,7 +137,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Title: "Save an answer",
 		Description: "Add an answer to the bank for reuse on similar questions. It is saved unapproved unless the user has read this exact wording and confirmed it, " +
 			"because an unapproved answer is never reused and that is the safe default. Use only facts from the profile or an uploaded CV.",
-		Annotations: write("Save an answer", true),
+		Annotations: writeTool("Save an answer", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in saveAnswerInput) (*mcp.CallToolResult, AnswerEntry, error) {
 		if strings.TrimSpace(in.QuestionText) == "" {
 			return nil, AnswerEntry{}, errors.New("question_text is required")
@@ -166,7 +159,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:        "approve_answer",
 		Title:       "Approve an answer",
 		Description: "Approve a saved answer so it can be reused, optionally replacing its wording first. Only call this after the user has read the exact text and said yes.",
-		Annotations: write("Approve an answer", true),
+		Annotations: writeTool("Approve an answer", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveAnswerInput) (*mcp.CallToolResult, AnswerEntry, error) {
 		if strings.TrimSpace(in.AnswerID) == "" {
 			return nil, AnswerEntry{}, errors.New("answer_id is required")
@@ -213,7 +206,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:        "approve_cv",
 		Title:       "Approve a CV",
 		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. Re-uploading a CV clears its approval.",
-		Annotations: write("Approve a CV", true),
+		Annotations: writeTool("Approve a CV", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveCVInput) (*mcp.CallToolResult, CVDocument, error) {
 		if strings.TrimSpace(in.CVID) == "" {
 			return nil, CVDocument{}, errors.New("cv_id is required")
@@ -228,7 +221,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Title: "Choose or write a CV for a job",
 		Description: "Decide which CV suits a job: keep the base one, reuse an earlier tailored one, or write a new one. Every role, employer, date and bullet is carried over unchanged; only the summary and emphasis differ. " +
 			"A newly written CV is unapproved until the user reads it. Refused for rejected jobs.",
-		Annotations: write("Choose or write a CV for a job", true),
+		Annotations: writeTool("Choose or write a CV for a job", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, TailoredCV, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, TailoredCV{}, errors.New("job_id is required")
@@ -243,7 +236,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Description: "Assemble a complete application for a job into the outbox: a CV decision, a cover letter, and an answer for every field on the employer's form. " +
 			"This does not send anything. The entry waits for the user, who approves and sends it in the web app. " +
 			"Blockers say what stands in the way; show them verbatim. Recomposing replaces the entry and withdraws any approval it had. Refused for rejected jobs.",
-		Annotations: write("Compose an application into the outbox", true),
+		Annotations: writeTool("Compose an application into the outbox", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, OutboxDetail, error) {
 		if strings.TrimSpace(in.JobID) == "" {
 			return nil, OutboxDetail{}, errors.New("job_id is required")
@@ -293,7 +286,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:        "cancel_outbox_entry",
 		Title:       "Cancel a composed application",
 		Description: "Withdraw a composed application from the outbox. Reversible: composing again rebuilds it.",
-		Annotations: write("Cancel a composed application", true),
+		Annotations: writeTool("Cancel a composed application", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in outboxInput) (*mcp.CallToolResult, OutboxDetail, error) {
 		if strings.TrimSpace(in.OutboxID) == "" {
 			return nil, OutboxDetail{}, errors.New("outbox_id is required")

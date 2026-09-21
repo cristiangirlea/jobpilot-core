@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"testing"
-
-	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // applyRoutes adds the apply-engine endpoints to the fake API.
@@ -358,7 +356,3 @@ func TestBoardTools(t *testing.T) {
 		t.Fatalf("unexpected AI status: %s", text)
 	}
 }
-
-// The mcp import is used by the catalog test above; keep the compiler happy
-// about the shared helper signature.
-var _ = mcp.Tool{}
