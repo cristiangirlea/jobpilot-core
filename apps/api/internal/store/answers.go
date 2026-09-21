@@ -116,8 +116,14 @@ func (s *Store) UpdateAnswer(ctx context.Context, userID, id, answer string, app
 }
 
 func (s *Store) DeleteAnswer(ctx context.Context, userID, id string) error {
-	_, err := s.DB.Exec(ctx, `DELETE FROM answer_bank WHERE user_id=$1 AND id=$2`, userID, id)
-	return err
+	tag, err := s.DB.Exec(ctx, `DELETE FROM answer_bank WHERE user_id=$1 AND id=$2`, userID, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 func collectAnswers(rows pgx.Rows) ([]models.AnswerEntry, error) {

@@ -18,6 +18,7 @@ function Assert-Status {
     }
     if (-not $matched) { throw "$Label was not refused with $Expected" }
 }
+function Assert-NotFound { param([scriptblock]$Action, [string]$Label) Assert-Status $Action 404 $Label }
 function Assert-Forbidden { param([scriptblock]$Action, [string]$Label) Assert-Status $Action 403 $Label }
 function Assert-Unauthorized { param([scriptblock]$Action, [string]$Label) Assert-Status $Action 401 $Label }
 
@@ -112,6 +113,17 @@ if (-not $entry.cover_letter) { throw "Compose should produce a cover letter wit
 $outboxList = Send-JobPilotRequest GET "/outbox"
 if (@($outboxList | Where-Object { $_.id -eq $entry.id }).Count -lt 1) { throw "Composed entry is missing from the outbox" }
 Assert-Conflict { Send-JobPilotRequest POST "/outbox/$($entry.id)/approve" } "Outbox approval with blockers"
+
+# Rebuilding an entry must succeed rather than fail on the guard that keeps a
+# sent application immutable, and deleting something that is not there is a
+# 404 rather than a silent success.
+$recomposed = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/compose"
+if ($recomposed.id -ne $entry.id) { throw "Recomposing should replace the same entry" }
+if ($recomposed.notices -contains "You had approved this application. Rebuilding it withdrew that approval, so it needs approving again.") {
+    throw "An entry that was never approved should not report a withdrawn approval"
+}
+Assert-NotFound { Send-JobPilotRequest DELETE "/answers/00000000-0000-0000-0000-000000000000" } "Deleting an unknown answer"
+Assert-NotFound { Send-JobPilotRequest DELETE "/cv/00000000-0000-0000-0000-000000000000" } "Deleting an unknown CV"
 
 # Agent tokens: read can look but not touch, write can act, and neither can
 # manage tokens. Revocation takes effect on the next request.
