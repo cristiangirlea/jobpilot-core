@@ -547,6 +547,12 @@ func (s *Server) updateApplication(w http.ResponseWriter, r *http.Request) {
 		problem(w, 422, "Invalid application status.")
 		return
 	}
+	// Both fields are optional individually, but a body carrying neither
+	// would touch the row and report success without changing anything.
+	if x.Status == "" && x.Notes == nil {
+		problem(w, 422, "Provide a status, notes, or both.")
+		return
+	}
 	a, e := s.Store.UpdateApplication(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), x.Status, x.Notes)
 	respond(w, a, e)
 }

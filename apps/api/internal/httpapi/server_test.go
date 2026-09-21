@@ -23,6 +23,7 @@ func TestApplicationUpdateDistinguishesOmittedNotesFromEmpty(t *testing.T) {
 		{name: "notes cleared explicitly", body: `{"status":"applied","notes":""}`, ok: true, status: "applied", hasNotes: true},
 		{name: "notes only", body: `{"notes":"just a note"}`, ok: true, hasNotes: true, notes: "just a note"},
 		{name: "unknown field", body: `{"status":"applied","extra":1}`, ok: false},
+		{name: "empty object still decodes", body: `{}`, ok: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

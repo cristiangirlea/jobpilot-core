@@ -83,6 +83,10 @@ Assert-Blocked { Send-Request POST "/jobs/$($job.job.id)/outbound" } "Apply URL"
 Assert-Blocked { Send-Request PATCH "/applications/$($application.id)" @{ status = "applied"; notes = "Should be blocked" } } "Applied status"
 $applicationDetail = Send-Request GET "/applications/$($application.id)"
 if (-not $applicationDetail.blocked) { throw "Application detail did not expose its locked state" }
+if ($applicationDetail.application.job.apply_url) { throw "A blocked application must not carry an apply URL" }
+$applicationList = Send-Request GET "/applications"
+$listed = $applicationList | Where-Object { $_.id -eq $application.id }
+if ($listed.job.apply_url) { throw "A blocked application must not carry an apply URL in the listing" }
 Send-Request DELETE "/blacklist/$($exclusion.id)" | Out-Null
 $jobs = Send-Request GET "/jobs"
 $unblocked = $jobs | Where-Object { $_.job.id -eq $job.job.id }
@@ -127,4 +131,4 @@ if ($detected.provider -ne "greenhouse" -or $detected.identifier -ne "grafanalab
     throw "Discovery URL detection failed for a Greenhouse board"
 }
 
-Write-Host "Regression passed: excluded-company jobs stay visible but all application actions are locked."
+Write-Host "Regression passed: excluded-company jobs stay visible, all application actions are locked, and apply URLs are withheld."
