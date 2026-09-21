@@ -22,8 +22,8 @@ jobs:
       run:
         working-directory: apps/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: apps/api/go.mod
           cache-dependency-path: apps/api/go.sum
@@ -42,8 +42,8 @@ jobs:
       run:
         working-directory: apps/mcp
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: apps/mcp/go.mod
           cache-dependency-path: apps/mcp/go.sum
@@ -62,8 +62,8 @@ jobs:
       run:
         working-directory: apps/web
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -96,8 +96,8 @@ jobs:
       PGPASSWORD: jobpilot
       JOBPILOT_API_URL: http://localhost:8080/api
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Go 1.25 builds both modules; the api job already proves the API's own toolchain.
           go-version-file: apps/mcp/go.mod
@@ -135,7 +135,7 @@ jobs:
         run: go test -count=1 -v -run TestEndToEnd . -args -api http://localhost:8080
       - name: Upload API log
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-log
           path: ${{ runner.temp }}/api.log
