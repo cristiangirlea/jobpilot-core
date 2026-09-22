@@ -26,6 +26,10 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
+	if err := ats.ValidateGreenhouseBase(cfg.ATSGreenhouseURL); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	dataStore := store.New(pool)
 	aiClient, err := llm.Build(llm.Options{
 		Provider:     cfg.LLM.Provider,

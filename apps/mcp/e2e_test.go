@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -387,7 +388,7 @@ func TestEndToEnd(t *testing.T) {
 	if atsPort == "" {
 		t.Log("JOBPILOT_E2E_ATS_PORT not set; skipping the employer-form section, which CI runs")
 	} else {
-		serveFakeGreenhouse(t, atsPort)
+		fake := serveFakeGreenhouse(t, atsPort)
 
 		out, text, isErr = call("import_job", map[string]any{
 			"title": "Senior Backend Engineer", "company": "Fake Greenhouse Co",
@@ -412,6 +413,9 @@ func TestEndToEnd(t *testing.T) {
 		}
 		if out["ats_provider"] != "greenhouse" {
 			t.Fatalf("the form was not read from the fake; is the API's ATS_GREENHOUSE_URL pointing at port %s? %s", atsPort, text)
+		}
+		if paths := fake.paths(); len(paths) == 0 || paths[0] != "/v1/boards/fakeco/jobs/12345" {
+			t.Fatalf("the apply URL should route to board fakeco job 12345 on the fake, got %v", paths)
 		}
 		// This user has no CV, so compose prepares a tailored one from the
 		// profile and holds the entry until it is approved. That is the one
@@ -585,14 +589,18 @@ func TestEndToEnd(t *testing.T) {
 // with one form: four required text fields the profile can answer, so the
 // composed entry carries no blockers. It listens on every interface, because
 // an API running in a container reaches it through host.docker.internal.
-func serveFakeGreenhouse(t *testing.T, port string) {
+func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 	t.Helper()
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
 		t.Fatalf("cannot listen on port %s for the fake Greenhouse; set JOBPILOT_E2E_ATS_PORT to a free port and the API's ATS_GREENHOUSE_URL to match: %v", port, err)
 	}
+	fake := &fakeGreenhouse{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/boards/{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
+		fake.mu.Lock()
+		fake.requested = append(fake.requested, r.URL.Path)
+		fake.mu.Unlock()
 		if r.URL.Query().Get("questions") != "true" {
 			http.Error(w, "questions=true is required", http.StatusBadRequest)
 			return
@@ -607,4 +615,18 @@ func serveFakeGreenhouse(t *testing.T, port string) {
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
+	return fake
+}
+
+// fakeGreenhouse remembers which forms were requested, so the flow can prove
+// the apply URL was routed to the right board and job, not merely to a form.
+type fakeGreenhouse struct {
+	mu        sync.Mutex
+	requested []string
+}
+
+func (f *fakeGreenhouse) paths() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.requested...)
 }

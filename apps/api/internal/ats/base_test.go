@@ -43,3 +43,16 @@ func TestEmptyBaseKeepsThePublicService(t *testing.T) {
 		t.Fatalf("a reader with no override must use the public service, got %q", got)
 	}
 }
+
+func TestValidateGreenhouseBase(t *testing.T) {
+	for _, ok := range []string{"", "  ", "https://boards-api.greenhouse.io", "http://host.docker.internal:18999", "http://localhost:18999/"} {
+		if err := ValidateGreenhouseBase(ok); err != nil {
+			t.Errorf("%q should be accepted: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"localhost:18999", "boards-api.greenhouse.io", "ftp://example.test", "http://", "not a url"} {
+		if err := ValidateGreenhouseBase(bad); err == nil {
+			t.Errorf("%q should be rejected", bad)
+		}
+	}
+}

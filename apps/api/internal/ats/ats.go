@@ -112,6 +112,21 @@ func (r *Reader) WithGreenhouseBase(base string) *Reader {
 	return r
 }
 
+// ValidateGreenhouseBase rejects an origin the reader could not use, so a
+// configuration mistake fails at startup with its real cause instead of
+// surfacing later as an unreadable form on every composed application.
+func ValidateGreenhouseBase(base string) error {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return nil
+	}
+	u, err := url.Parse(base)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("ATS_GREENHOUSE_URL must be an http or https origin such as %s, not %q", greenhouseAPI, base)
+	}
+	return nil
+}
+
 func (r *Reader) greenhouseOrigin() string {
 	if r.greenhouseBase == "" {
 		return greenhouseAPI
