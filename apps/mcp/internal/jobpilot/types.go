@@ -20,7 +20,7 @@ type Job struct {
 	EmploymentType string     `json:"employment_type"`
 	Industry       string     `json:"industry"`
 	Description    string     `json:"description"`
-	ApplyURL       string     `json:"apply_url" jsonschema:"The employer's real apply page, empty when the job is rejected for this user. Tell the user to open it themselves; nothing here submits an application"`
+	ApplyURL       string     `json:"apply_url"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	DiscoveredAt   *time.Time `json:"discovered_at,omitempty"`
@@ -29,15 +29,15 @@ type Job struct {
 }
 
 type Evaluation struct {
-	Rejected         bool           `json:"rejected" jsonschema:"True when a hard rule rejected the job for this user; the API then refuses documents and applications"`
+	Rejected         bool           `json:"rejected"`
 	RejectionReasons []string       `json:"rejection_reasons"`
 	Warnings         []string       `json:"warnings"`
-	Score            int            `json:"score" jsonschema:"Weighted fit score from 0 to 100; a rejection always wins over the score"`
+	Score            int            `json:"score"`
 	Reasons          []string       `json:"reasons"`
 	MatchedSkills    []string       `json:"matched_skills"`
 	MissingSkills    []string       `json:"missing_skills"`
 	RedFlags         []string       `json:"red_flags"`
-	Breakdown        map[string]int `json:"breakdown" jsonschema:"Points per component: title_match, skill_match, seniority_match, location_remote_match, salary_match, domain_industry_match, freshness"`
+	Breakdown        map[string]int `json:"breakdown"`
 }
 
 func (e *Evaluation) normalize() {
@@ -71,7 +71,7 @@ type JobSummary struct {
 	Industry       string     `json:"industry"`
 	ApplyURL       string     `json:"apply_url"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
-	Source         string     `json:"source,omitempty" jsonschema:"Discovery source name and provider, empty for manual imports"`
+	Source         string     `json:"source,omitempty"`
 }
 
 func summarizeJob(j Job) JobSummary {
@@ -109,7 +109,7 @@ func summarizeMatch(x JobWithMatch) MatchSummary {
 type Application struct {
 	ID        string    `json:"id"`
 	JobID     string    `json:"job_id"`
-	Status    string    `json:"status" jsonschema:"One of draft, ready, applied, interview, rejected, offer, withdrawn"`
+	Status    string    `json:"status"`
 	Notes     string    `json:"notes"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -139,7 +139,7 @@ type Documents struct {
 	RecruiterMessage string            `json:"recruiter_message"`
 	CoverLetter      string            `json:"cover_letter"`
 	CandidateSummary string            `json:"candidate_summary"`
-	Answers          map[string]string `json:"answers" jsonschema:"Answers to common screening questions, keyed by question"`
+	Answers          map[string]string `json:"answers"`
 }
 
 func (d *Documents) normalize() {
@@ -159,7 +159,7 @@ type ApplicationDetail struct {
 type ApplicationView struct {
 	Application  ApplicationSummary `json:"application"`
 	Documents    Documents          `json:"documents"`
-	Blocked      bool               `json:"blocked" jsonschema:"True when the job was rejected after the application existed; it can no longer move to applied"`
+	Blocked      bool               `json:"blocked"`
 	BlockReasons []string           `json:"block_reasons"`
 }
 
@@ -177,11 +177,11 @@ type Dashboard struct {
 }
 
 type DashboardView struct {
-	ProfileCompleteness   int            `json:"profile_completeness" jsonschema:"Percentage of the profile fields that matching relies on"`
+	ProfileCompleteness   int            `json:"profile_completeness"`
 	JobsImported          int            `json:"jobs_imported"`
 	JobsRejectedBlacklist int            `json:"jobs_rejected_blacklist"`
 	JobsRejectedFilters   int            `json:"jobs_rejected_filters"`
-	GoodMatches           int            `json:"good_matches" jsonschema:"Accepted matches scoring 70 or more"`
+	GoodMatches           int            `json:"good_matches"`
 	ApplicationsDrafted   int            `json:"applications_drafted"`
 	ApplicationsApplied   int            `json:"applications_applied"`
 	TopJobs               []MatchSummary `json:"top_jobs"`
@@ -268,9 +268,9 @@ func nonNil(in []string) []string {
 type FilterPreset struct {
 	ID                   string   `json:"id,omitempty"`
 	Name                 string   `json:"name"`
-	Active               bool     `json:"active" jsonschema:"Only the active preset is applied to matching"`
-	IncludedTitles       []string `json:"included_titles" jsonschema:"OR rule: at least one should match the job title"`
-	ExcludedTitleWords   []string `json:"excluded_title_words" jsonschema:"NOT rule: any match rejects the job"`
+	Active               bool     `json:"active"`
+	IncludedTitles       []string `json:"included_titles"`
+	ExcludedTitleWords   []string `json:"excluded_title_words"`
 	Locations            []string `json:"locations"`
 	RemoteTypes          []string `json:"remote_types"`
 	MinSalary            float64  `json:"min_salary"`
@@ -278,8 +278,8 @@ type FilterPreset struct {
 	EmploymentTypes      []string `json:"employment_types"`
 	ExcludedIndustries   []string `json:"excluded_industries"`
 	RequiredSkills       []string `json:"required_skills"`
-	IncludedTechnologies []string `json:"included_technologies" jsonschema:"OR rule: any listed technology is enough"`
-	ExcludedTechnologies []string `json:"excluded_technologies" jsonschema:"NOT rule: any match rejects the job"`
+	IncludedTechnologies []string `json:"included_technologies"`
+	ExcludedTechnologies []string `json:"excluded_technologies"`
 	MaxAgeDays           int      `json:"max_age_days"`
 }
 
@@ -288,8 +288,8 @@ type DiscoverySource struct {
 	Provider            string     `json:"provider"`
 	Name                string     `json:"name"`
 	Identifier          string     `json:"identifier"`
-	SearchQuery         string     `json:"search_query" jsonschema:"Positive OR terms"`
-	ExcludedSearchQuery string     `json:"excluded_search_query" jsonschema:"Negative NOT terms; arbeitnow only"`
+	SearchQuery         string     `json:"search_query"`
+	ExcludedSearchQuery string     `json:"excluded_search_query"`
 	Active              bool       `json:"active"`
 	LastCrawledAt       *time.Time `json:"last_crawled_at,omitempty"`
 	LastError           string     `json:"last_error,omitempty"`
@@ -306,8 +306,8 @@ type ImportedJob struct {
 }
 
 type SourceValidation struct {
-	Count       int    `json:"count" jsonschema:"How many postings the sample fetch returned"`
-	SampleTitle string `json:"sample_title" jsonschema:"The first posting's title, to eyeball that the source is the right one"`
+	Count       int    `json:"count"`
+	SampleTitle string `json:"sample_title"`
 }
 
 type FilterList struct {

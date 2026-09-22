@@ -39,7 +39,7 @@ type sourceInput struct {
 // addCatalogTools registers the tools that shape what the catalog contains:
 // manual import, the filters that explain rejections, and discovery sources.
 func addCatalogTools(s *mcp.Server, c *Client) {
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "import_job",
 		Title: "Import a job posting",
 		Description: "Add one job to the shared catalog by hand and evaluate it for the user, for a posting discovery does not cover. " +
@@ -89,7 +89,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		return nil, ImportedJob{Job: job, Match: x.Match, MatchID: x.MatchID}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "get_filters",
 		Title: "Get filter presets",
 		Description: "Return the user's filter presets. Only the active one is applied to matching. " +
@@ -107,7 +107,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		return nil, FilterList{Filters: filters}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_discovery_sources",
 		Title:       "List discovery sources",
 		Description: "Return the configured discovery sources with their provider, query terms, active state, and the error from their last crawl if one failed.",
@@ -123,7 +123,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		return nil, SourceList{Sources: sources}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "validate_discovery_source",
 		Title: "Validate a discovery source",
 		Description: "Fetch a small sample from a provider to check a board token or company slug before saving it. " +
@@ -141,7 +141,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "add_discovery_source",
 		Title: "Add a discovery source",
 		Description: "Save a discovery source so the scheduler crawls it. Validate it first: a wrong board token saves cleanly and then quietly returns nothing. " +

@@ -64,7 +64,7 @@ type detectBoardInput struct {
 // the exact text it is asking about, so the user is approving something they
 // have read.
 func addApplyTools(s *mcp.Server, c *Client) {
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "get_ai_status",
 		Title:       "Get AI adapter status",
 		Description: "Report whether an AI provider is configured. When it is not, every answer and cover letter is deterministic, so no text is model-written and nothing carries the ai source.",
@@ -74,7 +74,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "list_answers",
 		Title: "List saved answers",
 		Description: "Return the reusable answer bank. Pending answers are drafts the user has not approved yet and are never reused until they do; approved ones are reused for similar questions. " +
@@ -99,11 +99,11 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, AnswerList{Answers: entries}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "resolve_screening_answers",
 		Title: "Answer screening questions",
 		Description: "Answer a job's screening questions from the profile and the answer bank, falling back to the AI adapter and then to templates. " +
-			"Every resolution says where it came from and whether it still needs review. Anything marked needs_review is a draft: show the user its exact wording before it is used anywhere, and approve it with approve_answer only once they confirm. " +
+			"Every resolution says where it came from (source: profile, bank, bank_similar, ai, template, or unanswered) and whether it still needs review. Anything marked needs_review is a draft: show the user its exact wording before it is used anywhere, and approve it with approve_answer only once they confirm. " +
 			"Questions about protected characteristics are never answered, and declarations the user must make personally are left blank on purpose.",
 		// Drafts are persisted unapproved, which is a write.
 		Annotations: writeTool("Answer screening questions", false),
@@ -132,7 +132,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "save_answer",
 		Title: "Save an answer",
 		Description: "Add an answer to the bank for reuse on similar questions. It is saved unapproved unless the user has read this exact wording and confirmed it, " +
@@ -155,7 +155,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "approve_answer",
 		Title:       "Approve an answer",
 		Description: "Approve a saved answer so it can be reused, optionally replacing its wording first. Only call this after the user has read the exact text and said yes.",
@@ -172,10 +172,10 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_cvs",
 		Title:       "List CVs",
-		Description: "Return the user's uploaded and tailored CVs. The CV text is omitted here; call get_cv for one. Uploading a CV is done in the web app.",
+		Description: "Return the user's uploaded and tailored CVs: kind is base for an upload or tailored for one written for a job, and only an approved CV is ever reused. The CV text is omitted here; call get_cv for one. Uploading a CV is done in the web app.",
 		Annotations: readOnly("List CVs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, CVList, error) {
 		cvs, err := c.CVs(ctx)
@@ -188,7 +188,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, CVList{CVs: cvs}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "get_cv",
 		Title: "Get a CV",
 		Description: "Return one CV with its extracted text and the fields read out of it. The parsed warnings list says what could not be read, which is worth telling the user about. " +
@@ -202,7 +202,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "approve_cv",
 		Title:       "Approve a CV",
 		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. Re-uploading a CV clears its approval.",
@@ -216,10 +216,10 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "tailor_cv_for_job",
 		Title: "Choose or write a CV for a job",
-		Description: "Decide which CV suits a job: keep the base one, reuse an earlier tailored one, or write a new one. Every role, employer, date and bullet is carried over unchanged; only the summary and emphasis differ. " +
+		Description: "Decide which CV suits a job: keep the base one, reuse an earlier tailored one, or write a new one (decision: base, reused, or generated, with alignment from 0 to 1). Every role, employer, date and bullet is carried over unchanged; only the summary and emphasis differ. " +
 			"A newly written CV is unapproved until the user reads it. Refused for rejected jobs.",
 		Annotations: writeTool("Choose or write a CV for a job", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, TailoredCV, error) {
@@ -230,7 +230,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "compose_application",
 		Title: "Compose an application into the outbox",
 		Description: "Assemble a complete application for a job into the outbox: a CV decision, a cover letter, and an answer for every field on the employer's form. " +
@@ -248,7 +248,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, detailOutbox(entry), nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_outbox",
 		Title:       "List composed applications",
 		Description: "Return composed applications with their status and any blockers. Approving and sending happen in the web app, not here.",
@@ -265,10 +265,10 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:  "get_outbox_entry",
 		Title: "Get a composed application",
-		Description: "Return one composed application in full: the cover letter, every form answer with where it came from, and any blockers or notices. " +
+		Description: "Return one composed application in full: the cover letter (cover_letter_source: ai or template), every form answer with where it came from (source: profile, bank, bank_similar, ai, template, cv, cover_letter, declaration, or unanswered), and any blockers or notices. " +
 			"Anything marked needs_review is a draft the user must read. Never describe an entry as approved or sent.",
 		Annotations: readOnly("Get a composed application"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in outboxInput) (*mcp.CallToolResult, OutboxDetail, error) {
@@ -282,7 +282,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, detailOutbox(entry), nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "cancel_outbox_entry",
 		Title:       "Cancel a composed application",
 		Description: "Withdraw a composed application from the outbox. Reversible: composing again rebuilds it.",
@@ -298,7 +298,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, detailOutbox(entry), nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "detect_board",
 		Title:       "Detect a job board",
 		Description: "Read a careers page or posting URL and work out which board provider and identifier it uses, ready for add_discovery_source. Parses the URL only; it fetches nothing.",
@@ -311,7 +311,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		return nil, out, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_board_suggestions",
 		Title:       "List suggested boards",
 		Description: "Return a curated list of employer job boards known to work as discovery sources, for when the user does not have one in mind.",

@@ -4,7 +4,7 @@ JobPilot Core is a self-hosted job discovery, matching, application-writing, and
 
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
-Last verified: **2026-08-28**.
+Last verified: **2026-09-22**, by CI on every merge (see Verification).
 
 ## Current status
 
@@ -605,7 +605,7 @@ Authorization: Bearer <token>
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/health` | Health check |
+| `GET` | `/api/health` | Health check; reports the API `contract` version a client may rely on |
 | `POST` | `/api/auth/register` | Create user and return token |
 | `POST` | `/api/auth/login` | Authenticate and return token |
 
@@ -723,6 +723,10 @@ Get a token from `POST /api/auth/login`, or let the server log in for you:
 | `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Fallback when no token is set; the server logs in on first use and once more after a `401`. Prefer an agent token: it is revocable and can be read-only, while a password is not and gives away the account |
 
 The transport is stdio, so the binary logs to stderr only. Each tool call is logged with its name, duration and whether it failed; arguments are never logged, because they carry profile facts and application text. `make mcp` stamps the build with `git describe`, which `--version` prints.
+
+On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
+
+The catalog an agent host downloads at the start of every session is about 23 KB for 31 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
 
 ### Tools
 
@@ -992,7 +996,7 @@ The test suites cover:
 - Application action lockout for rejected companies/jobs.
 - MCP tool catalog, summaries, filters, blocked-action errors, and notes preservation against a fake API, plus a stdio end-to-end flow against a live API.
 
-At the last verification point, Go tests, TypeScript typechecking, the production web build, the main smoke flow, and the regression smoke flow passed.
+CI runs all of the above on every pull request and every merge to master, plus both Docker image builds and the MCP stdio end-to-end test; a green `master` is the verification point.
 
 ## Security and reliability notes
 
@@ -1064,6 +1068,10 @@ Preserve these rules when extending the product:
 - Do not add CAPTCHA bypass, stealth submission, LinkedIn/Indeed automation, Kafka, Kubernetes, or Elasticsearch to this MVP.
 - Keep PostgreSQL as the source of truth; introduce another service only for a demonstrated need.
 - The MCP server is a client of the REST API: it never reads the database, never bypasses the API's authorization, and never exposes outbound attribution or any submission action.
+- Every mutating route is registered with the `w(` wrapper so it requires the write scope; `apps/api/internal/httpapi/routes_test.go` reads the router and fails otherwise. Only `validate` and `detect` are reachable with `read`, because they change nothing.
+- Raise `httpapi.Contract` when a change alters what an existing request does, and say what the new number guarantees in its comment. The MCP server's `requiredContract` names the version it was written against.
+- Adding an MCP tool means three edits: the registration, the expected-name set in `apps/mcp/e2e_test.go`, and the tools table in this README. Register it through `addTool`, never `mcp.AddTool` directly, so the output-schema policy applies.
+- The MCP server's `blockedMessage` copies `store.ErrApplicationBlocked` word for word because the modules cannot import each other; a test pins them and both must change together.
 
 ## Troubleshooting
 

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -49,5 +50,25 @@ func TestApplicationUpdateDistinguishesOmittedNotesFromEmpty(t *testing.T) {
 				t.Fatalf("notes %q, want %q", *x.Notes, c.notes)
 			}
 		})
+	}
+}
+
+// The health endpoint is the one route a client can call before it has a
+// token, so it is where the contract version has to live.
+func TestHealthReportsTheContract(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/health", nil))
+	if w.Code != 200 {
+		t.Fatalf("health returned %d", w.Code)
+	}
+	var body struct {
+		Status   string `json:"status"`
+		Contract int    `json:"contract"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Status != "ok" || body.Contract != Contract || Contract < 1 {
+		t.Fatalf("unexpected health body: %s", w.Body.String())
 	}
 }
