@@ -21,6 +21,15 @@ import (
 	"jobpilot/core/api/internal/store"
 )
 
+// Contract is the version of the behaviour a client may rely on, reported by
+// GET /api/health so a client built for a newer API can notice an older one
+// instead of failing quietly. Raise it when a change alters what an existing
+// request does, not when a route is added.
+//
+//	1: a status-only PATCH on an application keeps its notes; apply_url is
+//	   withheld for rejected matches; agent tokens with read and write scopes.
+const Contract = 1
+
 type Server struct {
 	Store       *store.Store
 	Discovery   *discovery.Service
@@ -33,7 +42,9 @@ type Server struct {
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
-	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) { write(w, 200, map[string]string{"status": "ok"}) })
+	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		write(w, 200, map[string]any{"status": "ok", "contract": Contract})
+	})
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
 	// p: any authenticated caller. w: agent tokens need the write scope.

@@ -41,6 +41,23 @@ type Options struct {
 	Timeout  time.Duration
 }
 
+// requiredContract is the API behaviour this server was written against:
+// see httpapi.Contract in apps/api for what each number guarantees. The
+// server tolerates a newer API and warns about an older one.
+const requiredContract = 1
+
+// contractUnknown means no health check has succeeded yet. Unknown counts as
+// compatible: an API that is unreachable at startup must not disable tools
+// that will work once it is up.
+const contractUnknown = -1
+
+// Health is what GET /api/health returns. Contract is 0 on an API that
+// predates the field.
+type Health struct {
+	Status   string `json:"status"`
+	Contract int    `json:"contract"`
+}
+
 // Client is a thin HTTP client for the JobPilot REST API. It carries the
 // user's bearer token on every request so the API enforces isolation and the
 // rejection locks exactly as it does for the web UI.
@@ -52,8 +69,9 @@ type Client struct {
 	timeout  time.Duration
 	maxBytes int64
 
-	mu    sync.Mutex
-	token string
+	mu       sync.Mutex
+	token    string
+	contract int
 }
 
 // APIError is a non-2xx response with the API's own error message.
@@ -87,10 +105,31 @@ func NewClient(o Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, maxBytes: maxResponseBytes, token: o.Token}, nil
+	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, maxBytes: maxResponseBytes, token: o.Token, contract: contractUnknown}, nil
 }
 
 func (c *Client) BaseURL() string { return c.base }
+
+// CheckContract reads the health endpoint, which needs no token, and records
+// the API's contract version for PredatesContract.
+func (c *Client) CheckContract(ctx context.Context) (Health, error) {
+	var h Health
+	if err := c.send(ctx, http.MethodGet, "/api/health", nil, &h, "", c.timeout); err != nil {
+		return h, err
+	}
+	c.mu.Lock()
+	c.contract = h.Contract
+	c.mu.Unlock()
+	return h, nil
+}
+
+// PredatesContract reports whether the API was seen to be older than this
+// server expects. Only a successful check can say yes.
+func (c *Client) PredatesContract() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.contract != contractUnknown && c.contract < requiredContract
+}
 
 func (c *Client) canLogin() bool { return c.email != "" && c.password != "" }
 

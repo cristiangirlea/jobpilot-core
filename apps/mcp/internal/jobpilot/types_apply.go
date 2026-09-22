@@ -9,13 +9,13 @@ import "time"
 
 type AnswerEntry struct {
 	ID           string     `json:"id,omitempty"`
-	QuestionKey  string     `json:"question_key" jsonschema:"The canonical question this was filed under"`
+	QuestionKey  string     `json:"question_key"`
 	QuestionText string     `json:"question_text"`
 	Answer       string     `json:"answer"`
 	RoleFamily   string     `json:"role_family"`
 	Technologies []string   `json:"technologies,omitempty"`
-	Source       string     `json:"source" jsonschema:"human, profile, bank, bank_similar, ai, or template"`
-	Approved     bool       `json:"approved" jsonschema:"Unapproved answers are never reused; the user must read and approve them first"`
+	Source       string     `json:"source"`
+	Approved     bool       `json:"approved"`
 	UsageCount   int        `json:"usage_count"`
 	CreatedAt    time.Time  `json:"created_at,omitempty"`
 	UpdatedAt    time.Time  `json:"updated_at,omitempty"`
@@ -30,10 +30,10 @@ type Resolution struct {
 	Question     string   `json:"question"`
 	QuestionKey  string   `json:"question_key"`
 	Answer       string   `json:"answer"`
-	Source       string   `json:"source" jsonschema:"Where the answer came from: profile, bank, bank_similar, ai, template, or unanswered"`
+	Source       string   `json:"source"`
 	Approved     bool     `json:"approved"`
-	NeedsReview  bool     `json:"needs_review" jsonschema:"True when the user must read this exact wording before it is used anywhere"`
-	EntryID      string   `json:"entry_id,omitempty" jsonschema:"The answer bank entry to approve, when there is one"`
+	NeedsReview  bool     `json:"needs_review"`
+	EntryID      string   `json:"entry_id,omitempty"`
 	Reused       bool     `json:"reused"`
 	Technologies []string `json:"technologies,omitempty"`
 }
@@ -41,7 +41,7 @@ type Resolution struct {
 type ResolvedAnswers struct {
 	AIEnabled   bool         `json:"ai_enabled"`
 	Provider    string       `json:"provider"`
-	NeedsReview int          `json:"needs_review" jsonschema:"How many answers the user still has to read and approve"`
+	NeedsReview int          `json:"needs_review"`
 	Resolutions []Resolution `json:"resolutions"`
 }
 
@@ -49,18 +49,18 @@ type ResolvedAnswers struct {
 // form and is blank in listings; get_cv returns it.
 type CVDocument struct {
 	ID            string         `json:"id"`
-	Kind          string         `json:"kind" jsonschema:"base for an uploaded CV, tailored for one written for a specific job"`
+	Kind          string         `json:"kind"`
 	Label         string         `json:"label,omitempty"`
 	Filename      string         `json:"filename"`
 	Format        string         `json:"format"`
 	SizeBytes     int            `json:"size_bytes"`
-	ExtractedText string         `json:"extracted_text,omitempty" jsonschema:"The CV as text; blank in listings"`
-	Parsed        map[string]any `json:"parsed,omitempty" jsonschema:"Fields read out of the CV, including a warnings list of what could not be read"`
+	ExtractedText string         `json:"extracted_text,omitempty"`
+	Parsed        map[string]any `json:"parsed,omitempty"`
 	RoleFamily    string         `json:"role_family,omitempty"`
 	Technologies  []string       `json:"technologies,omitempty"`
-	Approved      bool           `json:"approved" jsonschema:"Only an approved CV is reused or sent"`
+	Approved      bool           `json:"approved"`
 	ApprovedAt    *time.Time     `json:"approved_at,omitempty"`
-	ParentID      string         `json:"parent_id,omitempty" jsonschema:"For a tailored CV, the base CV it came from"`
+	ParentID      string         `json:"parent_id,omitempty"`
 	CreatedAt     time.Time      `json:"created_at"`
 	UpdatedAt     time.Time      `json:"updated_at"`
 }
@@ -70,11 +70,11 @@ type CVList struct {
 }
 
 type TailoredCV struct {
-	Decision    string     `json:"decision" jsonschema:"base when the existing CV fits, reused when an earlier tailored CV fits, generated when a new one was written"`
+	Decision    string     `json:"decision"`
 	Reason      string     `json:"reason"`
-	Alignment   float64    `json:"alignment" jsonschema:"How well the chosen CV matches this posting, 0 to 1"`
+	Alignment   float64    `json:"alignment"`
 	CV          CVDocument `json:"cv"`
-	Approved    bool       `json:"approved" jsonschema:"A newly generated CV is never approved; the user must read it first"`
+	Approved    bool       `json:"approved"`
 	Highlighted []string   `json:"highlighted,omitempty"`
 	Missing     []string   `json:"missing,omitempty"`
 }
@@ -85,7 +85,7 @@ type OutboxAnswer struct {
 	Type        string   `json:"type"`
 	Required    bool     `json:"required"`
 	Answer      string   `json:"answer"`
-	Source      string   `json:"source" jsonschema:"profile, bank, bank_similar, ai, template, cv, cover_letter, declaration, or unanswered"`
+	Source      string   `json:"source"`
 	NeedsReview bool     `json:"needs_review"`
 	EntryID     string   `json:"entry_id,omitempty"`
 	Options     []string `json:"options,omitempty"`
@@ -94,10 +94,10 @@ type OutboxAnswer struct {
 // OutboxSummary leads with the fields that decide what the user must do next.
 type OutboxSummary struct {
 	ID          string      `json:"id"`
-	Status      string      `json:"status" jsonschema:"needs_review, ready, approved, sent, failed, or cancelled"`
-	Blockers    []string    `json:"blockers" jsonschema:"Why this cannot be approved yet; show these to the user verbatim"`
+	Status      string      `json:"status"`
+	Blockers    []string    `json:"blockers"`
 	Notices     []string    `json:"notices"`
-	NeedsReview int         `json:"needs_review" jsonschema:"How many answers the user still has to read"`
+	NeedsReview int         `json:"needs_review"`
 	Job         *JobSummary `json:"job,omitempty"`
 	Channel     string      `json:"channel"`
 	ATSProvider string      `json:"ats_provider,omitempty"`
@@ -111,9 +111,9 @@ type OutboxDetail struct {
 	ApplicationID     string         `json:"application_id,omitempty"`
 	CVDocumentID      string         `json:"cv_document_id,omitempty"`
 	CoverLetter       string         `json:"cover_letter"`
-	CoverLetterSource string         `json:"cover_letter_source" jsonschema:"ai or template; a template letter is the deterministic fallback"`
+	CoverLetterSource string         `json:"cover_letter_source"`
 	Answers           []OutboxAnswer `json:"answers"`
-	CVPreview         map[string]any `json:"cv_preview,omitempty" jsonschema:"Why the tailored CV was chosen, when one was written"`
+	CVPreview         map[string]any `json:"cv_preview,omitempty"`
 	Error             string         `json:"error,omitempty"`
 }
 
@@ -175,13 +175,13 @@ type OutboxList struct {
 }
 
 type AIStatus struct {
-	Enabled  bool   `json:"enabled" jsonschema:"When false, every answer and letter is deterministic and nothing is model-written"`
+	Enabled  bool   `json:"enabled"`
 	Provider string `json:"provider"`
 }
 
 type DetectedBoard struct {
 	Provider   string `json:"provider"`
-	Identifier string `json:"identifier" jsonschema:"The board token or company slug to pass to add_discovery_source"`
+	Identifier string `json:"identifier"`
 	JobID      string `json:"job_id,omitempty"`
 	Supported  bool   `json:"supported"`
 }

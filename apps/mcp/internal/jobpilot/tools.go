@@ -73,7 +73,7 @@ type listRunsInput struct {
 }
 
 type JobList struct {
-	Total int            `json:"total" jsonschema:"Jobs matching the filters before the limit was applied"`
+	Total int            `json:"total"`
 	Jobs  []MatchSummary `json:"jobs"`
 }
 
@@ -102,6 +102,22 @@ func writeTool(title string, idempotent bool) *mcp.ToolAnnotations {
 	return &mcp.ToolAnnotations{Title: title, ReadOnlyHint: false, DestructiveHint: ptr(false), IdempotentHint: idempotent, OpenWorldHint: ptr(false)}
 }
 
+// looseObject is the output schema every tool advertises. The SDK would
+// otherwise infer one from each handler's result type, and those inferred
+// schemas were 38 of the 60 KB an agent host downloads at the start of every
+// session, before any work happens. Results are still typed, validated as
+// objects, and returned as structured content; only the per-field schema is
+// no longer shipped. The semantics that mattered live in tool descriptions.
+var looseObject = map[string]any{"type": "object"}
+
+// addTool registers a typed tool with the shared output-schema policy.
+func addTool[In, Out any](s *mcp.Server, t *mcp.Tool, h mcp.ToolHandlerFor[In, Out]) {
+	if t.OutputSchema == nil {
+		t.OutputSchema = looseObject
+	}
+	mcp.AddTool(s, t, h)
+}
+
 func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	if logger == nil {
 		logger = slog.Default()
@@ -110,7 +126,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	s.AddReceivingMiddleware(logging(logger))
 	addPrompts(s)
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "get_profile",
 		Title:       "Get candidate profile",
 		Description: "Return the user's candidate profile: contact details, current and desired titles, seniorities, skills, work history, projects, preferences, and constraints. These are the only facts you may use when writing on the user's behalf.",
@@ -120,10 +136,10 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, p, toolError(err)
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_jobs",
 		Title:       "List evaluated jobs",
-		Description: "List jobs evaluated for the user as summaries, sorted by match score. By default only accepted matches are returned; ask for rejected or all to see jobs a hard rule excluded, together with the rejection reasons. Descriptions are omitted; call get_job for the full posting and score breakdown.",
+		Description: "List jobs evaluated for the user as summaries, sorted by match score. By default only accepted matches are returned; ask for rejected or all to see jobs a hard rule excluded, together with the rejection reasons. Descriptions are omitted; call get_job for the full posting and score breakdown. total counts the matching jobs before the limit; score is 0 to 100 and a rejection always wins over it.",
 		Annotations: readOnly("List evaluated jobs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listJobsInput) (*mcp.CallToolResult, JobList, error) {
 		state := strings.ToLower(strings.TrimSpace(in.State))
@@ -156,10 +172,10 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "get_job",
 		Title:       "Get job and match detail",
-		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The apply_url is for the user to open themselves and is empty for rejected jobs.",
+		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The breakdown gives points per component: title_match, skill_match, seniority_match, location_remote_match, salary_match, domain_industry_match, freshness. The apply_url is for the user to open themselves and is empty for rejected jobs.",
 		Annotations: readOnly("Get job and match detail"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, JobWithMatch, error) {
 		if strings.TrimSpace(in.JobID) == "" {
@@ -176,7 +192,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, x, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_applications",
 		Title:       "List applications",
 		Description: "List the user's applications with the job each one targets, newest activity first. Filter by status to see, for example, everything still in draft or ready.",
@@ -200,7 +216,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "get_application",
 		Title:       "Get application and documents",
 		Description: "Return one application with its generated documents (recruiter message, cover letter, candidate summary, screening answers) and whether the job has since been blocked.",
@@ -221,10 +237,10 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, view, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "get_dashboard",
 		Title:       "Get dashboard",
-		Description: "Return the user's pipeline at a glance: profile completeness, catalog and rejection counts, application counts, the top recommended jobs, and suggested next actions.",
+		Description: "Return the user's pipeline at a glance: profile completeness as a percentage, catalog and rejection counts, good_matches (accepted matches scoring 70 or more), application counts, the top recommended jobs, and suggested next actions.",
 		Annotations: readOnly("Get dashboard"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, DashboardView, error) {
 		d, err := c.Dashboard(ctx)
@@ -238,7 +254,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, out, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "list_discovery_runs",
 		Title:       "List discovery runs",
 		Description: "Return recent discovery runs with how many jobs each one saw, added, rejected, skipped as duplicates, and auto-prepared, plus any provider errors.",
@@ -257,7 +273,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, RunList{Runs: runs}, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "generate_documents",
 		Title:       "Generate application documents",
 		Description: "Generate and store the deterministic application documents for a job: recruiter message, cover letter, candidate summary, and common screening answers, built only from stored profile facts. Safe to repeat. Refused for rejected jobs.",
@@ -274,7 +290,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, d, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "create_application",
 		Title:       "Create draft application",
 		Description: "Create a draft application record for a job, or return the existing one. This only tracks intent inside JobPilot; it does not contact the employer. Refused for rejected jobs.",
@@ -291,7 +307,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, a, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "update_application_status",
 		Title:       "Update application status",
 		Description: "Move an application to a new status and record the change in its history. Set applied only after the user confirms they submitted on the employer's site. Notes are kept unless you pass replacement notes. Moving a blocked application to applied is refused.",
@@ -305,7 +321,11 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 			return nil, Application{}, fmt.Errorf("status must be one of %s, not %q", strings.Join(applicationStatuses, ", "), in.Status)
 		}
 		// Omitting notes tells the API to keep what is stored, so there is
-		// nothing to read back first.
+		// nothing to read back first. An older API replaced them instead,
+		// which is the one case worth refusing rather than risking.
+		if in.Notes == nil && c.PredatesContract() {
+			return nil, Application{}, errors.New("this API predates notes-preserving updates, so omitting notes would erase them; read the current notes with get_application and pass them explicitly")
+		}
 		a, err := c.UpdateApplication(ctx, in.ApplicationID, status, in.Notes)
 		if err != nil {
 			return nil, Application{}, toolError(err)
@@ -314,7 +334,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		return nil, a, nil
 	})
 
-	mcp.AddTool(s, &mcp.Tool{
+	addTool(s, &mcp.Tool{
 		Name:        "run_discovery",
 		Title:       "Run discovery now",
 		Description: "Fetch every active discovery source now, add new jobs to the catalog, evaluate them for the user, and auto-prepare applications when that setting is on. Bounded by the configured per-run limit and may take a minute or two. Returns the run summary.",

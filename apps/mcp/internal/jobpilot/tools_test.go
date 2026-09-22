@@ -30,6 +30,9 @@ type fakeAPI struct {
 	// detailGets counts reads of one application, so a test can prove the
 	// status tool no longer needs a read-back round trip.
 	detailGets atomic.Int32
+	// noContract makes the fake look like an API from before the health
+	// endpoint reported a contract version.
+	noContract bool
 }
 
 const acceptedJob = `{"job":{"id":"job-a","title":"Senior Backend Engineer","company":"Fresh Systems GmbH","location":"Bucharest, Romania","remote_type":"remote","salary_min":95000,"salary_max":110000,"currency":"EUR","employment_type":"full-time","industry":"Software","description":"Long description A about Go and PostgreSQL.","apply_url":"https://example.test/apply-a","posted_at":"2026-09-10T00:00:00Z","created_at":"2026-09-11T00:00:00Z","source_name":"Remotive feed","source_provider":"remotive"},"match":{"rejected":false,"rejection_reasons":[],"warnings":["No salary band"],"score":82,"reasons":["The job title aligns with a desired role."],"matched_skills":["Go","PostgreSQL"],"missing_skills":["Kafka"],"red_flags":[],"breakdown":{"title_match":25,"skill_match":30}},"match_id":"m-a"}`
@@ -173,7 +176,18 @@ func (f *fakeAPI) handler() http.Handler {
 		send(w, 201, `{"id":"s-new","provider":"`+fmt.Sprint(body["provider"])+`","name":"`+fmt.Sprint(body["name"])+`","identifier":"","search_query":"","excluded_search_query":"","active":true,"created_at":"2026-09-20T00:00:00Z"}`)
 	})
 	f.applyRoutes(m, send)
+	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+		if f.noContract {
+			send(w, 200, `{"status":"ok"}`)
+			return
+		}
+		send(w, 200, `{"status":"ok","contract":1}`)
+	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/health" {
+			m.ServeHTTP(w, r)
+			return
+		}
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			send(w, 401, `{"error":"unauthorized"}`)
 			return
@@ -210,11 +224,26 @@ func sessionWithClient(t *testing.T, client *mcp.Client) *mcp.ClientSession {
 
 func connect(t *testing.T, token string, logger *slog.Logger, host *mcp.Client) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
-	fake := &fakeAPI{}
+	return connectWith(t, token, logger, host, false)
+}
+
+// sessionAgainstOldAPI wires a server whose startup contract check saw an API
+// from before the health endpoint reported a version.
+func sessionAgainstOldAPI(t *testing.T) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
+	return connectWith(t, "test-token", nil, nil, true)
+}
+
+func connectWith(t *testing.T, token string, logger *slog.Logger, host *mcp.Client, oldAPI bool) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
+	fake := &fakeAPI{noContract: oldAPI}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
 	client, err := NewClient(Options{BaseURL: srv.URL, Token: token})
 	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.CheckContract(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	server := NewServer(client, "test", logger)

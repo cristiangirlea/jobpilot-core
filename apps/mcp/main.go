@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"jobpilot/core/mcp/internal/jobpilot"
@@ -53,8 +54,23 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	// A failed check is a warning, not an exit: the API may simply not be up
+	// yet, and every tool reports a clear error until it is.
+	checkCtx, cancelCheck := context.WithTimeout(ctx, 5*time.Second)
+	health, err := client.CheckContract(checkCtx)
+	cancelCheck()
+	contract := "unknown"
+	switch {
+	case err != nil:
+		logger.Warn("API not reachable at startup; tools will fail until it is", "api", client.BaseURL(), "error", err)
+	case client.PredatesContract():
+		contract = fmt.Sprint(health.Contract)
+		logger.Warn("API is older than this server expects; status-only application updates are refused so notes are not erased", "api_contract", contract)
+	default:
+		contract = fmt.Sprint(health.Contract)
+	}
 	server := jobpilot.NewServer(client, version, logger)
-	logger.Info("JobPilot MCP server ready", "api", client.BaseURL(), "transport", "stdio")
+	logger.Info("JobPilot MCP server ready", "api", client.BaseURL(), "api_contract", contract, "transport", "stdio")
 	// An interrupt cancels ctx and Run returns its error; that is a clean
 	// shutdown, not a failure.
 	if err = server.Run(ctx, &mcp.StdioTransport{}); err != nil && !errors.Is(err, context.Canceled) {
