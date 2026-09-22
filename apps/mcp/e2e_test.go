@@ -158,9 +158,23 @@ func TestEndToEnd(t *testing.T) {
 	}
 	defer cs.Close()
 
+	// The live API must report a contract at least as new as this server
+	// requires, or the notes guard would refuse status-only updates.
+	var health struct {
+		Contract int `json:"contract"`
+	}
+	r.call("GET", "/api/health", nil, &health)
+	if health.Contract < 1 {
+		t.Fatalf("the API reports contract %d; this server was written against 1", health.Contract)
+	}
+
 	tools, err := cs.ListTools(ctx, nil)
 	if err != nil {
 		t.Fatal(err)
+	}
+	descriptions := map[string]string{}
+	for _, tool := range tools.Tools {
+		descriptions[tool.Name] = tool.Description
 	}
 	// Compare the set, not the count, so adding a tool is a deliberate edit
 	// here rather than a number nobody can interpret.
@@ -246,8 +260,17 @@ func TestEndToEnd(t *testing.T) {
 	if isErr || !strings.Contains(text, "Build reliable backend services") {
 		t.Fatalf("get_job: %s", text)
 	}
-	if match, _ := out["match"].(map[string]any); match["breakdown"] == nil {
+	evaluation, _ := out["match"].(map[string]any)
+	breakdown, _ := evaluation["breakdown"].(map[string]any)
+	if len(breakdown) == 0 {
 		t.Fatalf("get_job must include the breakdown: %s", text)
+	}
+	// The description names the components by hand, because this module
+	// cannot import the API's matching package; the real API is the check.
+	for component := range breakdown {
+		if !strings.Contains(descriptions["get_job"], component) {
+			t.Errorf("the API returns breakdown component %q, which the get_job description does not name", component)
+		}
 	}
 
 	_, text, isErr = call("generate_documents", map[string]any{"job_id": rejected.Job.ID})

@@ -55,7 +55,7 @@ func TestPromptsOnlyNameToolsThatExist(t *testing.T) {
 				continue
 			}
 			if !exists[word] {
-				t.Errorf("%s mentions %q, which is neither a tool nor a known argument name", p.Name, word)
+				t.Errorf("%s mentions %q, which is neither a tool nor a known argument name; if it is a field or argument, add it to argumentNames in prompts_test.go", p.Name, word)
 			}
 			mentioned++
 		}
