@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -378,8 +379,121 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("detect_board: %s", text)
 	}
 
+	// A readable employer form. The smoke flow composes against an apply URL
+	// no reader supports, so its entries always carry a blocker and can never
+	// be approved. Serving the form here reaches the approval path, and the
+	// rule that rebuilding an approved entry withdraws the approval out loud.
+	atsPort := os.Getenv("JOBPILOT_E2E_ATS_PORT")
+	if atsPort == "" {
+		t.Log("JOBPILOT_E2E_ATS_PORT not set; skipping the employer-form section, which CI runs")
+	} else {
+		serveFakeGreenhouse(t, atsPort)
+
+		out, text, isErr = call("import_job", map[string]any{
+			"title": "Senior Backend Engineer", "company": "Fake Greenhouse Co",
+			"description": "Build reliable backend services with Go and PostgreSQL.",
+			"apply_url":   "https://boards.greenhouse.io/fakeco/jobs/12345", "remote_type": "remote",
+			"location": "Bucharest, Romania", "employment_type": "full-time",
+			"salary_min": 95000, "salary_max": 120000, "currency": "EUR",
+			"posted_at": time.Now().UTC().Format(time.RFC3339),
+		})
+		if isErr {
+			t.Fatalf("import_job (greenhouse): %s", text)
+		}
+		ghJob, _ := out["job"].(map[string]any)
+		if ghMatch, _ := out["match"].(map[string]any); ghMatch["rejected"] != false {
+			t.Fatalf("the greenhouse job should be accepted: %s", text)
+		}
+		ghJobID, _ := ghJob["id"].(string)
+
+		out, text, isErr = call("compose_application", map[string]any{"job_id": ghJobID})
+		if isErr {
+			t.Fatalf("compose_application (greenhouse): %s", text)
+		}
+		if out["ats_provider"] != "greenhouse" {
+			t.Fatalf("the form was not read from the fake; is the API's ATS_GREENHOUSE_URL pointing at port %s? %s", atsPort, text)
+		}
+		// This user has no CV, so compose prepares a tailored one from the
+		// profile and holds the entry until it is approved. That is the one
+		// blocker expected here, and approving content is an agent tool.
+		blockers, _ := out["blockers"].([]any)
+		if out["status"] != "needs_review" || len(blockers) != 1 || !strings.Contains(fmt.Sprint(blockers[0]), "tailored CV") {
+			t.Fatalf("expected exactly the tailored-CV blocker, got status %v with blockers %v", out["status"], blockers)
+		}
+		ghCV, _ := out["cv_document_id"].(string)
+		if ghCV == "" {
+			t.Fatalf("the prepared CV should be referenced: %s", text)
+		}
+		if out, text, isErr = call("approve_cv", map[string]any{"cv_id": ghCV}); isErr || out["approved"] != true {
+			t.Fatalf("approve_cv: %s", text)
+		}
+
+		// With the CV approved, a rebuild reuses it and nothing blocks.
+		out, text, isErr = call("compose_application", map[string]any{"job_id": ghJobID})
+		if isErr {
+			t.Fatalf("compose_application after approving the CV: %s", text)
+		}
+		if out["status"] != "ready" {
+			t.Fatalf("expected no blockers once the CV is approved, got status %v with blockers %v", out["status"], out["blockers"])
+		}
+		if out["cv_decision"] == "generated" {
+			t.Fatalf("an approved tailored CV should be reused, not written again: %s", text)
+		}
+		ghOutbox, _ := out["id"].(string)
+		formAnswers, _ := out["answers"].([]any)
+		if len(formAnswers) != 4 {
+			t.Fatalf("expected all four form fields answered: %s", text)
+		}
+		for _, a := range formAnswers {
+			m, _ := a.(map[string]any)
+			if m["source"] != "profile" || m["answer"] == "" {
+				t.Fatalf("every field on this form is answerable from the profile, got %v", m)
+			}
+		}
+
+		// Approval is consent to send and stays with the user; this REST
+		// call stands in for that click in the web app. It is deliberately
+		// not an MCP tool.
+		var approval struct {
+			Status     string  `json:"status"`
+			ApprovedAt *string `json:"approved_at"`
+		}
+		r.call("POST", "/api/outbox/"+ghOutbox+"/approve", nil, &approval)
+		if approval.Status != "approved" || approval.ApprovedAt == nil {
+			t.Fatalf("an entry with no blockers should approve, got %+v", approval)
+		}
+
+		out, text, isErr = call("compose_application", map[string]any{"job_id": ghJobID})
+		if isErr {
+			t.Fatalf("recompose: %s", text)
+		}
+		if out["status"] != "ready" {
+			t.Fatalf("a rebuilt entry must wait for approval again, got %v", out["status"])
+		}
+		if !strings.Contains(text, "withdrew that approval") {
+			t.Fatalf("rebuilding an approved entry must say the approval was withdrawn: %s", text)
+		}
+		if _, text, isErr = call("get_outbox_entry", map[string]any{"outbox_id": ghOutbox}); isErr || !strings.Contains(text, "withdrew that approval") {
+			t.Fatalf("the notice must still be readable afterwards: %s", text)
+		}
+		// The notice belongs to the transition: a rebuild of an entry that
+		// was not approved has nothing to withdraw.
+		if _, text, isErr = call("compose_application", map[string]any{"job_id": ghJobID}); isErr || strings.Contains(text, "withdrew that approval") {
+			t.Fatalf("a second rebuild has no approval to withdraw: %s", text)
+		}
+		r.call("POST", "/api/outbox/"+ghOutbox+"/approve", nil, &approval)
+		if approval.Status != "approved" {
+			t.Fatalf("a rebuilt entry should be approvable again, got %+v", approval)
+		}
+	}
+
+	// The employer-form section imports one more job when it runs.
+	expectedJobs := float64(2)
+	if atsPort != "" {
+		expectedJobs++
+	}
 	out, text, isErr = call("get_dashboard", nil)
-	if isErr || out["applications_applied"] != float64(1) || out["jobs_imported"] != float64(2) {
+	if isErr || out["applications_applied"] != float64(1) || out["jobs_imported"] != expectedJobs {
 		t.Fatalf("get_dashboard: %s", text)
 	}
 
@@ -465,4 +579,32 @@ func TestEndToEnd(t *testing.T) {
 	if job["apply_url"] != nil && job["apply_url"] != "" {
 		t.Fatalf("a rejected import must not carry an apply URL: %s", text)
 	}
+}
+
+// serveFakeGreenhouse answers the Greenhouse board API for any board and job
+// with one form: four required text fields the profile can answer, so the
+// composed entry carries no blockers. It listens on every interface, because
+// an API running in a container reaches it through host.docker.internal.
+func serveFakeGreenhouse(t *testing.T, port string) {
+	t.Helper()
+	ln, err := net.Listen("tcp", ":"+port)
+	if err != nil {
+		t.Fatalf("cannot listen on port %s for the fake Greenhouse; set JOBPILOT_E2E_ATS_PORT to a free port and the API's ATS_GREENHOUSE_URL to match: %v", port, err)
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v1/boards/{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("questions") != "true" {
+			http.Error(w, "questions=true is required", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"title":"Senior Backend Engineer","company_name":"Fake Greenhouse Co","questions":[` +
+			`{"label":"First Name","required":true,"fields":[{"name":"first_name","type":"input_text","values":[]}]},` +
+			`{"label":"Last Name","required":true,"fields":[{"name":"last_name","type":"input_text","values":[]}]},` +
+			`{"label":"Email","required":true,"fields":[{"name":"email","type":"input_text","values":[]}]},` +
+			`{"label":"Phone","required":true,"fields":[{"name":"phone","type":"input_text","values":[]}]}]}`))
+	})
+	srv := &http.Server{Handler: mux}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 }

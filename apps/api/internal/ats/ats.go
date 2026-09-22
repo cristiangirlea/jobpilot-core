@@ -91,11 +91,32 @@ type Form struct {
 	Skipped []string `json:"skipped,omitempty"`
 }
 
+// greenhouseAPI is the public board API. A Reader may be pointed elsewhere
+// so a test can serve a form itself; nothing else about the fetch changes.
+const greenhouseAPI = "https://boards-api.greenhouse.io"
+
 // Reader fetches published application forms.
-type Reader struct{ client *http.Client }
+type Reader struct {
+	client         *http.Client
+	greenhouseBase string
+}
 
 func NewReader() *Reader {
 	return &Reader{client: &http.Client{Timeout: 20 * time.Second}}
+}
+
+// WithGreenhouseBase replaces the Greenhouse origin. An empty base keeps the
+// public service, so passing configuration through unconditionally is safe.
+func (r *Reader) WithGreenhouseBase(base string) *Reader {
+	r.greenhouseBase = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	return r
+}
+
+func (r *Reader) greenhouseOrigin() string {
+	if r.greenhouseBase == "" {
+		return greenhouseAPI
+	}
+	return r.greenhouseBase
 }
 
 var (
@@ -186,8 +207,8 @@ type greenhouseQuestion struct {
 }
 
 func (r *Reader) greenhouse(ctx context.Context, board, jobID, applyURL string) (Form, error) {
-	endpoint := fmt.Sprintf("https://boards-api.greenhouse.io/v1/boards/%s/jobs/%s?questions=true",
-		url.PathEscape(board), url.PathEscape(jobID))
+	endpoint := fmt.Sprintf("%s/v1/boards/%s/jobs/%s?questions=true",
+		r.greenhouseOrigin(), url.PathEscape(board), url.PathEscape(jobID))
 
 	var payload struct {
 		Title       string               `json:"title"`

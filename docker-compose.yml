@@ -44,6 +44,9 @@ services:
       LLM_CLI_COMMAND: ${LLM_CLI_COMMAND:-}
       LLM_CLI_ARGS: ${LLM_CLI_ARGS:-}
       LLM_OLLAMA_URL: ${LLM_OLLAMA_URL:-http://host.docker.internal:11434}
+      # Point at a fake (for example http://host.docker.internal:18999) to
+      # run the MCP end-to-end flow's employer-form section locally.
+      ATS_GREENHOUSE_URL: ${ATS_GREENHOUSE_URL:-https://boards-api.greenhouse.io}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-90}
       LLM_CALLS_PER_HOUR: ${LLM_CALLS_PER_HOUR:-120}
     extra_hosts:
