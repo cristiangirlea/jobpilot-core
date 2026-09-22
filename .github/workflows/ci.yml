@@ -119,6 +119,9 @@ jobs:
           FRONTEND_URL: http://localhost:3000
           TOKEN_TTL_HOURS: "1"
           LLM_PROVIDER: none
+          # The MCP end-to-end test serves a fake Greenhouse form here so the
+          # outbox approval and withdrawal paths are covered.
+          ATS_GREENHOUSE_URL: http://localhost:18999
         run: |
           (cd apps/api && go build -o "$RUNNER_TEMP/api" ./cmd/api)
           nohup "$RUNNER_TEMP/api" > "$RUNNER_TEMP/api.log" 2>&1 &
@@ -133,6 +136,8 @@ jobs:
         run: pwsh -File scripts/seniority-filter-smoke.ps1
       - name: MCP end-to-end over stdio
         working-directory: apps/mcp
+        env:
+          JOBPILOT_E2E_ATS_PORT: "18999"
         run: go test -count=1 -v -run TestEndToEnd . -args -api http://localhost:8080
       - name: Upload API log
         if: failure()

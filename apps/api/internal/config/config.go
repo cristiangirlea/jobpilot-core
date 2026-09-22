@@ -12,8 +12,11 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	FrontendURL string
-	TokenTTL    time.Duration
-	LLM         LLMConfig
+	// ATSGreenhouseURL is the Greenhouse board API origin. Tests point it at
+	// a fake so a composed application can be exercised end to end.
+	ATSGreenhouseURL string
+	TokenTTL         time.Duration
+	LLM              LLMConfig
 }
 
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
@@ -31,12 +34,13 @@ type LLMConfig struct {
 func Load() Config {
 	hours, _ := strconv.Atoi(env("TOKEN_TTL_HOURS", "168"))
 	return Config{
-		Addr:        env("API_ADDR", ":8080"),
-		DatabaseURL: env("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable"),
-		JWTSecret:   env("JWT_SECRET", "development-only-change-me"),
-		FrontendURL: env("FRONTEND_URL", "http://localhost:3000"),
-		TokenTTL:    time.Duration(hours) * time.Hour,
-		LLM:         loadLLM(),
+		Addr:             env("API_ADDR", ":8080"),
+		DatabaseURL:      env("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable"),
+		JWTSecret:        env("JWT_SECRET", "development-only-change-me"),
+		FrontendURL:      env("FRONTEND_URL", "http://localhost:3000"),
+		ATSGreenhouseURL: env("ATS_GREENHOUSE_URL", "https://boards-api.greenhouse.io"),
+		TokenTTL:         time.Duration(hours) * time.Hour,
+		LLM:              loadLLM(),
 	}
 }
 

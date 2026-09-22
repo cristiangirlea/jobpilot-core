@@ -794,6 +794,12 @@ cd apps/mcp && go test ./...   # unit tests against a fake API; no stack needed
 make smoke-mcp                 # builds the binary and drives it over stdio against http://localhost:8080
 ```
 
+The end-to-end flow has an optional section that serves a fake Greenhouse form itself and imports a job whose apply URL points at it. Composing prepares a tailored CV, since the test user has none, and holds the entry until that CV is approved; the flow approves it with `approve_cv`, composes again to get an entry with no blockers, approves that entry through the API as the user would in the web app, and proves that rebuilding it withdraws the approval and says so. It runs when `JOBPILOT_E2E_ATS_PORT` is set and the API under test has `ATS_GREENHOUSE_URL` pointing at that port; CI always does this. Locally, put `ATS_GREENHOUSE_URL=http://host.docker.internal:18999` in `.env` before `make dev` and run:
+
+```bash
+cd apps/mcp && JOBPILOT_E2E_ATS_PORT=18999 go test -count=1 -run TestEndToEnd . -args -api http://localhost:8080
+```
+
 ## Agent tokens
 
 A browser login returns a token that expires after `TOKEN_TTL_HOURS` and cannot be revoked on its own. That is the wrong shape for the MCP server or a script, which needs a credential that lasts, can be limited, and can be withdrawn. **Settings > Agent tokens** mints one.
@@ -867,6 +873,7 @@ When changing schema:
 | `JWT_SECRET` | Required secret; set it in `.env` |
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
+| `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
 
 ### AI environment
 
