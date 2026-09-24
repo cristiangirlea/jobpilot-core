@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/discovery"
@@ -82,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/experiences", w(s.addExperience))
 	m.Handle("DELETE /api/experiences/{id}", w(s.deleteExperience))
 	m.Handle("GET /api/skills", p(s.listSkills))
+	m.Handle("GET /api/skills/suggestions", p(s.skillSuggestions))
 	m.Handle("POST /api/skills", w(s.addSkill))
 	m.Handle("DELETE /api/skills/{id}", w(s.deleteSkill))
 	m.Handle("GET /api/projects", p(s.listProjects))
@@ -263,6 +265,31 @@ func (s *Server) deleteExperience(w http.ResponseWriter, r *http.Request) {
 func (s *Server) listSkills(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Skills(r.Context(), auth.UserID(r.Context()))
 	respond(w, x, e)
+}
+
+// suggestionSample is how many of the user's best matches are read to count
+// which technologies postings ask for. Enough to rank by demand, small enough
+// to answer while the user is typing.
+const suggestionSample = 150
+
+func (s *Server) skillSuggestions(w http.ResponseWriter, r *http.Request) {
+	ctx, uid := r.Context(), auth.UserID(r.Context())
+	skills, err := s.Store.Skills(ctx, uid)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	held := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		held = append(held, skill.Name)
+	}
+	fromCV, err := s.Store.BaseCVTechnologies(ctx, uid)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	texts, err := s.Store.MatchTexts(ctx, uid, suggestionSample)
+	respond(w, answers.SuggestSkills(held, fromCV, texts), err)
 }
 func (s *Server) addSkill(w http.ResponseWriter, r *http.Request) {
 	var x models.Skill

@@ -108,6 +108,16 @@ func (s *Store) Skills(ctx context.Context, u string) ([]models.Skill, error) {
 	}
 	return out, rows.Err()
 }
+
+// MatchTexts returns the title and description of the user's best matches,
+// accepted ones first, for counting which technologies postings ask for.
+func (s *Store) MatchTexts(ctx context.Context, u string, limit int) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT j.title||' '||j.description FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 ORDER BY m.rejected ASC,m.score DESC,j.created_at DESC LIMIT $2`, u, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
+}
 func (s *Store) AddSkill(ctx context.Context, u string, x models.Skill) (models.Skill, error) {
 	err := s.DB.QueryRow(ctx, `INSERT INTO skills(user_id,name,level,years) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,name) DO UPDATE SET level=EXCLUDED.level,years=EXCLUDED.years RETURNING id`, u, x.Name, x.Level, x.Years).Scan(&x.ID)
 	return x, err
