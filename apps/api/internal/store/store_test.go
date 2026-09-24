@@ -136,3 +136,19 @@ func TestJobRefColumnTellsIdsFromSlugs(t *testing.T) {
 		}
 	}
 }
+
+// A slug is made from the end of the apply URL, so a rejected match, which
+// withholds that URL, must withhold the slug too.
+func TestScanJobMatchWithholdsTheSlugForRejectedMatches(t *testing.T) {
+	for rejected, want := range map[bool]string{false: "example-a-job", true: ""} {
+		row := jobMatchRow("https://example.test/a-job", rejected)
+		row.values = append(row.values, "example-a-job")
+		got, err := scanJobMatch(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Job.Slug != want {
+			t.Errorf("rejected=%v: slug %q, want %q", rejected, got.Job.Slug, want)
+		}
+	}
+}

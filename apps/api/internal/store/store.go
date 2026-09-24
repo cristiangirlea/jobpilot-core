@@ -329,13 +329,30 @@ func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, so
 	return j, tx.Commit(ctx)
 }
 
-// nameJobSQL gives a job its slug. A slug another job already holds gets the
-// start of this job's own id appended, which no other job can share.
-const nameJobSQL = `UPDATE jobs SET slug=CASE WHEN EXISTS(SELECT 1 FROM jobs WHERE slug=$2 AND id<>$1) THEN $2||'-'||left($1::text,8) ELSE $2 END WHERE id=$1 RETURNING slug`
+// nameJobSQL gives a job the first free name of: the slug, the slug with the
+// start of the job's id, the slug with the whole id. The last contains the
+// job's own id, so it is always free.
+const nameJobSQL = `UPDATE jobs SET slug=(SELECT c FROM unnest(ARRAY[$2, $2||'-'||left($1::text,8), $2||'-'||$1::text]) WITH ORDINALITY AS t(c,n) WHERE NOT EXISTS(SELECT 1 FROM jobs WHERE slug=t.c AND id<>$1) ORDER BY n LIMIT 1) WHERE id=$1 RETURNING slug`
 
+// nameJob names a job inside the transaction that stores it. Another
+// transaction can take the same name between the check and the write; the
+// savepoint lets this one fall back to the id-bearing name instead of failing
+// the whole insert.
 func nameJob(ctx context.Context, tx pgx.Tx, id, candidate string) (string, error) {
+	savepoint, err := tx.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
 	var name string
-	err := tx.QueryRow(ctx, nameJobSQL, id, candidate).Scan(&name)
+	if err = savepoint.QueryRow(ctx, nameJobSQL, id, candidate).Scan(&name); err == nil {
+		return name, savepoint.Commit(ctx)
+	}
+	_ = savepoint.Rollback(ctx)
+	if !isUniqueViolation(err) {
+		return "", err
+	}
+	name = candidate + "-" + id
+	_, err = tx.Exec(ctx, `UPDATE jobs SET slug=$2 WHERE id=$1`, id, name)
 	return name, err
 }
 
@@ -490,6 +507,9 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	// therefore a read model: never write it back to the catalog row.
 	if x.Match.Rejected {
 		x.Job.ApplyURL = ""
+		// The slug is made from the end of that URL, so it goes too; the job
+		// stays reachable by id.
+		x.Job.Slug = ""
 	}
 	return x, nil
 }
