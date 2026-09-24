@@ -9,7 +9,9 @@ const shownAtOnce=8;
 function reason(s:SkillSuggestion){
   const parts:string[]=[];
   if(s.in_cv)parts.push("in your CV");
-  if(s.jobs)parts.push(`${s.jobs} matching job${s.jobs===1?"":"s"}`);
+  // The sample is the user's best-scoring postings, rejected ones included,
+  // so this counts job ads rather than claiming they are matches.
+  if(s.jobs)parts.push(`in ${s.jobs} job ad${s.jobs===1?"":"s"}`);
   return parts.join(" · ");
 }
 
@@ -31,6 +33,9 @@ export const SkillCombobox=forwardRef<HTMLInputElement,Props>(function SkillComb
     return [...starts,...contains].slice(0,shownAtOnce);
   },[value,suggestions,exclude]);
   const shown=open&&options.length>0;
+  // The options can change under a highlight, for example when a removal
+  // reloads the suggestions, so a highlight past the end means none.
+  const highlighted=shown&&active>=0?options[active]:undefined;
   const close=()=>{setOpen(false);setActive(-1)};
   const pick=(s:SkillSuggestion)=>{onChange(s.name);close()};
   function onKeyDown(e:KeyboardEvent<HTMLInputElement>){
@@ -39,12 +44,16 @@ export const SkillCombobox=forwardRef<HTMLInputElement,Props>(function SkillComb
       e.preventDefault();
       setOpen(true);
       setActive(i=>e.key==="ArrowDown"?(i+1)%options.length:i<=0?options.length-1:i-1);
-    }else if(e.key==="Enter"&&shown&&active>=0){e.preventDefault();pick(options[active])}
-    else if(e.key==="Escape"&&shown){e.preventDefault();close()}
+    }else if(e.key==="Enter"){
+      if(highlighted){e.preventDefault();pick(highlighted)}
+      // Otherwise the form submits what was typed; closing keeps the list
+      // from opening over the skill that is about to appear below.
+      else close();
+    }else if(e.key==="Escape"&&shown){e.preventDefault();close()}
   }
   return <div className="relative">
     <input ref={ref} required autoComplete="off" placeholder="Start typing, e.g. Kubernetes" value={value}
-      role="combobox" aria-autocomplete="list" aria-expanded={shown} aria-controls={id} aria-activedescendant={shown&&active>=0?`${id}-${active}`:undefined}
+      role="combobox" aria-autocomplete="list" aria-expanded={shown} aria-controls={shown?id:undefined} aria-activedescendant={highlighted?`${id}-${active}`:undefined}
       onChange={e=>{onChange(e.target.value);setOpen(true);setActive(-1)}} onFocus={()=>setOpen(true)} onBlur={close} onKeyDown={onKeyDown}/>
     {shown&&<ul id={id} role="listbox" className="absolute z-20 mt-1 max-h-72 w-full overflow-auto rounded-xl border border-black/10 bg-white py-1 shadow-lg">
       {options.map((s,i)=><li id={`${id}-${i}`} role="option" aria-selected={i===active} key={s.name}

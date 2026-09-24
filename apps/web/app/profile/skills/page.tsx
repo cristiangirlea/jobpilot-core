@@ -33,7 +33,17 @@ export default function SkillsPage(){
   const enqueue=(work:()=>Promise<void>)=>{queue.current=queue.current.then(work)};
   // Suggestions only help; the page works the same without them.
   const loadSuggestions=()=>api<SkillSuggestion[]>("/skills/suggestions").then(setSuggestions).catch(()=>{});
-  useEffect(()=>{api<Skill[]>("/skills").then(setItems).catch(e=>setError(e.message));loadSuggestions()},[]);
+  const loadSkills=()=>api<Skill[]>("/skills").then(list=>{setItems(list);return list});
+  useEffect(()=>{loadSkills().catch(e=>setError(e.message));loadSuggestions()},[]);
+  // A queued save lives only in this page until it is sent, so leaving now
+  // would lose it; the browser asks first.
+  const saving=Object.keys(adding).length+removing.length>0;
+  useEffect(()=>{
+    if(!saving)return;
+    const warn=(e:BeforeUnloadEvent)=>{e.preventDefault();e.returnValue=""};
+    window.addEventListener("beforeunload",warn);
+    return ()=>window.removeEventListener("beforeunload",warn);
+  },[saving]);
 
   const rows=useMemo(()=>[
     ...items.filter(x=>!adding[key(x.name)]&&!removing.includes(x.id??"")),
@@ -46,8 +56,10 @@ export default function SkillsPage(){
     const typed=form.name.trim();
     if(!typed)return;
     // Typing a listed skill in another case updates it instead of adding a
-    // near-duplicate beside it.
-    const skill={...form,name:rows.find(x=>key(x.name)===key(typed))?.name??typed};
+    // near-duplicate beside it. Items being removed count too: re-adding one
+    // keeps its spelling, so a failed removal cannot leave two of it.
+    const listed=[...items,...Object.values(adding)].find(x=>key(x.name)===key(typed));
+    const skill={...form,name:listed?.name??typed};
     const k=key(skill.name);
     setError("");
     setAdding(a=>({...a,[k]:skill}));
@@ -56,8 +68,13 @@ export default function SkillsPage(){
     enqueue(async()=>{
       try{
         const saved=await api<Skill>("/skills",{method:"POST",body:JSON.stringify(skill)});
-        setItems(list=>[...list.filter(x=>key(x.name)!==k),saved]);
-      }catch(err){setError(`${skill.name} was not saved: ${reason(err)}`)}
+        setItems(list=>[...list.filter(x=>x.id!==saved.id),saved]);
+      }catch(err){
+        // The skill is saved before matches are re-scored, so a failure may
+        // come after it was stored. Ask the server rather than guess.
+        const stored=await loadSkills().then(list=>list.some(x=>x.name===skill.name)).catch(()=>false);
+        setError(stored?`${skill.name} was saved, but your matches were not re-scored: ${reason(err)}`:`${skill.name} was not saved: ${reason(err)}`);
+      }
       // A later edit of the same skill may be queued behind this one; leave it.
       setAdding(a=>{if(a[k]!==skill)return a;const next={...a};delete next[k];return next});
     });
@@ -73,7 +90,10 @@ export default function SkillsPage(){
         await api(`/skills/${id}`,{method:"DELETE"});
         setItems(list=>list.filter(x=>x.id!==id));
         loadSuggestions();
-      }catch(err){setError(`${skill.name} was not removed: ${reason(err)}`)}
+      }catch(err){
+        const kept=await loadSkills().then(list=>list.some(x=>x.id===id)).catch(()=>true);
+        setError(kept?`${skill.name} was not removed: ${reason(err)}`:`${skill.name} was removed, but your matches were not re-scored: ${reason(err)}`);
+      }
       setRemoving(r=>r.filter(x=>x!==id));
     });
   }
@@ -91,7 +111,7 @@ export default function SkillsPage(){
     {rows.length?<div className="flex flex-wrap gap-2">{rows.map(x=>{
       // Only a saved skill has an id; until then it is on its way.
       const saving=!x.id;
-      return <div key={key(x.name)} aria-busy={saving||undefined} className={`rounded-full border border-black/5 bg-white px-4 py-2 text-sm shadow-sm transition-opacity ${saving?"opacity-60":""}`}>
+      return <div key={x.id??`new:${key(x.name)}`} aria-busy={saving||undefined} className={`rounded-full border border-black/5 bg-white px-4 py-2 text-sm shadow-sm transition-opacity ${saving?"opacity-60":""}`}>
         <span className="font-semibold">{x.name}</span>
         <span className="ml-2 text-ink/40">{saving?"saving…":`${x.level}${x.years?` · ${x.years}y`:""}`}</span>
         {!saving&&<button type="button" className="ml-3 text-red-500" aria-label={`Remove ${x.name}`} onClick={()=>remove(x)}>×</button>}
