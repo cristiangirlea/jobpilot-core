@@ -72,6 +72,11 @@ $acceptedBody = @{
 }
 $accepted = Send-JobPilotRequest POST "/jobs" $acceptedBody
 if ($accepted.match.rejected -or $accepted.match.score -lt 70) { throw "Accepted matching smoke check failed: score $($accepted.match.score)" }
+if (-not $accepted.job.slug) { throw "An imported job should be named with a slug" }
+$bySlug = Send-JobPilotRequest GET "/jobs/$($accepted.job.slug)"
+if ($bySlug.job.id -ne $accepted.job.id) { throw "A job should be found by its slug" }
+$byID = Send-JobPilotRequest GET "/jobs/$($accepted.job.id)"
+if ($byID.job.slug -ne $accepted.job.slug) { throw "A job should still be found by its id" }
 
 $documents = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/generate"
 if (-not $documents.cover_letter.Contains("Fresh Systems")) { throw "Template generation smoke check failed" }

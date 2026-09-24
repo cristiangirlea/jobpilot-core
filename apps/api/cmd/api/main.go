@@ -31,6 +31,13 @@ func main() {
 		os.Exit(1)
 	}
 	dataStore := store.New(pool)
+	// Jobs stored before slugs existed are named here. A failure only leaves
+	// them reachable by id, so it is logged rather than fatal.
+	if named, err := dataStore.NameUnnamedJobs(ctx); err != nil {
+		slog.Error("naming jobs failed", "error", err, "named", named)
+	} else if named > 0 {
+		slog.Info("named jobs", "count", named)
+	}
 	aiClient, err := llm.Build(llm.Options{
 		Provider:     cfg.LLM.Provider,
 		Model:        cfg.LLM.Model,

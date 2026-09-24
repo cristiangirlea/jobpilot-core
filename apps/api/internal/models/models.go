@@ -119,6 +119,8 @@ type Job struct {
 	ReferralDisclosure string     `json:"referral_disclosure,omitempty"`
 	SourceName         string     `json:"source_name,omitempty"`
 	SourceProvider     string     `json:"source_provider,omitempty"`
+	// Slug is the job's readable name in URLs; empty until the job is named.
+	Slug string `json:"slug,omitempty"`
 }
 
 type Evaluation struct {

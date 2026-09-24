@@ -7,6 +7,8 @@ export async function api<T>(path:string,options:RequestInit={}):Promise<T>{
   const data=response.status===204?null:await response.json().catch(()=>({error:"Unexpected server response"}));
   if(!response.ok)throw new Error(data?.error||`Request failed (${response.status})`);return data as T;
 }
+// jobHref is a job page's address: its readable slug, or its id until it has one.
+export const jobHref=(job:{id:string;slug?:string})=>`/jobs/${job.slug||job.id}`;
 export const split=(value:string)=>value.split(",").map(x=>x.trim()).filter(Boolean);
 export const join=(value:string[]|undefined)=>(value||[]).join(", ");
 

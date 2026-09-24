@@ -5,16 +5,19 @@ import {useEffect,useState} from "react";
 import {OpenApplyButton} from "@/components/OpenApplyButton";
 import {Shell} from "@/components/Shell";
 import {CopyButton,ErrorMessage,Header,Score} from "@/components/UI";
-import {api} from "@/lib/api";
+import {api,jobHref} from "@/lib/api";
 import {Application,Documents,JobMatch} from "@/lib/types";
 
 const labels:Record<string,string>={title_match:"Title",skill_match:"Skills",seniority_match:"Seniority",location_remote_match:"Location / remote",salary_match:"Compensation",domain_industry_match:"Industry",freshness:"Freshness"};
 const maximum=(key:string)=>key==="title_match"?25:key==="skill_match"?30:key==="seniority_match"?15:key==="location_remote_match"||key==="salary_match"?10:5;
 
 export default function JobDetail(){
-  const {id}=useParams<{id:string}>(),router=useRouter();
+  // The address holds a slug, or an id from a link made before slugs existed;
+  // either finds the job, and every action below uses its id.
+  const {id:ref}=useParams<{id:string}>(),router=useRouter();
   const [data,setData]=useState<JobMatch|null>(null),[docs,setDocs]=useState<Documents|null>(null),[error,setError]=useState(""),[busy,setBusy]=useState("");
-  useEffect(()=>{api<JobMatch>(`/jobs/${id}`).then(setData).catch(e=>setError(e.message))},[id]);
+  useEffect(()=>{api<JobMatch>(`/jobs/${ref}`).then(x=>{setData(x);if(x.job.slug&&x.job.slug!==ref)window.history.replaceState(null,"",jobHref(x.job))}).catch(e=>setError(e.message))},[ref]);
+  const id=data?.job.id;
   async function generate(){setBusy("generate");try{setDocs(await api<Documents>(`/jobs/${id}/generate`,{method:"POST"}))}catch(e){setError(e instanceof Error?e.message:"Generation failed")}finally{setBusy("")}}
   async function prepare(){setBusy("prepare");try{await api(`/jobs/${id}/compose`,{method:"POST",body:"{}"});router.push("/outbox")}catch(e){setError(e instanceof Error?e.message:"Unable to prepare this application")}finally{setBusy("")}}
   async function createApplication(){setBusy("application");try{const a=await api<Application>("/applications",{method:"POST",body:JSON.stringify({job_id:id})});router.push(`/applications/${a.id}`)}catch(e){setError(e instanceof Error?e.message:"Unable to create application")}finally{setBusy("")}}

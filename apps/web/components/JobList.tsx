@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import {useEffect,useMemo,useState} from "react";
-import {api} from "@/lib/api";
+import {api,jobHref} from "@/lib/api";
 import {JobMatch} from "@/lib/types";
 import {Empty,ErrorMessage,Score} from "./UI";
 
@@ -36,6 +36,6 @@ export function JobList({matchesOnly=false}:{matchesOnly?:boolean}){
       <button type="button" className={relatedOnly?"btn":"btn-secondary"} onClick={()=>setRelatedOnly(value=>!value)}>{relatedOnly?"Showing related jobs":"Related to me"}</button>
       <p className="pb-2 text-xs text-ink/50">{visible.length} of {items.length} jobs</p>
     </div>
-    {!visible.length?<Empty title="No jobs match these controls" body="Try another technology or show all jobs." action={<button className="btn-secondary" onClick={()=>{setTechnology("");setRelatedOnly(false)}}>Clear controls</button>}/>:<div className="space-y-3">{visible.map(item=><Link href={`/jobs/${item.job.id}`} key={item.job.id} className="card flex gap-4 hover:border-moss/30"><Score value={item.match.score} rejected={item.match.rejected}/><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.job.title}</h2>{item.match.rejected?<span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">REJECTED</span>:item.match.score>=70?<span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700">GOOD MATCH</span>:null}</div><p className="muted mt-1">{item.job.company} · {item.job.location||"Unspecified"} · {item.job.remote_type||"Arrangement unstated"}</p><p className={`mt-2 truncate text-xs ${item.match.rejected?"text-red-600":"text-moss"}`}>{item.match.rejected?item.match.rejection_reasons.join(" · "):item.match.reasons.join(" · ")}</p>{item.match.matched_skills.length>0&&<p className="mt-1 text-xs text-ink/50">Matched: {item.match.matched_skills.join(", ")}</p>}</div><span className="self-center text-ink/30">→</span></Link>)}</div>}
+    {!visible.length?<Empty title="No jobs match these controls" body="Try another technology or show all jobs." action={<button className="btn-secondary" onClick={()=>{setTechnology("");setRelatedOnly(false)}}>Clear controls</button>}/>:<div className="space-y-3">{visible.map(item=><Link href={jobHref(item.job)} key={item.job.id} className="card flex gap-4 hover:border-moss/30"><Score value={item.match.score} rejected={item.match.rejected}/><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h2 className="font-semibold">{item.job.title}</h2>{item.match.rejected?<span className="rounded-full bg-red-50 px-2 py-1 text-[10px] font-bold text-red-700">REJECTED</span>:item.match.score>=70?<span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700">GOOD MATCH</span>:null}</div><p className="muted mt-1">{item.job.company} · {item.job.location||"Unspecified"} · {item.job.remote_type||"Arrangement unstated"}</p><p className={`mt-2 truncate text-xs ${item.match.rejected?"text-red-600":"text-moss"}`}>{item.match.rejected?item.match.rejection_reasons.join(" · "):item.match.reasons.join(" · ")}</p>{item.match.matched_skills.length>0&&<p className="mt-1 text-xs text-ink/50">Matched: {item.match.matched_skills.join(", ")}</p>}</div><span className="self-center text-ink/30">→</span></Link>)}</div>}
   </>;
 }
