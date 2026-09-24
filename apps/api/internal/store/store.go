@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
+	"sort"
 )
 
 type Store struct{ DB *pgxpool.Pool }
@@ -353,7 +354,11 @@ type JobEvaluation struct {
 // profile change rewrites every match the user has, and a statement per job
 // made adding one skill take seconds once a user had a few thousand matches.
 // A batch runs as one implicit transaction, so the scores change together.
+// It holds every row until it commits, so rows are written in job id order:
+// two re-scores of one user then queue behind each other instead of each
+// holding a row the other needs.
 func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluations []JobEvaluation) error {
+	sort.Slice(evaluations, func(i, j int) bool { return evaluations[i].JobID < evaluations[j].JobID })
 	batch := &pgx.Batch{}
 	for _, item := range evaluations {
 		batch.Queue(upsertJobMatch, jobMatchArgs(u, item.JobID, item.Evaluation, filterID)...)

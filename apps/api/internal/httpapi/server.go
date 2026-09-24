@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -407,8 +408,13 @@ func (s *Server) deleteFilter(w http.ResponseWriter, r *http.Request) {
 	s.deleteAndReevaluate(w, r, "filter_presets", "Filter not found.")
 }
 
+// reevaluateJobs re-scores every match after a profile change. The change is
+// already saved when this runs, so the re-score must finish even if the client
+// goes away: a page reload mid-request would otherwise leave every match scored
+// against the old profile.
 func (s *Server) reevaluateJobs(r *http.Request) error {
-	ctx := r.Context()
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
+	defer cancel()
 	uid := auth.UserID(ctx)
 	profile, err := s.Store.Profile(ctx, uid)
 	if err != nil {
