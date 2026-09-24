@@ -1,6 +1,8 @@
 package store
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -97,5 +99,24 @@ func TestScanApplicationWithholdsApplyURLWhenBlocked(t *testing.T) {
 	}
 	if blocked.Job == nil || blocked.Job.ApplyURL != "" {
 		t.Fatalf("a blocked application must not carry an apply URL, got %+v", blocked.Job)
+	}
+}
+
+// Rows written before the matcher stopped producing nil lists hold JSON null.
+// Clients index these lists directly, so a scan must hand back arrays.
+func TestScanJobMatchTurnsNullListsIntoEmptyOnes(t *testing.T) {
+	row := jobMatchRow("https://example.test/apply", false)
+	for i := 26; i <= 31; i++ {
+		row.values[i] = []byte(`null`)
+	}
+	got, err := scanJobMatch(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(got.Match)
+	for _, list := range []string{"rejection_reasons", "warnings", "reasons", "matched_skills", "missing_skills", "red_flags"} {
+		if strings.Contains(string(encoded), `"`+list+`":null`) {
+			t.Errorf("%s encodes as null after the scan, want []", list)
+		}
 	}
 }
