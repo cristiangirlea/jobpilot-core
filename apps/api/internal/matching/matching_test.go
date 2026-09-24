@@ -2,6 +2,9 @@ package matching
 
 import (
 	"jobpilot/core/api/internal/models"
+	"reflect"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 )
@@ -67,5 +70,27 @@ func TestSeniorityUsesBestSelectedLevel(t *testing.T) {
 	e := Evaluate(p, nil, nil, models.JobInput{Title: "Mid Backend Engineer", Company: "Other", Description: "Go services"}, time.Now())
 	if e.Breakdown["seniority_match"] != 15 {
 		t.Fatalf("expected exact match from selected levels, got %v", e.Breakdown)
+	}
+}
+
+// splitWords replaced a regexp in the hot path of every evaluation, so it has
+// to tokenise exactly as the pattern it replaced did.
+func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
+	pattern := regexp.MustCompile(`[a-z0-9+#.]+`)
+	for _, text := range []string{
+		"", "   ", "go", "Senior Go/PostgreSQL engineer (m/w/d)",
+		"C++, C#, .NET and Node.js; 5+ years", "trailing.dot. and ...dots",
+		"Überweisung für Entwickler — naïve café", "ÀÉÎ ßẞ ǅ İstanbul", "tabs\tand\nnewlines\r\n",
+		"emoji 🚀 inside, go-live, e-mail", `under_score and back\slash`,
+	} {
+		lower := strings.ToLower(text)
+		want := pattern.FindAllString(lower, -1)
+		got := splitWords(lower)
+		if len(want) == 0 && len(got) == 0 {
+			continue
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("splitWords(%q) = %q, want %q", lower, got, want)
+		}
 	}
 }

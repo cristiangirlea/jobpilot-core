@@ -403,13 +403,12 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	now := time.Now()
+	evaluations := make([]store.JobEvaluation, 0, len(jobs))
 	for _, item := range jobs {
-		evaluation := matching.Evaluate(profile, blacklist, filter, item.Job.JobInput, time.Now())
-		if _, err = s.Store.SaveJobMatch(ctx, uid, item.Job.ID, evaluation, filterID); err != nil {
-			return err
-		}
+		evaluations = append(evaluations, store.JobEvaluation{JobID: item.Job.ID, Evaluation: matching.Evaluate(profile, blacklist, filter, item.Job.JobInput, now)})
 	}
-	return nil
+	return s.Store.SaveJobMatches(ctx, uid, filterID, evaluations)
 }
 
 func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
