@@ -1,4 +1,5 @@
 export type Skill={id?:string;name:string;level:string;years:number};
+export type SkillSuggestion={name:string;in_cv:boolean;jobs:number};
 export type Experience={id?:string;company:string;company_domain:string;title:string;start_date:string;end_date:string;current:boolean;description:string};
 export type Project={id?:string;name:string;description:string;url:string;skills:string[]};
 export type CompanyExclusion={id?:string;company_name:string;company_domain:string;normalized_name?:string;reason:string};
