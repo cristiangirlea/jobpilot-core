@@ -2,6 +2,7 @@
 import Link from "next/link";
 import {useParams,useRouter} from "next/navigation";
 import {useEffect,useState} from "react";
+import {JobDescription} from "@/components/JobDescription";
 import {OpenApplyButton} from "@/components/OpenApplyButton";
 import {Shell} from "@/components/Shell";
 import {CopyButton,ErrorMessage,Header,Score} from "@/components/UI";
@@ -34,7 +35,7 @@ export default function JobDetail(){
     <div className="grid gap-5 lg:grid-cols-[1.2fr_.8fr]">
       <div className="space-y-5">
         <section className="card"><div className="flex items-start gap-5"><Score value={match.score} rejected={match.rejected}/><div><h2 className="font-semibold">{match.rejected?"Score retained for audit":"Why this matches"}</h2><ul className="mt-2 space-y-1 text-sm text-ink/65">{match.reasons.map(x=><li key={x}>• {x}</li>)}</ul></div></div><div className="mt-5 grid grid-cols-2 gap-2 sm:grid-cols-3">{Object.entries(match.breakdown).map(([key,value])=><div key={key} className="rounded-xl bg-paper p-3"><p className="text-lg font-semibold">{value}<span className="text-xs text-ink/40"> / {maximum(key)}</span></p><p className="text-xs text-ink/50">{labels[key]||key}</p></div>)}</div></section>
-        <section className="card"><h2 className="font-semibold">Job description</h2><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink/70">{job.description}</p></section>
+        <section className="card"><h2 className="font-semibold">Job description</h2><JobDescription text={job.description}/></section>
       </div>
       <aside className="space-y-5">
         <section className="card"><h2 className="font-semibold">Skill evidence</h2><p className="mt-3 text-xs font-bold uppercase tracking-wider text-emerald-700">Matched</p><div className="mt-2 flex flex-wrap gap-1">{match.matched_skills.length?match.matched_skills.map(x=><span className="rounded-full bg-emerald-50 px-2 py-1 text-xs text-emerald-800" key={x}>{x}</span>):<span className="muted">No explicit matches</span>}</div><p className="mt-4 text-xs font-bold uppercase tracking-wider text-amber-700">Missing</p><div className="mt-2 flex flex-wrap gap-1">{match.missing_skills.length?match.missing_skills.map(x=><span className="rounded-full bg-amber-50 px-2 py-1 text-xs text-amber-800" key={x}>{x}</span>):<span className="muted">None identified</span>}</div></section>

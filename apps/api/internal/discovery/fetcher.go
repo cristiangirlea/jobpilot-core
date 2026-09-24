@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -109,7 +108,7 @@ func (f *Fetcher) remotive(ctx context.Context, query string) ([]models.Discover
 	out := make([]models.DiscoveredJob, 0, len(payload.Jobs))
 	for _, x := range payload.Jobs {
 		posted := parseTime(x.Published)
-		description := plain(x.Description)
+		description := Readable(x.Description)
 		if x.Salary != "" {
 			description += "\n\nCompensation listed by source: " + x.Salary
 		}
@@ -148,7 +147,7 @@ func (f *Fetcher) greenhouse(ctx context.Context, identifier, companyName string
 		if len(x.Departments) > 0 {
 			industry = x.Departments[0].Name
 		}
-		out = append(out, models.DiscoveredJob{ExternalID: strconv.FormatInt(x.ID, 10), Input: models.JobInput{Title: x.Title, Company: companyName, Location: x.Location.Name, RemoteType: remoteType(x.Location.Name), Industry: industry, Description: plain(x.Content), ApplyURL: x.URL, PostedAt: parseTime(x.Updated)}})
+		out = append(out, models.DiscoveredJob{ExternalID: strconv.FormatInt(x.ID, 10), Input: models.JobInput{Title: x.Title, Company: companyName, Location: x.Location.Name, RemoteType: remoteType(x.Location.Name), Industry: industry, Description: Readable(x.Content), ApplyURL: x.URL, PostedAt: parseTime(x.Updated)}})
 	}
 	return out, nil
 }
@@ -184,7 +183,7 @@ func (f *Fetcher) lever(ctx context.Context, identifier, companyName string) ([]
 	for _, x := range payload {
 		description := x.Description
 		for _, list := range x.Lists {
-			description += "\n\n" + list.Text + "\n" + plain(list.Content)
+			description += "\n\n" + list.Text + "\n" + Readable(list.Content)
 		}
 		description += "\n\n" + x.Additional
 		apply := x.ApplyURL
@@ -231,7 +230,7 @@ func (f *Fetcher) ashby(ctx context.Context, identifier, companyName string) ([]
 	for _, x := range payload.Jobs {
 		description := strings.TrimSpace(x.DescriptionPlain)
 		if description == "" {
-			description = plain(x.DescriptionHTML)
+			description = Readable(x.DescriptionHTML)
 		}
 		apply := x.ApplyURL
 		if apply == "" {
@@ -306,7 +305,7 @@ func (f *Fetcher) smartRecruiters(ctx context.Context, identifier, companyName s
 			lastDetailErr = err
 			continue
 		}
-		description := strings.TrimSpace(strings.Join([]string{plain(detail.JobAd.Sections.JobDescription.Text), plain(detail.JobAd.Sections.Qualifications.Text), plain(detail.JobAd.Sections.AdditionalInformation.Text)}, "\n\n"))
+		description := strings.TrimSpace(strings.Join([]string{Readable(detail.JobAd.Sections.JobDescription.Text), Readable(detail.JobAd.Sections.Qualifications.Text), Readable(detail.JobAd.Sections.AdditionalInformation.Text)}, "\n\n"))
 		locationParts := make([]string, 0, 3)
 		for _, part := range []string{x.Location.City, x.Location.Region, x.Location.Country} {
 			if strings.TrimSpace(part) != "" {
@@ -356,7 +355,7 @@ func (f *Fetcher) arbeitnow(ctx context.Context, query, excludedQuery string) ([
 	excludedTerms := splitOrTerms(excludedQuery)
 	out := make([]models.DiscoveredJob, 0, len(payload.Data))
 	for _, x := range payload.Data {
-		description := plain(x.Description)
+		description := Readable(x.Description)
 		searchText := strings.ToLower(x.Title + " " + description + " " + strings.Join(x.Tags, " "))
 		matched := len(terms) == 0
 		for _, term := range terms {
@@ -411,12 +410,6 @@ func splitOrTerms(value string) []string {
 	return out
 }
 
-var tags = regexp.MustCompile(`<[^>]+>`)
-var spaces = regexp.MustCompile(`\s+`)
-
-func plain(v string) string {
-	return strings.TrimSpace(spaces.ReplaceAllString(html.UnescapeString(tags.ReplaceAllString(v, " ")), " "))
-}
 func parseTime(v string) *time.Time {
 	if v == "" {
 		return nil
