@@ -413,6 +413,14 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	json.Unmarshal(missing, &x.Match.MissingSkills)
 	json.Unmarshal(red, &x.Match.RedFlags)
 	json.Unmarshal(breakdown, &x.Match.Breakdown)
+	// Matches scored before the matcher stopped producing nil lists hold JSON
+	// null, which decodes to nil and would be served as null again.
+	for _, list := range []*[]string{&x.Match.RejectionReasons, &x.Match.Warnings, &x.Match.Reasons,
+		&x.Match.MatchedSkills, &x.Match.MissingSkills, &x.Match.RedFlags} {
+		if *list == nil {
+			*list = []string{}
+		}
+	}
 	// A rejected match cannot be applied to, so the apply URL is withheld
 	// here rather than in each client. The value returned by this helper is
 	// therefore a read model: never write it back to the catalog row.

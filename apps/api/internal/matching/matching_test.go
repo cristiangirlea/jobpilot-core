@@ -1,6 +1,7 @@
 package matching
 
 import (
+	"encoding/json"
 	"jobpilot/core/api/internal/models"
 	"reflect"
 	"regexp"
@@ -91,6 +92,24 @@ func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("splitWords(%q) = %q, want %q", lower, got, want)
+		}
+	}
+}
+
+// A nil slice encodes as JSON null, and clients index these lists directly: the
+// job page crashed on missing_skills.length for every job whose skills all
+// matched. Both lists must encode as arrays whichever way the match goes.
+func TestSkillListsAreNeverNull(t *testing.T) {
+	allMatched := Evaluate(sampleProfile(), nil, nil, models.JobInput{Title: "Backend Engineer", Description: "Go and PostgreSQL."}, time.Now())
+	noneMatched := Evaluate(sampleProfile(), nil, &models.FilterPreset{RequiredSkills: []string{"Rust"}}, models.JobInput{Title: "Backend Engineer", Description: "Rust."}, time.Now())
+	for name, lists := range map[string][2][]string{
+		"all matched":  {allMatched.MatchedSkills, allMatched.MissingSkills},
+		"none matched": {noneMatched.MatchedSkills, noneMatched.MissingSkills},
+	} {
+		for _, list := range lists {
+			if encoded, _ := json.Marshal(list); string(encoded) == "null" {
+				t.Errorf("%s: a skill list encodes as null, want an array", name)
+			}
 		}
 	}
 }

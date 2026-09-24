@@ -235,7 +235,8 @@ func scoreSkills(profile []models.Skill, required []string, description string) 
 	if len(relevant) == 0 {
 		return 15, []string{}, []string{}
 	}
-	var matched, missing []string
+	// Empty rather than nil: a nil slice is stored and served as JSON null.
+	matched, missing := []string{}, []string{}
 	for _, r := range relevant {
 		if _, ok := known[strings.ToLower(strings.TrimSpace(r))]; ok {
 			matched = append(matched, r)
