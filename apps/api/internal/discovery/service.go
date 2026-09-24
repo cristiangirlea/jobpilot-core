@@ -142,7 +142,9 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 				run.DuplicatesSkipped++
 				// Keep a known posting's text current: providers edit postings,
 				// and text stored before Readable kept paragraphs was flattened.
-				if job.Description != candidate.Input.Description {
+				// Only text this provider stored is replaced, so a description a
+				// user pasted into a manual import stays theirs.
+				if job.SourceProvider == source.Provider && job.Description != candidate.Input.Description {
 					if err = s.Store.RefreshDescription(ctx, job.ID, candidate.Input.Description); err != nil {
 						return s.finish(ctx, userID, run, err)
 					}
