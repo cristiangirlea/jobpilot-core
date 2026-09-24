@@ -47,6 +47,9 @@ Send-JobPilotRequest PUT "/profile" $profile | Out-Null
 Send-JobPilotRequest POST "/experiences" @{ company = "CurrentCo"; company_domain = "current.example"; title = "Senior Backend Engineer"; start_date = "2022"; end_date = ""; current = $true; description = "Built backend services." } | Out-Null
 Send-JobPilotRequest POST "/skills" @{ name = "Go"; level = "advanced"; years = 5 } | Out-Null
 Send-JobPilotRequest POST "/skills" @{ name = "PostgreSQL"; level = "advanced"; years = 5 } | Out-Null
+$suggested = @(Send-JobPilotRequest GET "/skills/suggestions" | ForEach-Object { $_.name })
+if ($suggested -contains "Go" -or $suggested -contains "PostgreSQL") { throw "Skill suggestions should leave out skills the profile already has" }
+if ($suggested -cnotcontains "Kubernetes") { throw "Skill suggestions should offer the known vocabulary, written as skills" }
 Send-JobPilotRequest POST "/filters" @{
     name = "Smoke filter"; active = $true; included_titles = @("Backend Engineer"); excluded_title_words = @("unpaid")
     locations = @("Romania"); remote_types = @("remote"); min_salary = 90000; currency = "EUR"

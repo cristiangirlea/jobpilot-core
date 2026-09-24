@@ -80,6 +80,17 @@ func (s *Store) ListCVs(ctx context.Context, userID string) ([]models.CVDocument
 	return out, rows.Err()
 }
 
+// BaseCVTechnologies returns the technologies found in the user's newest base
+// CV, preferring an approved one, or nothing when no CV has been uploaded.
+func (s *Store) BaseCVTechnologies(ctx context.Context, userID string) ([]string, error) {
+	var technologies []string
+	err := s.DB.QueryRow(ctx, `SELECT technologies FROM cv_documents WHERE user_id=$1 AND kind='base' ORDER BY approved DESC, created_at DESC LIMIT 1`, userID).Scan(&technologies)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	return technologies, err
+}
+
 func (s *Store) CV(ctx context.Context, userID, id string) (models.CVDocument, error) {
 	return scanCV(s.DB.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id))
 }

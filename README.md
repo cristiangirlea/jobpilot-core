@@ -617,6 +617,7 @@ Authorization: Bearer <token>
 | `GET`, `POST` | `/api/experiences` | List or add work experience |
 | `DELETE` | `/api/experiences/{id}` | Remove work experience |
 | `GET`, `POST` | `/api/skills` | List or add skills |
+| `GET` | `/api/skills/suggestions` | Known technologies the profile lacks, ranked by the CV and by how many of the best matches ask for them |
 | `DELETE` | `/api/skills/{id}` | Remove a skill |
 | `GET`, `POST` | `/api/projects` | List or add projects |
 | `DELETE` | `/api/projects/{id}` | Remove a project |

@@ -3,7 +3,6 @@ package matching
 import (
 	"fmt"
 	"math"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -12,7 +11,32 @@ import (
 	"jobpilot/core/api/internal/models"
 )
 
-var wordPattern = regexp.MustCompile(`[a-z0-9+#.]+`)
+// splitWords returns the runs of [a-z0-9+#.] in s, the way the regexp of that
+// class did. Every evaluation tokenises the whole job description, and the
+// regexp engine made that most of what re-scoring a user's matches cost.
+// Callers lowercase first; bytes of multi-byte UTF-8 runes are all 0x80 or
+// above, so they separate words exactly as the regexp's character class did.
+func splitWords(s string) []string {
+	var out []string
+	start := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '#' || c == '.' {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			out = append(out, s[start:i])
+			start = -1
+		}
+	}
+	if start >= 0 {
+		out = append(out, s[start:])
+	}
+	return out
+}
 
 func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter *models.FilterPreset, job models.JobInput, now time.Time) models.Evaluation {
 	e := models.Evaluation{Breakdown: map[string]int{}, RejectionReasons: []string{}, Warnings: []string{}, Reasons: []string{}, MatchedSkills: []string{}, MissingSkills: []string{}, RedFlags: []string{}}
@@ -227,9 +251,12 @@ func scoreSkills(profile []models.Skill, required []string, description string) 
 var seniority = map[string]int{"intern": 0, "junior": 1, "entry": 1, "mid": 2, "middle": 2, "senior": 3, "lead": 4, "staff": 4, "principal": 5, "manager": 4, "director": 5}
 
 func scoreSeniority(wants []string, text string) int {
+	// Tokenising a whole description is most of what an evaluation costs, so it
+	// happens once here rather than once per seniority word.
+	normalized := phraseText(text)
 	found, ok := 0, false
 	for token, level := range seniority {
-		if containsPhrase(strings.ToLower(text), token) && (!ok || level > found) {
+		if strings.Contains(normalized, " "+token+" ") && (!ok || level > found) {
 			found = level
 			ok = true
 		}
@@ -321,13 +348,13 @@ func requiredSkills(f *models.FilterPreset) []string {
 }
 func words(s string) map[string]bool {
 	out := map[string]bool{}
-	for _, x := range wordPattern.FindAllString(strings.ToLower(s), -1) {
+	for _, x := range splitWords(strings.ToLower(s)) {
 		out[x] = true
 	}
 	return out
 }
 func phraseInWords(s string, w map[string]bool) bool {
-	parts := wordPattern.FindAllString(strings.ToLower(s), -1)
+	parts := splitWords(strings.ToLower(s))
 	if len(parts) == 0 {
 		return false
 	}
@@ -355,10 +382,15 @@ func jaccard(a, b map[string]bool) float64 {
 	}
 	return float64(inter) / float64(len(union))
 }
+
+// phraseText lowercases text and joins its words with single spaces, padded at
+// both ends, so a whole phrase can be found with one strings.Contains.
+func phraseText(text string) string {
+	return " " + strings.Join(splitWords(strings.ToLower(text)), " ") + " "
+}
 func containsPhrase(text, phrase string) bool {
-	text = strings.Join(wordPattern.FindAllString(strings.ToLower(text), -1), " ")
-	phrase = strings.Join(wordPattern.FindAllString(strings.ToLower(phrase), -1), " ")
-	return phrase != "" && strings.Contains(" "+text+" ", " "+phrase+" ")
+	phrase = strings.Join(splitWords(strings.ToLower(phrase)), " ")
+	return phrase != "" && strings.Contains(phraseText(text), " "+phrase+" ")
 }
 func anyContains(text string, list []string) bool {
 	for _, x := range list {

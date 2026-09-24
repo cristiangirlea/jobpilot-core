@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
+	"sort"
 )
 
 type Store struct{ DB *pgxpool.Pool }
@@ -107,6 +108,16 @@ func (s *Store) Skills(ctx context.Context, u string) ([]models.Skill, error) {
 		out = append(out, x)
 	}
 	return out, rows.Err()
+}
+
+// MatchTexts returns the title and description of the user's best matches,
+// accepted ones first, for counting which technologies postings ask for.
+func (s *Store) MatchTexts(ctx context.Context, u string, limit int) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT j.title||' '||j.description FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 ORDER BY m.rejected ASC,m.score DESC,j.created_at DESC LIMIT $2`, u, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
 func (s *Store) AddSkill(ctx context.Context, u string, x models.Skill) (models.Skill, error) {
 	err := s.DB.QueryRow(ctx, `INSERT INTO skills(user_id,name,level,years) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,name) DO UPDATE SET level=EXCLUDED.level,years=EXCLUDED.years RETURNING id`, u, x.Name, x.Level, x.Years).Scan(&x.ID)
@@ -309,7 +320,10 @@ func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, so
 	}
 	return j, tx.Commit(ctx)
 }
-func (s *Store) SaveJobMatch(ctx context.Context, u, jobID string, e models.Evaluation, filterID string) (string, error) {
+
+const upsertJobMatch = `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id,job_id) DO UPDATE SET filter_id=EXCLUDED.filter_id,rejected=EXCLUDED.rejected,score=EXCLUDED.score,rejection_reasons=EXCLUDED.rejection_reasons,warnings=EXCLUDED.warnings,reasons=EXCLUDED.reasons,matched_skills=EXCLUDED.matched_skills,missing_skills=EXCLUDED.missing_skills,red_flags=EXCLUDED.red_flags,breakdown=EXCLUDED.breakdown,created_at=now() RETURNING id`
+
+func jobMatchArgs(u, jobID string, e models.Evaluation, filterID string) []any {
 	rej, _ := json.Marshal(e.RejectionReasons)
 	warn, _ := json.Marshal(e.Warnings)
 	reasons, _ := json.Marshal(e.Reasons)
@@ -321,9 +335,35 @@ func (s *Store) SaveJobMatch(ctx context.Context, u, jobID string, e models.Eval
 	if filterID != "" {
 		fid = filterID
 	}
+	return []any{u, jobID, fid, e.Rejected, e.Score, rej, warn, reasons, matched, missing, red, breakdown}
+}
+
+func (s *Store) SaveJobMatch(ctx context.Context, u, jobID string, e models.Evaluation, filterID string) (string, error) {
 	var id string
-	err := s.DB.QueryRow(ctx, `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id,job_id) DO UPDATE SET filter_id=EXCLUDED.filter_id,rejected=EXCLUDED.rejected,score=EXCLUDED.score,rejection_reasons=EXCLUDED.rejection_reasons,warnings=EXCLUDED.warnings,reasons=EXCLUDED.reasons,matched_skills=EXCLUDED.matched_skills,missing_skills=EXCLUDED.missing_skills,red_flags=EXCLUDED.red_flags,breakdown=EXCLUDED.breakdown,created_at=now() RETURNING id`, u, jobID, fid, e.Rejected, e.Score, rej, warn, reasons, matched, missing, red, breakdown).Scan(&id)
+	err := s.DB.QueryRow(ctx, upsertJobMatch, jobMatchArgs(u, jobID, e, filterID)...).Scan(&id)
 	return id, err
+}
+
+// JobEvaluation pairs a job with the evaluation to store for it.
+type JobEvaluation struct {
+	JobID      string
+	Evaluation models.Evaluation
+}
+
+// SaveJobMatches stores many evaluations in one round trip. Re-scoring after a
+// profile change rewrites every match the user has, and a statement per job
+// made adding one skill take seconds once a user had a few thousand matches.
+// A batch runs as one implicit transaction, so the scores change together.
+// It holds every row until it commits, so rows are written in job id order:
+// two re-scores of one user then queue behind each other instead of each
+// holding a row the other needs.
+func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluations []JobEvaluation) error {
+	sort.Slice(evaluations, func(i, j int) bool { return evaluations[i].JobID < evaluations[j].JobID })
+	batch := &pgx.Batch{}
+	for _, item := range evaluations {
+		batch.Queue(upsertJobMatch, jobMatchArgs(u, item.JobID, item.Evaluation, filterID)...)
+	}
+	return s.DB.SendBatch(ctx, batch).Close()
 }
 
 func (s *Store) Jobs(ctx context.Context, u string, onlyMatches bool) ([]models.JobWithMatch, error) {
