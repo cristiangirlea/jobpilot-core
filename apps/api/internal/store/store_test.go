@@ -120,3 +120,35 @@ func TestScanJobMatchTurnsNullListsIntoEmptyOnes(t *testing.T) {
 		}
 	}
 }
+
+// Job pages are addressed by slug, but links and bookmarks made before slugs
+// existed carry the id, so both must find the job.
+func TestJobRefColumnTellsIdsFromSlugs(t *testing.T) {
+	for ref, want := range map[string]string{
+		"ff952caa-0d56-4fda-a1c8-bf48fd655059":                   "j.id",
+		"FF952CAA-0D56-4FDA-A1C8-BF48FD655059":                   "j.id",
+		"arbeitnow-remote-python-backend-engineer-berlin-100001": "j.slug",
+		"lever-odaseva-big-data-engineer-af389cc6":               "j.slug",
+		"ff952caa-0d56-4fda-a1c8-bf48fd655059-extra":             "j.slug",
+	} {
+		if got := jobRefColumn(ref); got != want {
+			t.Errorf("jobRefColumn(%q) = %s, want %s", ref, got, want)
+		}
+	}
+}
+
+// A slug is made from the end of the apply URL, so a rejected match, which
+// withholds that URL, must withhold the slug too.
+func TestScanJobMatchWithholdsTheSlugForRejectedMatches(t *testing.T) {
+	for rejected, want := range map[bool]string{false: "example-a-job", true: ""} {
+		row := jobMatchRow("https://example.test/a-job", rejected)
+		row.values = append(row.values, "example-a-job")
+		got, err := scanJobMatch(row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Job.Slug != want {
+			t.Errorf("rejected=%v: slug %q, want %q", rejected, got.Job.Slug, want)
+		}
+	}
+}

@@ -631,7 +631,7 @@ Authorization: Bearer <token>
 | `GET`, `POST` | `/api/filters` | List or create filter presets |
 | `PUT`, `DELETE` | `/api/filters/{id}` | Save or delete a filter preset |
 | `GET`, `POST` | `/api/jobs` | List matched jobs or manually import one |
-| `GET` | `/api/jobs/{id}` | Job and user-specific match details |
+| `GET` | `/api/jobs/{id}` | Job and user-specific match details; `{id}` may also be the job's slug, such as `arbeitnow-remote-python-backend-engineer-berlin-100001` |
 | `POST` | `/api/jobs/{id}/generate` | Generate factual application documents |
 | `POST` | `/api/jobs/{id}/outbound` | Record attribution and return allowed apply URL |
 | `GET` | `/api/matches` | List accepted matches |
