@@ -140,6 +140,14 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 			}
 			if duplicate {
 				run.DuplicatesSkipped++
+				// Keep a known posting's text current: providers edit postings,
+				// and text stored before Readable kept paragraphs was flattened.
+				if job.Description != candidate.Input.Description {
+					if err = s.Store.RefreshDescription(ctx, job.ID, candidate.Input.Description); err != nil {
+						return s.finish(ctx, userID, run, err)
+					}
+					job.Description = candidate.Input.Description
+				}
 			}
 			evaluation := matching.Evaluate(profile, blacklist, filter, job.JobInput, time.Now())
 			if _, err = s.Store.SaveJobMatch(ctx, userID, job.ID, evaluation, filterID); err != nil {

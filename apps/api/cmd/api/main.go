@@ -31,14 +31,22 @@ func main() {
 		os.Exit(1)
 	}
 	dataStore := store.New(pool)
-	// Jobs stored before slugs existed are named in the background, so a large
-	// catalog does not hold up startup. Until then, and if it fails, they stay
-	// reachable by id, so a failure is logged rather than fatal.
+	// Catalog upkeep for jobs stored before a feature existed runs in the
+	// background, so a large catalog does not hold up startup. Neither step is
+	// needed to serve requests, so a failure is logged rather than fatal: an
+	// unnamed job stays reachable by id, and a description keeps its old text.
 	go func() {
 		if named, err := dataStore.NameUnnamedJobs(ctx); err != nil {
 			slog.Error("naming jobs failed", "error", err, "named", named)
 		} else if named > 0 {
 			slog.Info("named jobs", "count", named)
+		}
+		// Descriptions stored before Readable existed can still hold tags or
+		// entities; convert them once. Later runs find nothing to do.
+		if rewritten, err := dataStore.RewriteMarkedUpDescriptions(ctx, discovery.Readable); err != nil {
+			slog.Error("tidying job descriptions failed", "error", err, "rewritten", rewritten)
+		} else if rewritten > 0 {
+			slog.Info("tidied job descriptions", "count", rewritten)
 		}
 	}()
 	aiClient, err := llm.Build(llm.Options{

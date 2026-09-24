@@ -329,6 +329,52 @@ func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, so
 	return j, tx.Commit(ctx)
 }
 
+// RefreshDescription stores a provider's current text for a job already in
+// the catalog.
+func (s *Store) RefreshDescription(ctx context.Context, id, description string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE jobs SET description=$2 WHERE id=$1 AND description<>$2`, id, description)
+	return err
+}
+
+// RewriteMarkedUpDescriptions passes every stored description that still holds
+// HTML tags or entities through rewrite, and reports how many changed. It
+// walks the table once by id, so a text rewrite leaves marked up cannot make
+// it loop.
+func (s *Store) RewriteMarkedUpDescriptions(ctx context.Context, rewrite func(string) string) (int, error) {
+	changed, after := 0, "00000000-0000-0000-0000-000000000000"
+	for {
+		rows, err := s.DB.Query(ctx, `SELECT id,description FROM jobs WHERE id>$1 AND (description ~ '<[a-zA-Z/!][^>]*>' OR description ~ '&([a-zA-Z]+|#[0-9]+);') ORDER BY id LIMIT 500`, after)
+		if err != nil {
+			return changed, err
+		}
+		batch, seen := &pgx.Batch{}, 0
+		for rows.Next() {
+			var id, description string
+			if err = rows.Scan(&id, &description); err != nil {
+				rows.Close()
+				return changed, err
+			}
+			after, seen = id, seen+1
+			if clean := rewrite(description); clean != description {
+				batch.Queue(`UPDATE jobs SET description=$2 WHERE id=$1`, id, clean)
+			}
+		}
+		rows.Close()
+		if err = rows.Err(); err != nil {
+			return changed, err
+		}
+		if batch.Len() > 0 {
+			if err = s.DB.SendBatch(ctx, batch).Close(); err != nil {
+				return changed, err
+			}
+			changed += batch.Len()
+		}
+		if seen < 500 {
+			return changed, nil
+		}
+	}
+}
+
 // nameJobSQL gives a job the first free name of: the slug, the slug with the
 // start of the job's id, the slug with the whole id. The last contains the
 // job's own id, so it is always free.
