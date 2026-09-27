@@ -422,7 +422,12 @@ func (s *Store) RefreshDescription(ctx context.Context, id, description string) 
 // LinkToCheck is a job whose posting link is due a liveness check. The source
 // and any employer URL already found decide whether the check also asks the
 // aggregator where the posting applies.
-type LinkToCheck struct{ ID, ApplyURL, SourceProvider, EmployerURL string }
+type LinkToCheck struct {
+	ID             string `db:"id"`
+	ApplyURL       string `db:"apply_url"`
+	SourceProvider string `db:"source_provider"`
+	EmployerURL    string `db:"employer_url"`
+}
 
 // LinksToCheck returns open jobs that somebody still matches, least recently
 // checked first. Jobs nobody could apply to anyway are not worth a request.
@@ -434,7 +439,7 @@ func (s *Store) LinksToCheck(ctx context.Context, olderThan time.Duration, limit
 	if err != nil {
 		return nil, err
 	}
-	return pgx.CollectRows(rows, pgx.RowToStructByPos[LinkToCheck])
+	return pgx.CollectRows(rows, pgx.RowToStructByName[LinkToCheck])
 }
 
 // RecordLinkCheck notes that a job's link was checked and, when the check was
@@ -702,7 +707,7 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 }
 
 func (s *Store) Applications(ctx context.Context, u string) ([]models.Application, error) {
-	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false) FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -718,15 +723,15 @@ func (s *Store) Applications(ctx context.Context, u string) ([]models.Applicatio
 	return out, rows.Err()
 }
 func (s *Store) Application(ctx context.Context, u, id string) (models.Application, error) {
-	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false) FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
+	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
 }
 func scanApplication(row scanner) (models.Application, error) {
 	var a models.Application
 	var j models.Job
 	var rejected bool
-	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected)
+	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected, &j.EmployerURL)
 	if rejected {
-		j.ApplyURL = ""
+		j.ApplyURL, j.EmployerURL = "", ""
 	}
 	a.Job = &j
 	return a, err

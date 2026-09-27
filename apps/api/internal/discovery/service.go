@@ -372,20 +372,32 @@ type LinkResult struct {
 	EmployerURL string
 }
 
-// CheckJob checks one job's link now, giving the site at most timeout, and
-// records the answer. A failed check counts as open, so an unreachable site
-// never hides a job. An open posting from an aggregator that hands over to
-// the employer also learns where, once; the aggregator's own page still
-// decides whether the posting is open.
+// CheckJob checks one job's links now, giving each request at most timeout,
+// and records the answer. A failed check counts as open, so an unreachable
+// site never hides a job.
+//
+// A posting found through an aggregator is closed by either page: the
+// aggregator removing it, or the employer, where the application would go.
+// While the employer's page is not known, an open posting from an aggregator
+// that hands over by redirect asks where it is, once.
 func (s *Service) CheckJob(ctx context.Context, job store.LinkToCheck, timeout time.Duration) LinkResult {
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
 	var result LinkResult
-	if closed, reason, err := s.Links.Check(checkCtx, job.ApplyURL); err == nil {
-		result.Closed, result.Reason = closed, reason
+	for _, link := range []string{job.ApplyURL, job.EmployerURL} {
+		if link == "" || result.Closed {
+			continue
+		}
+		checkCtx, cancel := context.WithTimeout(ctx, timeout)
+		closed, reason, err := s.Links.Check(checkCtx, link)
+		cancel()
+		if err == nil {
+			result.Closed, result.Reason = closed, reason
+		}
 	}
 	if !result.Closed && job.EmployerURL == "" && RedirectsToEmployer(job.SourceProvider) {
-		if employer, err := s.Links.EmployerURL(checkCtx, job.SourceProvider, job.ApplyURL); err == nil {
+		lookupCtx, cancel := context.WithTimeout(ctx, timeout)
+		employer, err := s.Links.EmployerURL(lookupCtx, job.SourceProvider, job.ApplyURL)
+		cancel()
+		if err == nil {
 			result.EmployerURL = employer
 		}
 	}

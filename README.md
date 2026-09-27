@@ -570,7 +570,7 @@ Two rules earn their own note, because the failure modes are not symmetric:
 
 A background check revisits the links of jobs somebody still matches, at most once a day each, 25 every five minutes with a pause between requests. Only 404, 410 and Greenhouse's `error=true` redirect close a job; timeouts, 403 and 5xx leave it open. The checker refuses loopback, private and link-local addresses (checked after DNS), since the links come from feeds and users. A Greenhouse, Lever or Ashby job that its board's full feed stops listing is closed too, and reopened if the board lists it again.
 
-An Arbeitnow posting links to Arbeitnow's own page, whose `<posting>/apply` redirects to the employer's application page. The check reads that redirect once, without following it, and stores the target as `employer_url` when it is an http or https page off the aggregator. Composing reads the form there, so a posting Arbeitnow found on Greenhouse is answered like any Greenhouse job, and the job page's apply button opens the employer's page directly. The redirect still answers after a posting closes, so it never decides liveness: Arbeitnow's own page (410 when removed) does. Remotive has no such redirect and keeps its own link.
+An Arbeitnow posting links to Arbeitnow's own page, whose `<posting>/apply` redirects to the employer's application page. The check reads that redirect once, without following it, and stores the target as `employer_url` when it is an http or https page off the aggregator. Composing reads the form there, so a posting Arbeitnow found on Greenhouse is answered like any Greenhouse job, and the job page's apply button opens the employer's page directly. The redirect still answers after a posting closes, so it never decides liveness itself; once the employer's page is known, the check visits both, and either one removing the posting closes the job. Remotive has no such redirect and keeps its own link.
 
 An entry records two separate things:
 
@@ -782,7 +782,7 @@ Apply engine:
 | `compose_application` | write | Assemble a whole application into the outbox for review |
 | `cancel_outbox_entry` | write | Withdraw a composed application; reversible |
 
-List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
+List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does, and so is `employer_url`, the employer's own page behind an aggregator's posting, which agents are told to give the user in preference to `apply_url`. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
 
 **Deliberately absent, and worth keeping absent:**
 
