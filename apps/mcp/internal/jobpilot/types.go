@@ -31,6 +31,16 @@ type Job struct {
 	ClosedReason   string     `json:"closed_reason,omitempty"`
 }
 
+// JobReport is the wire shape of POST /api/jobs/{id}/report: whether the
+// posting closed for everyone, or is hidden from this user until its link or
+// a second person confirms it.
+type JobReport struct {
+	Closed       bool   `json:"closed"`
+	Reason       string `json:"reason,omitempty"`
+	HiddenForYou bool   `json:"hidden_for_you"`
+	Message      string `json:"message"`
+}
+
 type Evaluation struct {
 	Rejected         bool           `json:"rejected"`
 	RejectionReasons []string       `json:"rejection_reasons"`
