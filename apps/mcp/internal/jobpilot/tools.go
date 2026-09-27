@@ -410,16 +410,27 @@ func toolError(err error) error {
 	switch apiErr.Status {
 	case http.StatusConflict:
 		if strings.Contains(apiErr.Message, blockedMessage) {
-			return fmt.Errorf("%w. Rejected jobs never receive documents or applications; call get_job (or get_application for its block_reasons) and tell the user why", err)
+			return hinted{err, "Rejected jobs never receive documents or applications; call get_job (or get_application for its block_reasons) and tell the user why."}
 		}
 		return err
 	case http.StatusUnauthorized:
-		return fmt.Errorf("%w. JOBPILOT_TOKEN is invalid, expired, or revoked; the user can mint a new agent token under Settings and update the MCP server's configuration", err)
+		return hinted{err, "JOBPILOT_TOKEN is invalid, expired, or revoked; the user can mint a new agent token under Settings, or with pwsh -File scripts/agent-token.ps1, and update the MCP server's configuration."}
 	case http.StatusForbidden:
-		return fmt.Errorf("%w. This is a permission limit, not a product rule: the configured token lacks the scope this action needs, and the user can create one with write access under Settings", err)
+		return hinted{err, "This is a permission limit, not a product rule: the configured token lacks the scope this action needs, and the user can create one with write access under Settings, or with pwsh -File scripts/agent-token.ps1 -Write."}
 	}
 	return err
 }
+
+// hinted adds a hint to an error as the next sentence. The API's messages end
+// in a full stop already, and appending ". " after one read "scope.. This".
+// The error it wraps stays reachable with errors.As.
+type hinted struct {
+	err  error
+	hint string
+}
+
+func (h hinted) Error() string { return strings.TrimRight(h.err.Error(), ". ") + ". " + h.hint }
+func (h hinted) Unwrap() error { return h.err }
 
 func validStatus(status string) bool {
 	for _, s := range applicationStatuses {

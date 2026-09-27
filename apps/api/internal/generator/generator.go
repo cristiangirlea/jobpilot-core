@@ -12,6 +12,7 @@ func Generate(p models.Profile, job models.Job, match models.Evaluation) models.
 	title := clean(p.CurrentTitle, "professional")
 	company := clean(job.Company, "your company")
 	role := clean(job.Title, "the role")
+	notice, _ := p.NoticeText()
 	skills := allowedSkills(p, match.MatchedSkills)
 	skillText := "my relevant background"
 	if len(skills) > 0 {
@@ -27,7 +28,7 @@ func Generate(p models.Profile, job models.Job, match models.Evaluation) models.
 		"Why are you interested in this role?": fmt.Sprintf("I’m interested in the %s role because it aligns with my desired direction and my documented experience in %s.", role, skillText),
 		"Why are you a good fit?":              fmt.Sprintf("My profile shows relevant experience in %s%s. I would bring that experience to the responsibilities described for this role.", skillText, experience),
 		"Salary expectation.":                  expectation(p),
-		"Notice period.":                       fallbackSentence(p.NoticePeriod, "My notice period is best discussed during the interview process."),
+		"Notice period.":                       fallbackSentence(notice, "My notice period is best discussed during the interview process."),
 		"Work authorization.":                  fallbackSentence(p.WorkAuthorization, "I’m happy to clarify my work authorization for this location."),
 		"Remote work preference.":              preference(p),
 	}
@@ -82,10 +83,10 @@ func projectLine(p models.Profile) string {
 }
 func expectation(p models.Profile) string {
 	if p.SalaryExpectation > 0 {
-		return fmt.Sprintf("My salary expectation is %.0f %s, subject to the role’s full scope and benefits.", p.SalaryExpectation, clean(p.Currency, "in the applicable currency"))
+		return fmt.Sprintf("My salary expectation is %s, subject to the role’s full scope and benefits.", p.SalaryText())
 	}
 	if p.RateExpectation > 0 {
-		return fmt.Sprintf("My rate expectation is %.0f %s, subject to contract details.", p.RateExpectation, clean(p.Currency, "in the applicable currency"))
+		return fmt.Sprintf("My rate expectation is %s, subject to contract details.", p.SalaryText())
 	}
 	return "I’m open to discussing compensation based on the role’s scope and total package."
 }

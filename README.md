@@ -461,7 +461,7 @@ Every completion is cached in `llm_cache`, keyed on provider, model, task, syste
 
 Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
 
-1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone.
+1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone. A salary is stated with its period, "85,000 EUR per year" (yearly, as matching compares it with job salary ranges; a contract rate is per day), and is offered for review, because an employer will hold the candidate to a period the candidate did not write. A notice period of `0` reads "Available immediately"; a bare number, whose unit is unknown, is offered for review.
 2. **Exact reuse** - this same question, previously approved for this role family.
 3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
 4. **Provider** - only on a genuine miss. Stored unapproved.
@@ -723,7 +723,7 @@ make mcp
 claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
 ```
 
-The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
+The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Every variable it names has a default, so a session without the token starts without a warning, and the server's tools say what is missing. Claude Code asks once per project before trusting a checked-in server.
 
 Prefer the built binary registered with `claude mcp add` for day-to-day use. The project config runs from whichever checkout the session is in, so a worktree on an older branch, or a session with no `JOBPILOT_TOKEN` in its environment, cannot start it. Either way the server now starts without credentials rather than exiting, and every tool answers with what is missing and how to fix it, instead of the host reporting only a closed connection.
 
@@ -802,7 +802,7 @@ Server instructions tell the host that composing does not send, that blockers an
 | Prompt | Argument | Purpose |
 |---|---|---|
 | `prepare_application` | `job_id` (required) | Walk one job from its match explanation to a tracked application, stopping at a rejection and leaving the submission to the user |
-| `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next |
+| `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next; reads the filter to name the rule behind the strongest rejections |
 
 Both encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
 

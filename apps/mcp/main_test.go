@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -63,6 +64,22 @@ func TestStartsAndExplainsWhenCredentialsAreMissing(t *testing.T) {
 	for _, want := range []string{"not configured", "token", "agent-token.ps1", "restart"} {
 		if !strings.Contains(text.String(), want) {
 			t.Errorf("the error should mention %q so the user knows what to do: %s", want, text.String())
+		}
+	}
+}
+
+// Found in early use: once the binary was registered with its own
+// token, the checked-in .mcp.json still made every session warn that
+// JOBPILOT_TOKEN was missing. Each variable it names has a default, so the
+// file works without one, and the server explains a missing token itself.
+func TestCheckedInConfigNeedsNoEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", ".mcp.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ref := range regexp.MustCompile(`\$\{[^}]*\}`).FindAllString(string(raw), -1) {
+		if !strings.Contains(ref, ":-") {
+			t.Errorf("%s has no default, so a session without it warns", ref)
 		}
 	}
 }
