@@ -110,15 +110,27 @@ func (s *Store) CVFile(ctx context.Context, userID, id string) (models.CVDocumen
 }
 
 // SetCVApproval records the user's decision. Approval is what makes a CV
-// eligible to be sent, so it is stored explicitly with its timestamp.
+// eligible to be sent, so it is stored explicitly with its timestamp, and the
+// queued applications carrying the CV follow it in the same transaction.
 func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved bool) (models.CVDocument, error) {
-	doc, err := scanCV(s.DB.QueryRow(ctx, `UPDATE cv_documents
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	defer tx.Rollback(ctx)
+	doc, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents
 		SET approved=$3, approved_at=CASE WHEN $3 THEN now() ELSE NULL END, updated_at=now()
 		WHERE user_id=$1 AND id=$2 RETURNING `+cvColumns, userID, id, approved))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return models.CVDocument{}, pgx.ErrNoRows
 	}
-	return doc, err
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if err := syncCVBlocker(ctx, tx, userID, doc); err != nil {
+		return models.CVDocument{}, err
+	}
+	return doc, tx.Commit(ctx)
 }
 
 func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {
@@ -132,7 +144,6 @@ func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {
 	return nil
 }
 
-// ApprovedBaseCV returns the CV to attach when nothing more specific applies.
 // LatestBaseCV returns the user's uploaded CV that applications draw on: the
 // most recently approved one, or else the newest. An unapproved CV can still
 // supply facts for a tailored CV, which waits for approval itself; only an

@@ -102,15 +102,18 @@ func Tailor(ctx context.Context, client *llm.Client, profile models.Profile, job
 	tailored := Tailored{
 		Name:           strings.TrimSpace(facts.Name),
 		Headline:       strings.TrimSpace(facts.CurrentTitle),
-		Contact:        contactLines(facts),
+		Contact:        nonNil(contactLines(facts)),
 		Education:      nonNil(education),
 		Certifications: nonNil(facts.Certifications),
 		Languages:      nonNil(facts.Languages),
 		RoleFamily:     answers.RoleFamily(job.Title),
-		Technologies:   posting,
+		Technologies:   nonNil(posting),
 		Alignment:      Alignment(profile, baseText, job),
 	}
-	tailored.Skills, tailored.Highlighted, tailored.Missing = orderSkills(facts, job, postingSet)
+	// Lists are never nil: a nil slice is stored as JSON null, and readers of the
+	// stored CV should not have to guard every one of them.
+	skills, highlighted, missing := orderSkills(facts, job, postingSet)
+	tailored.Skills, tailored.Highlighted, tailored.Missing = nonNil(skills), nonNil(highlighted), nonNil(missing)
 	tailored.Experiences = orderExperiences(facts.Experiences, postingSet)
 	tailored.Summary, tailored.SummarySource = summarise(ctx, client, facts, job, match, tailored.Highlighted)
 	return tailored

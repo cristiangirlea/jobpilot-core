@@ -2,6 +2,7 @@ package cv
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -172,5 +173,18 @@ func TestALongSummaryIsCutOnACharacterBoundary(t *testing.T) {
 func TestCountWordTreatsTypographicPunctuationAsABoundary(t *testing.T) {
 	if n := countWord("kafka’s topics and “kafka” streams", "kafka"); n != 2 {
 		t.Errorf("countWord = %d, want 2", n)
+	}
+}
+
+// The tailored CV is stored as JSON and read by the web preview, which walks
+// every list. An empty profile must give empty lists, never null.
+func TestTailorNeverReturnsANilList(t *testing.T) {
+	tailored := Tailor(context.Background(), llm.New(nil, nil, 0, 0), models.Profile{Name: "Jane Doe"}, testJob(), models.Evaluation{}, "")
+	raw, err := json.Marshal(tailored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "null") {
+		t.Errorf("tailored CV has a null list: %s", raw)
 	}
 }

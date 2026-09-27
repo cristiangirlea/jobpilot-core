@@ -5,7 +5,7 @@ import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
 import {CVDocument,OutboxEntry} from "@/lib/types";
 import {Shell} from "@/components/Shell";
-import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
+import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
 const statusTone:Record<string,string>={
   needs_review:"bg-amber-50 text-amber-700",ready:"bg-sky-50 text-sky-700",
@@ -40,16 +40,15 @@ export default function OutboxPage(){
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   };
 
-  // Approving the CV alone leaves its blocker on the stored entry, so the
-  // application is prepared again: the approved CV is then reused as it is.
+  // Approving a CV clears its blocker on every application carrying it, so the
+  // entry is only read back, not prepared again.
   const approveCV=async(entry:OutboxEntry)=>{
     if(!entry.cv_document_id)return;
     setBusy(true);setError("");setNotice("");
     try{
       await api(`/cv/${entry.cv_document_id}/approve`,{method:"POST",body:JSON.stringify({approved:true})});
-      const updated=await api<OutboxEntry>(`/jobs/${entry.job_id}/compose`,{method:"POST",body:"{}"});
-      setOpen(updated);await load();
-      setNotice(`CV approved, and the application was prepared again with it.${updated.cover_letter_source==="ai"?" The cover letter was drafted again, so read it before approving.":""}`);
+      setNotice("CV approved. Applications carrying it no longer wait on it.");
+      setOpen(await api<OutboxEntry>(`/outbox/${entry.id}`));await load();
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   };
 
@@ -155,7 +154,7 @@ function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
 
 const decisionLabel:Record<string,string>={
   base:"Your base CV, sent as it is",
-  reused:"A tailored CV you approved for a similar role",
+  reused:"A tailored CV you already approved",
   generated:"Tailored for this role",
 };
 
@@ -164,8 +163,11 @@ const decisionLabel:Record<string,string>={
 function CVCard({entry,busy,done,onApprove}:{entry:OutboxEntry;busy:boolean;done:boolean;onApprove:(entry:OutboxEntry)=>void}){
   const [cv,setCV]=useState<CVDocument|null>(null);
   useEffect(()=>{
+    // A slower answer for the entry open before must not land on this one.
+    let current=true;
     setCV(null);
-    api<CVDocument>(`/cv/${entry.cv_document_id}`).then(setCV).catch(()=>{});
+    api<CVDocument>(`/cv/${entry.cv_document_id}`).then(doc=>{if(current)setCV(doc)}).catch(()=>{});
+    return ()=>{current=false};
   },[entry.cv_document_id,entry.updated_at]);
   const tailored=cv?.parsed?.tailored;
   const missing=tailored?.missing??[];
@@ -176,8 +178,7 @@ function CVCard({entry,busy,done,onApprove}:{entry:OutboxEntry;busy:boolean;done
         <p className="muted text-sm">{decisionLabel[entry.cv_decision||""]||"Attached CV"}{cv&&` · ${cv.filename}`}</p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
-        {cv&&<span className={`rounded-lg px-2 py-1 text-[10px] font-bold ${cv.approved?"bg-sage text-moss":"bg-amber-50 text-amber-700"}`}>
-          {cv.approved?"APPROVED":"NEEDS REVIEW"}</span>}
+        {cv&&<ApprovalChip approved={cv.approved}/>}
         <Link className="btn-secondary !py-2" href={`/cv?open=${entry.cv_document_id}`}>Preview</Link>
         {cv&&!cv.approved&&!done&&<button className="btn-primary !py-2" disabled={busy} onClick={()=>onApprove(entry)}>Approve CV</button>}
       </div>

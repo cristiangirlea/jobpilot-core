@@ -5,7 +5,7 @@ import {api,token} from "@/lib/api";
 import {CVDocument,CVImportResult} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {TailoredPreview} from "@/components/TailoredPreview";
-import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
+import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
 const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8080/api";
 
@@ -20,10 +20,14 @@ export default function CVPage(){
   const load=async()=>{try{const list=await api<CVDocument[]>("/cv");setItems(list);return list}catch(e){setError((e as Error).message);return []}};
   // /cv?open=<id> opens that document, so the outbox can link to the CV an
   // application carries.
+  // The parameter is dropped once used, so a reload stays on what the user
+  // picked since.
   useEffect(()=>{load().then(list=>{
     const wanted=new URLSearchParams(window.location.search).get("open");
+    if(!wanted)return;
     const match=list.find(item=>item.id===wanted);
-    if(match)setOpen(match);
+    if(match)setOpen(match);else setError("That CV no longer exists.");
+    window.history.replaceState(null,"",window.location.pathname);
   })},[]);
 
   // Upload goes through fetch directly: the shared client sends JSON, and this
@@ -83,8 +87,7 @@ export default function CVPage(){
                     <p className="truncate text-sm font-semibold">{item.label||item.filename}</p>
                     <p className="muted mt-0.5 text-xs">{item.kind==="tailored"?"Tailored":"Base"} · {item.format.toUpperCase()} · {Math.round(item.size_bytes/1024)} KB</p>
                   </div>
-                  <span className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-bold ${item.approved?"bg-sage text-moss":"bg-amber-50 text-amber-700"}`}>
-                    {item.approved?"APPROVED":"NEEDS REVIEW"}</span>
+                  <ApprovalChip approved={item.approved}/>
                 </div>
               </button>)}
           </div>
@@ -98,7 +101,13 @@ function CVDetail({item,busy,onApprove,onImport,onDelete}:{item:CVDocument;busy:
   const [full,setFull]=useState<CVDocument|null>(null);
   // A tailored CV opens on its preview; a base CV on what was read from it.
   const [tab,setTab]=useState<"preview"|"parsed"|"text">(item.kind==="tailored"?"preview":"parsed");
-  useEffect(()=>{setFull(null);setTab(item.kind==="tailored"?"preview":"parsed");api<CVDocument>(`/cv/${item.id}`).then(setFull).catch(()=>{})},[item.id,item.kind]);
+  useEffect(()=>{
+    // A slower answer for the document open before must not land on this one.
+    let current=true;
+    setFull(null);setTab(item.kind==="tailored"?"preview":"parsed");
+    api<CVDocument>(`/cv/${item.id}`).then(doc=>{if(current)setFull(doc)}).catch(()=>{});
+    return ()=>{current=false};
+  },[item.id,item.kind]);
   const parsed=full?.parsed;
   const tailored=parsed?.tailored;
   // A tailored CV made before previews existed has only its text to show.
@@ -130,7 +139,9 @@ function CVDetail({item,busy,onApprove,onImport,onDelete}:{item:CVDocument;busy:
       </div>}
 
     {legacyTailored&&<p className="mt-5 rounded-xl bg-black/[0.03] px-4 py-3 text-sm text-ink/70">
-      This CV was made before previews existed. Prepare the application again to get a fresh one you can preview.</p>}
+      This CV was made before previews existed. {item.approved
+        ?"An application keeps a CV you approved, so withdraw the approval first, then prepare the application again to get a fresh one you can preview."
+        :"Prepare the application again to get a fresh one you can preview."}</p>}
     {full&&<>
       <div className="mt-5 flex gap-2">
         {tabs.map(name=>

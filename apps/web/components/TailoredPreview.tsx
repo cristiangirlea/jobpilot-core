@@ -4,7 +4,10 @@ import {TailoredCV} from "@/lib/types";
 // tailored against: which of the job's technologies the CV shows, and which
 // it does not. Missing ones are never added to the CV; they are listed so the
 // user can decide whether the role is worth it.
-export function TailoredPreview({cv}:{cv:TailoredCV}){
+export function TailoredPreview({cv:stored}:{cv:TailoredCV}){
+  // CVs stored before the API always sent lists may carry null for an empty one.
+  const cv={...stored,contact:stored.contact??[],skills:stored.skills??[],experiences:stored.experiences??[],
+    education:stored.education??[],certifications:stored.certifications??[],languages:stored.languages??[]};
   const highlighted=cv.highlighted??[],missing=cv.missing??[];
   const wanted=new Set(highlighted.map(x=>x.toLowerCase()));
   return <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_260px]">

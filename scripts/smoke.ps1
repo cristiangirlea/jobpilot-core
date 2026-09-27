@@ -138,15 +138,23 @@ if ($recomposed.notices -contains "You had approved this application. Rebuilding
     throw "An entry that was never approved should not report a withdrawn approval"
 }
 
-# A tailored CV starts as a draft that blocks the application. Once approved,
-# preparing the application again keeps that CV rather than drafting another,
-# so the blocker clears.
+# A tailored CV starts as a draft that blocks the application. Approving it
+# clears that blocker on the queued entry at once, preparing the application
+# again keeps the approved CV, and withdrawing the approval blocks it again.
 $cvBlocker = "A tailored CV was prepared for this role and needs your approval before it can be sent."
 if ($recomposed.blockers -notcontains $cvBlocker) { throw "A freshly tailored CV should block the application until approved" }
 Send-JobPilotRequest POST "/cv/$($recomposed.cv_document_id)/approve" @{ approved = $true } | Out-Null
+$afterApproval = Send-JobPilotRequest GET "/outbox/$($recomposed.id)"
+if ($afterApproval.blockers -contains $cvBlocker) { throw "Approving the CV should clear its blocker on the queued application" }
 $keptCV = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/compose"
 if ($keptCV.cv_document_id -ne $recomposed.cv_document_id) { throw "Preparing again should keep the approved tailored CV" }
+if ($keptCV.cv_decision -ne "reused") { throw "A kept CV should be reported as reused, got $($keptCV.cv_decision)" }
 if ($keptCV.blockers -contains $cvBlocker) { throw "An approved CV should no longer block the application" }
+Send-JobPilotRequest POST "/cv/$($keptCV.cv_document_id)/approve" @{ approved = $false } | Out-Null
+$afterWithdrawal = Send-JobPilotRequest GET "/outbox/$($keptCV.id)"
+if ($afterWithdrawal.blockers -notcontains $cvBlocker -or $afterWithdrawal.status -ne "needs_review") {
+    throw "Withdrawing the CV's approval should block the application again"
+}
 Assert-NotFound { Send-JobPilotRequest DELETE "/answers/00000000-0000-0000-0000-000000000000" } "Deleting an unknown answer"
 Assert-NotFound { Send-JobPilotRequest DELETE "/cv/00000000-0000-0000-0000-000000000000" } "Deleting an unknown CV"
 
