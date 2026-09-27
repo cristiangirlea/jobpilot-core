@@ -6,11 +6,13 @@
 // select is answered with one of its own options rather than by guessing at a
 // page's DOM.
 //
-// Only read-only, publicly documented endpoints are used. Nothing here submits
-// an application.
+// Only read-only, public endpoints are used: Greenhouse's documented board API,
+// and for Ashby the endpoint its own public job page calls. Both return what
+// any visitor to the posting sees. Nothing here submits an application.
 package ats
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -99,6 +101,8 @@ const greenhouseAPI = "https://boards-api.greenhouse.io"
 type Reader struct {
 	client         *http.Client
 	greenhouseBase string
+	// ashbyBase replaces the Ashby origin in tests.
+	ashbyBase string
 }
 
 func NewReader() *Reader {
@@ -199,10 +203,11 @@ func (r *Reader) Fetch(ctx context.Context, applyURL string) (Form, error) {
 	switch provider {
 	case ProviderGreenhouse:
 		return r.greenhouse(ctx, board, jobID, applyURL)
+	case ProviderAshby:
+		return r.ashby(ctx, board, jobID, applyURL)
 	default:
 		// The other providers are detected so the composer can report which ATS
-		// a job uses, but their form schemas are not published the way
-		// Greenhouse's are.
+		// a job uses, but their forms are not read yet.
 		return Form{Provider: provider, Board: board, JobID: jobID, ApplyURL: applyURL}, ErrUnsupported
 	}
 }
@@ -355,6 +360,24 @@ func (r *Reader) get(ctx context.Context, endpoint string, out any) error {
 	if err != nil {
 		return err
 	}
+	return r.do(request, out)
+}
+
+// post sends body as JSON, for the boards whose form is read through a query.
+func (r *Reader) post(ctx context.Context, endpoint string, body, out any) error {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	return r.do(request, out)
+}
+
+func (r *Reader) do(request *http.Request, out any) error {
 	request.Header.Set("Accept", "application/json")
 	response, err := r.client.Do(request)
 	if err != nil {
