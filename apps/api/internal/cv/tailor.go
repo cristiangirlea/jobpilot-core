@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/llm"
@@ -116,9 +118,9 @@ func Tailor(ctx context.Context, client *llm.Client, profile models.Profile, job
 
 // withCV fills the profile's gaps from the candidate's uploaded CV, read with
 // the current parser. The profile wins wherever it has a value, because the
-// candidate edits it; the CV supplies the rest. Experience comes from whichever
-// source describes the roles more fully, since a hand-entered profile often
-// lists titles without the bullets the CV has. The headline is only ever the
+// candidate edits it; the CV supplies the rest. Roles from both are kept (see
+// mergeRoles), since a hand-entered profile often lists titles without the
+// bullets the CV has, and the CV may lag a new job. The headline is only ever the
 // candidate's own title: using the posting's would claim a role they never held.
 func withCV(profile models.Profile, baseText string) (models.Profile, []string) {
 	if strings.TrimSpace(baseText) == "" {
@@ -144,9 +146,7 @@ func withCV(profile models.Profile, baseText string) (models.Profile, []string) 
 	if len(merged.Skills) == 0 {
 		merged.Skills = fromCV.Skills
 	}
-	if describedLength(fromCV.Experiences) > describedLength(merged.Experiences) {
-		merged.Experiences = fromCV.Experiences
-	}
+	merged.Experiences = mergeRoles(profile.Experiences, fromCV.Experiences)
 	if len(merged.Certifications) == 0 {
 		merged.Certifications = fromCV.Certifications
 	}
@@ -156,12 +156,37 @@ func withCV(profile models.Profile, baseText string) (models.Profile, []string) 
 	return merged, fromCV.Education
 }
 
-func describedLength(experiences []models.WorkExperience) int {
-	total := 0
-	for _, experience := range experiences {
-		total += len(strings.TrimSpace(experience.Description))
+// mergeRoles keeps every role from both sources, since tailoring never drops
+// one. The profile's roles come first, in its order, and a profile role with
+// no description takes the CV's bullets for the same employer; the CV's other
+// roles follow in the CV's order.
+func mergeRoles(profile, fromCV []models.WorkExperience) []models.WorkExperience {
+	if len(profile) == 0 {
+		return fromCV
 	}
-	return total
+	byCompany := map[string]models.WorkExperience{}
+	for _, role := range fromCV {
+		key := strings.ToLower(strings.TrimSpace(role.Company))
+		if _, seen := byCompany[key]; key != "" && !seen {
+			byCompany[key] = role
+		}
+	}
+	merged := make([]models.WorkExperience, 0, len(profile)+len(fromCV))
+	used := map[string]bool{}
+	for _, role := range profile {
+		key := strings.ToLower(strings.TrimSpace(role.Company))
+		if match, ok := byCompany[key]; ok && strings.TrimSpace(role.Description) == "" {
+			role.Description = match.Description
+		}
+		used[key] = true
+		merged = append(merged, role)
+	}
+	for _, role := range fromCV {
+		if key := strings.ToLower(strings.TrimSpace(role.Company)); !used[key] || key == "" {
+			merged = append(merged, role)
+		}
+	}
+	return merged
 }
 
 func nonNil(list []string) []string {
@@ -206,10 +231,16 @@ func orderSkills(profile models.Profile, job models.Job, postingSet map[string]b
 			continue
 		}
 		normalized := answers.TechnologySignature(1, name)
-		wants := countWord(postingText, strings.ToLower(name)) > 0
-		if len(normalized) == 1 && postingSet[normalized[0]] {
-			wants = true
+		inVocabulary := len(normalized) == 1 && postingSet[normalized[0]]
+		if inVocabulary {
 			held[normalized[0]] = true
+		}
+		wants := inVocabulary || countWord(postingText, strings.ToLower(name)) > 0
+		// An all-capitals name such as REST or AWS must appear as written,
+		// whichever way it matched: in lower case it is often just a word, as
+		// in "the rest of the team".
+		if name == strings.ToUpper(name) {
+			wants = countWord(job.Title+" "+job.Description, name) > 0
 		}
 		entries = append(entries, entry{name: name, years: skill.Years, wants: wants, mentions: countWord(history.String(), strings.ToLower(name))})
 	}
@@ -436,7 +467,13 @@ func deterministicSummary(profile models.Profile) string {
 		}
 		cut := strings.LastIndex(summary[:maxSummary], ". ")
 		if cut < maxSummary/2 {
-			return strings.TrimSpace(summary[:maxSummary])
+			// No sentence end near the limit: cut on a character boundary so
+			// the result stays valid UTF-8.
+			end := maxSummary
+			for end > 0 && !utf8.RuneStart(summary[end]) {
+				end--
+			}
+			return strings.TrimSpace(summary[:end])
 		}
 		return summary[:cut+1]
 	}
@@ -492,9 +529,9 @@ func listOrNoneText(items []string) string {
 	return strings.Join(items, ", ")
 }
 
-// countWord counts whole-word occurrences of term in text, both lowercased. A
-// boundary is anything but a letter or digit, so "go" does not count inside
-// "going" and "node.js" counts after "(".
+// countWord counts whole-word occurrences of term in text, compared as given.
+// A boundary is anything but a letter or digit, so "go" does not count inside
+// "going" while "node.js" counts after "(" and "kafka" before "’s".
 func countWord(text, term string) int {
 	if term == "" {
 		return 0
@@ -506,13 +543,13 @@ func countWord(text, term string) int {
 			return count
 		}
 		start, end := offset+index, offset+index+len(term)
-		if (start == 0 || !isWordChar(text[start-1])) && (end == len(text) || !isWordChar(text[end])) {
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if (start == 0 || !isWordRune(before)) && (end == len(text) || !isWordRune(after)) {
 			count++
 		}
 		offset = start + 1
 	}
 }
 
-func isWordChar(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b >= 0x80
-}
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }

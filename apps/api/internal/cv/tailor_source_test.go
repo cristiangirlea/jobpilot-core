@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
@@ -125,5 +126,51 @@ func TestSkillsWithoutYearsFollowTheEvidence(t *testing.T) {
 	want := []string{"Hatchet", "Kafka", "Beanstalkd", "ABAC"}
 	if strings.Join(skills, ",") != strings.Join(want, ",") {
 		t.Errorf("skills = %v, want %v: the posting's first, then by mentions in experience", skills, want)
+	}
+}
+
+// A role only the profile knows, such as a new job the CV does not list yet,
+// must survive being merged with a fuller CV.
+func TestTailorKeepsProfileRolesTheCVLacks(t *testing.T) {
+	profile := models.Profile{Name: "Jane Doe", Experiences: []models.WorkExperience{
+		{Title: "Staff Engineer", Company: "Newco", StartDate: "2023", Current: true},
+		{Title: "Senior Software Engineer, Payments & Backend", Company: "Acme Security", StartDate: "Dec 2022"},
+	}}
+	roles := Tailor(context.Background(), llm.New(nil, nil, 0, 0), profile, testJob(), models.Evaluation{}, pipeLayoutCV).Experiences
+	companies := make([]string, 0, len(roles))
+	for _, role := range roles {
+		companies = append(companies, role.Company)
+	}
+	if strings.Join(companies, ",") != "Newco,Acme Security,Globex,Umbrella Corp,Initech" {
+		t.Fatalf("companies = %v: profile roles first, then the CV's others, none lost", companies)
+	}
+	// The profile's Acme role had no description; the CV's bullets fill it.
+	if len(roles[1].Bullets) == 0 {
+		t.Error("a profile role with no description should take the CV's bullets for the same employer")
+	}
+}
+
+// An acronym that is also a word only counts when the posting writes it as
+// the acronym.
+func TestAcronymSkillsNeedTheAcronym(t *testing.T) {
+	profile := models.Profile{Name: "Jane Doe", Skills: []models.Skill{{Name: "REST"}, {Name: "Terraform"}}}
+	job := models.Job{JobInput: models.JobInput{Title: "Engineer", Description: "You will join the rest of the team and write terraform modules."}}
+	tailored := Tailor(context.Background(), llm.New(nil, nil, 0, 0), profile, job, models.Evaluation{}, "")
+	if strings.Join(tailored.Highlighted, ",") != "Terraform" {
+		t.Errorf("highlighted = %v, want only Terraform", tailored.Highlighted)
+	}
+}
+
+func TestALongSummaryIsCutOnACharacterBoundary(t *testing.T) {
+	summary := strings.Repeat("€", 300) // 900 bytes of 3-byte runes, no sentence end
+	got := deterministicSummary(models.Profile{Summary: summary})
+	if !utf8.ValidString(got) || len(got) > maxSummary {
+		t.Errorf("cut summary is %d bytes, valid UTF-8 = %v", len(got), utf8.ValidString(got))
+	}
+}
+
+func TestCountWordTreatsTypographicPunctuationAsABoundary(t *testing.T) {
+	if n := countWord("kafka’s topics and “kafka” streams", "kafka"); n != 2 {
+		t.Errorf("countWord = %d, want 2", n)
 	}
 }
