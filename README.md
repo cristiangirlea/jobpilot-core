@@ -30,6 +30,7 @@ The full local stack is implemented and usable:
 - CV tailoring per posting, with approve-once-reuse-many for similar roles.
 - Reading the employer's published application form (Greenhouse) and resolving it.
 - An outbox that composes a whole application and holds it for approval.
+- Closed-posting detection: links returning 404/410 and jobs dropped from a full employer board are marked closed, leave recommendations, and cannot be composed.
 - Curated employer boards and board-token extraction from a pasted careers URL.
 - Web pages for CVs, the answer bank, and the outbox.
 
@@ -564,7 +565,9 @@ Two rules earn their own note, because the failure modes are not symmetric:
 
 ## The outbox
 
-`POST /api/jobs/{id}/compose` assembles a whole application - the CV, the cover letter, and every form answer - and queues it. **Composition never sends.** The user reviews exactly what an employer would receive.
+`POST /api/jobs/{id}/compose` assembles a whole application - the CV, the cover letter, and every form answer - and queues it. **Composition never sends.** The user reviews exactly what an employer would receive. A closed posting is refused with 409; an open job's link is checked again first, because postings close between the background checks.
+
+A background check revisits the links of jobs somebody still matches, at most once a day each, 25 every five minutes with a pause between requests. Only 404, 410 and Greenhouse's `error=true` redirect close a job; timeouts, 403 and 5xx leave it open. The checker refuses loopback, private and link-local addresses (checked after DNS), since the links come from feeds and users. A Greenhouse, Lever or Ashby job that its board's full feed stops listing is closed too, and reopened if the board lists it again.
 
 An entry records two separate things:
 
@@ -668,7 +671,7 @@ Authorization: Bearer <token>
 | `POST` | `/api/cv/{id}/approve` | Approve or unapprove a CV for sending |
 | `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
 | `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
-| `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval |
+| `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval; 409 for a closed posting |
 | `GET` | `/api/outbox` | The approval queue; `?status=` filters |
 | `GET` | `/api/outbox/{id}` | One composed application in full |
 | `POST` | `/api/outbox/{id}/approve` | Release an application for sending |

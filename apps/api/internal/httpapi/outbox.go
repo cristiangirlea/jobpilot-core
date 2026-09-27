@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/ats"
@@ -32,6 +33,19 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	}
 	if job.Match.Rejected {
 		problem(w, 409, store.ErrApplicationBlocked.Error())
+		return
+	}
+	// A closed posting cannot be applied to. Postings close between background
+	// checks, so an open job's link is checked again now; a check that fails
+	// leaves the job open.
+	if job.Job.ClosedAt == nil && job.Job.ApplyURL != "" && s.Discovery != nil {
+		if closed, reason := s.Discovery.CheckJob(ctx, job.Job.ID, job.Job.ApplyURL, 8*time.Second); closed {
+			now := time.Now()
+			job.Job.ClosedAt, job.Job.ClosedReason = &now, reason
+		}
+	}
+	if job.Job.ClosedAt != nil {
+		problem(w, 409, "This posting has closed: "+job.Job.ClosedReason+". It can no longer be applied to.")
 		return
 	}
 	profile, err := s.Store.Profile(ctx, uid)
