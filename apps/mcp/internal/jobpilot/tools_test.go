@@ -3,6 +3,7 @@ package jobpilot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -591,5 +592,28 @@ func TestDashboardAndDiscovery(t *testing.T) {
 	res, text = call(t, cs, "get_profile", nil)
 	if got := structured[Profile](t, res); got.Name != "Octavian" || len(got.Skills) != 1 {
 		t.Fatalf("unexpected profile: %s", text)
+	}
+}
+
+// Found in early use: the API's messages end in a full stop, and the
+// hints were appended after another, so a refusal read "write scope.. This".
+// A CLI user also needs to know the script mints tokens, not only Settings.
+func TestToolErrorHintsReadAsSentences(t *testing.T) {
+	for _, c := range []struct {
+		status        int
+		message, want string
+	}{
+		{http.StatusForbidden, "This token does not have the write scope.", "agent-token.ps1"},
+		{http.StatusUnauthorized, "Invalid or expired token.", "agent-token.ps1"},
+		{http.StatusConflict, blockedMessage, "get_job"},
+	} {
+		err := toolError(&APIError{Status: c.status, Message: c.message})
+		if text := err.Error(); strings.Contains(text, "..") || !strings.Contains(text, c.want) {
+			t.Errorf("%d: %q should read as sentences and mention %s", c.status, text, c.want)
+		}
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || apiErr.Status != c.status {
+			t.Errorf("%d: the API error must stay reachable for callers", c.status)
+		}
 	}
 }

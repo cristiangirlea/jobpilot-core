@@ -723,7 +723,7 @@ make mcp
 claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
 ```
 
-The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
+The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Every variable it names has a default, so a session without the token starts without a warning, and the server's tools say what is missing. Claude Code asks once per project before trusting a checked-in server.
 
 Prefer the built binary registered with `claude mcp add` for day-to-day use. The project config runs from whichever checkout the session is in, so a worktree on an older branch, or a session with no `JOBPILOT_TOKEN` in its environment, cannot start it. Either way the server now starts without credentials rather than exiting, and every tool answers with what is missing and how to fix it, instead of the host reporting only a closed connection.
 
@@ -802,7 +802,7 @@ Server instructions tell the host that composing does not send, that blockers an
 | Prompt | Argument | Purpose |
 |---|---|---|
 | `prepare_application` | `job_id` (required) | Walk one job from its match explanation to a tracked application, stopping at a rejection and leaving the submission to the user |
-| `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next |
+| `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next; reads the filter to name the rule behind the strongest rejections |
 
 Both encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
 

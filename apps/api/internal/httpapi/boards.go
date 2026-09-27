@@ -31,7 +31,7 @@ func (s *Server) detectBoard(w http.ResponseWriter, r *http.Request) {
 	}
 	detected, ok := boards.Extract(body.URL)
 	if !ok {
-		problem(w, 422, "That link is not a job board this app can follow. Greenhouse, Lever, Ashby and SmartRecruiters board links work; an aggregator link does not.")
+		problem(w, 422, "That link is not a job board this app can follow. Links to Greenhouse, Lever, Ashby and SmartRecruiters boards or their postings work; a company's own careers page and job aggregators do not.")
 		return
 	}
 	if !detected.Supported {
