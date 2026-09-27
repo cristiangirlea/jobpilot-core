@@ -37,7 +37,9 @@ const ashbyPayload = `{"data":{"jobPosting":{
       {"isRequired":false,"field":{"path":"date-1","title":"Earliest start date","type":"Date"}},
       {"isRequired":true,"field":{"path":"gender-1","title":"What is your gender?","type":"ValueSelect"}},
       {"isRequired":true,"field":{"path":"consent-1","title":"I confirm the information above is true","type":"MultiValueSelect",
-        "selectableValues":[{"label":"Yes","value":"y"}]}}
+        "selectableValues":[{"label":"Yes","value":"y"}]}},
+      {"isRequired":true,"field":{"path":"privacy-1","title":"Data Privacy Consent","type":"MultiValueSelect",
+        "selectableValues":[{"label":"I agree","value":"y"}]}}
     ]}
   ]},
   "surveyForms":[{"sections":[{"fieldEntries":[
@@ -47,6 +49,10 @@ const ashbyPayload = `{"data":{"jobPosting":{
 }}}`
 
 func fetchAshbyAgainst(t *testing.T, body string) (Form, error) {
+	return fetchAshbyWithStatus(t, body, http.StatusOK)
+}
+
+func fetchAshbyWithStatus(t *testing.T, body string, status int) (Form, error) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
@@ -62,6 +68,7 @@ func fetchAshbyAgainst(t *testing.T, body string) (Form, error) {
 			http.Error(w, "wrong posting", http.StatusBadRequest)
 			return
 		}
+		w.WriteHeader(status)
 		w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
@@ -103,6 +110,9 @@ func TestAshbyFormIsNormalised(t *testing.T) {
 		// An unknown type is kept as text, never dropped.
 		{"date-1", TypeText, RoleQuestion, false},
 		{"consent-1", TypeMultiSelect, RoleDeclaration, true},
+		// Ashby's consent boxes are often labelled with the one word; consent
+		// is the applicant's own to give.
+		{"privacy-1", TypeMultiSelect, RoleDeclaration, true},
 	}
 	for _, c := range cases {
 		field, ok := byName[c.name]
@@ -156,9 +166,16 @@ func TestAshbyNullPostingIsNotFound(t *testing.T) {
 	}
 }
 
-func TestAshbyQueryErrorsAreReported(t *testing.T) {
-	_, err := fetchAshbyAgainst(t, `{"errors":[{"message":"Cannot query field"}]}`)
-	if err == nil || errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "Cannot query field") {
-		t.Fatalf("a GraphQL error should be reported as such, got %v", err)
+// A query Ashby rejects, or its endpoint answering 404, says nothing about the
+// posting: the form is unreadable, never the job closed.
+func TestAshbyEndpointFailuresNeverCloseTheJob(t *testing.T) {
+	for name, fetch := range map[string]func() (Form, error){
+		"query error":  func() (Form, error) { return fetchAshbyAgainst(t, `{"errors":[{"message":"Cannot query field"}]}`) },
+		"endpoint 404": func() (Form, error) { return fetchAshbyWithStatus(t, `not found`, http.StatusNotFound) },
+	} {
+		_, err := fetch()
+		if !errors.Is(err, errAshbyUnavailable) || errors.Is(err, ErrNotFound) {
+			t.Errorf("%s: want the form reported unreadable, got %v", name, err)
+		}
 	}
 }

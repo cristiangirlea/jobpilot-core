@@ -261,10 +261,7 @@ func (r *Reader) greenhouse(ctx context.Context, board, jobID, applyURL string) 
 			form.Skipped = append(form.Skipped, question.Label)
 			continue
 		}
-		if declarationPattern.MatchString(question.Label) {
-			field.Role = RoleDeclaration
-		}
-		form.Fields = append(form.Fields, field)
+		form.admit(field)
 	}
 
 	// Equal-opportunity, veteran, disability and demographic questions are
@@ -280,6 +277,20 @@ func (r *Reader) greenhouse(ctx context.Context, board, jobID, applyURL string) 
 		form.Skipped = append(form.Skipped, question.Label)
 	}
 	return form, nil
+}
+
+// admit adds a question to the form, the same way for every provider. One
+// about a protected characteristic is only counted as skipped, and a
+// declaration is marked so it is never answered for the applicant.
+func (f *Form) admit(field Field) {
+	if protectedPattern.MatchString(field.Label) {
+		f.Skipped = append(f.Skipped, field.Label)
+		return
+	}
+	if declarationPattern.MatchString(field.Label) {
+		field.Role = RoleDeclaration
+	}
+	f.Fields = append(f.Fields, field)
 }
 
 var resumePattern = regexp.MustCompile(`(?i)\b(resume|cv|curriculum)\b`)

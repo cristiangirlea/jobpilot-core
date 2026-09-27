@@ -138,6 +138,12 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
+			if answer.Source == "upload" {
+				if answer.Required {
+					entry.Blockers = append(entry.Blockers, fmt.Sprintf("You have to upload this yourself on the employer's form: %q", answer.Label))
+				}
+				continue
+			}
 			if answer.Required && strings.TrimSpace(answer.Answer) == "" {
 				entry.Blockers = append(entry.Blockers, fmt.Sprintf("A required question has no answer yet: %q", answer.Label))
 			}
@@ -211,15 +217,20 @@ func (s *Server) answerForm(ctx context.Context, uid string, form ats.Form, prof
 			Field: field.Name, Label: field.Label, Type: field.Type,
 			Required: field.Required, Options: field.Options,
 		}
-		switch field.Role {
-		case ats.RoleResume:
+		switch {
+		case field.Role == ats.RoleResume:
 			answer.Answer, answer.Source = "(the approved CV is attached)", "cv"
-		case ats.RoleCoverLetter:
+		case field.Role == ats.RoleCoverLetter:
 			answer.Answer, answer.Source = "(the composed cover letter is attached)", "cover_letter"
-		case ats.RoleDeclaration:
+		case field.Role == ats.RoleDeclaration:
 			// An undertaking the applicant makes personally. Ticking it for them
 			// would be making a statement on their behalf.
 			answer.Source, answer.NeedsReview = "declaration", true
+		case field.Type == ats.TypeFile:
+			// Any other upload, such as a transcript, is a document only the
+			// applicant has. A drafted sentence is not a file, and answering it
+			// with one would hide that the form still needs something.
+			answer.Source, answer.NeedsReview = "upload", true
 		default:
 			resolution, err := service.Resolve(ctx, uid, answers.Question{
 				Text: field.Label, Kind: field.Type, Options: field.Options, MaxLength: field.MaxLength,

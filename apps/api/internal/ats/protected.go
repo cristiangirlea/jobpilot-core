@@ -23,4 +23,4 @@ import "regexp"
 
 var protectedPattern = regexp.MustCompile(`(?i)(\b(gender|race|ethnic|ethnicity|veteran|military|pronouns|transgender|nationality|religion|religious|marital|pregnant|pregnancy|caste)\b|disabilit|sexual orientation|sex you identify|national origin|date of birth|age range|\byour age\b)`)
 
-var declarationPattern = regexp.MustCompile(`(?i)(\bi (agree|confirm|certify|declare|consent|understand)\b|\b(certify|declare|attest|acknowledge|signature|truthful)\b|own words|own work|written by ai|read and (agree|accept)|terms and conditions|privacy (policy|notice)|code of conduct)`)
+var declarationPattern = regexp.MustCompile(`(?i)(\bi (agree|confirm|certify|declare|consent|understand)\b|\bconsent\b|\b(certify|declare|attest|acknowledge|signature|truthful)\b|own words|own work|written by ai|read and (agree|accept)|terms and conditions|privacy (policy|notice)|code of conduct)`)

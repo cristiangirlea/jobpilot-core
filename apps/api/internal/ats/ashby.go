@@ -2,7 +2,7 @@ package ats
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"strings"
 )
 
@@ -20,6 +20,11 @@ const ashbyPostingQuery = `query ApiJobPosting($organizationHostedJobsPageName: 
     surveyForms { sections { fieldEntries { ... on FormFieldEntry { field } } } }
   }
 }`
+
+// errAshbyUnavailable is shown to the user as the reason a form could not be
+// read. Ashby's endpoint is the one its own page uses, not a published API, so
+// it can change; the application is then applied to by hand.
+var errAshbyUnavailable = errors.New("Ashby did not return this form, so it has to be completed on the employer's page")
 
 type ashbyField struct {
 	Path             string `json:"path"`
@@ -67,11 +72,17 @@ func (r *Reader) ashby(ctx context.Context, board, jobID, applyURL string) (Form
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if err := r.post(ctx, r.ashbyOrigin()+"/api/non-user-graphql?op=ApiJobPosting", request, &payload); err != nil {
+	// The endpoint serves every posting, so its answering 404 says nothing
+	// about this one; only a null posting below means the job is gone.
+	err := r.post(ctx, r.ashbyOrigin()+"/api/non-user-graphql?op=ApiJobPosting", request, &payload)
+	if errors.Is(err, ErrNotFound) {
+		return Form{}, errAshbyUnavailable
+	}
+	if err != nil {
 		return Form{}, err
 	}
 	if len(payload.Errors) > 0 {
-		return Form{}, fmt.Errorf("the employer's job board refused the request: %s", payload.Errors[0].Message)
+		return Form{}, errAshbyUnavailable
 	}
 	// Ashby answers a posting it no longer has, or a board that does not
 	// exist, with null rather than a 404.
@@ -88,15 +99,7 @@ func (r *Reader) ashby(ctx context.Context, board, jobID, applyURL string) (Form
 			if entry.Field.IsDeactivated || label == "" {
 				continue
 			}
-			if protectedPattern.MatchString(label) {
-				form.Skipped = append(form.Skipped, label)
-				continue
-			}
-			field := convertAshby(entry.Field, label, entry.IsRequired)
-			if declarationPattern.MatchString(label) {
-				field.Role = RoleDeclaration
-			}
-			form.Fields = append(form.Fields, field)
+			form.admit(convertAshby(entry.Field, label, entry.IsRequired))
 		}
 	}
 	// Equal-opportunity surveys are voluntary and concern protected
