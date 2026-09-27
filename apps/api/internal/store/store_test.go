@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"jobpilot/core/api/internal/models"
 )
 
 // fakeRow satisfies the scanner interface so the row-to-model helpers can be
@@ -155,5 +157,36 @@ func TestScanJobMatchWithholdsTheSlugForRejectedMatches(t *testing.T) {
 		if got.Job.Slug != want {
 			t.Errorf("rejected=%v: slug %q, want %q", rejected, got.Job.Slug, want)
 		}
+	}
+}
+
+// Found in early use: the dashboard said "Complete your candidate
+// profile" at 91% and never which field was missing. The profile had no
+// work experience, which also leaves the current-employer rule nothing to
+// check. The action now names what to add.
+func TestProfileActionNamesTheMissingFields(t *testing.T) {
+	complete := models.Profile{
+		Name: "Ana Pop", Email: "ana@example.com", Phone: "+40 700", Location: "Bucharest", CurrentTitle: "Engineer",
+		DesiredTitles: []string{"Backend Engineer"}, Seniorities: []string{"senior"}, YearsExperience: 8,
+		Skills: []models.Skill{{Name: "Go"}}, Experiences: []models.WorkExperience{{Company: "Acme"}},
+		WorkAuthorization: "EU citizen", NoticePeriod: "30 days",
+	}
+	if done, all := profileCompleteness(complete); done != all || profileAction(complete) != "" {
+		t.Fatalf("a complete profile should need nothing, got %d of %d and %q", done, all, profileAction(complete))
+	}
+
+	noWork := complete
+	noWork.Experiences = nil
+	if got, want := profileAction(noWork), "Complete your candidate profile: add work experience"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if done, all := profileCompleteness(noWork); done != all-1 {
+		t.Fatalf("one missing field should count once, got %d of %d", done, all)
+	}
+
+	sparse := noWork
+	sparse.Phone, sparse.NoticePeriod = "", ""
+	if got, want := profileAction(sparse), "Complete your candidate profile: add a phone number, work experience and a notice period"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"jobpilot/core/api/internal/slug"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -1051,6 +1052,54 @@ func (s *Store) DiscoveryRuns(ctx context.Context, u string) ([]models.Discovery
 	return out, rows.Err()
 }
 
+// profileChecklist is the fields a complete profile has, each named as the
+// dashboard asks for it.
+var profileChecklist = []struct {
+	name   string
+	filled func(models.Profile) bool
+}{
+	{"your name", func(p models.Profile) bool { return p.Name != "" }},
+	{"an email address", func(p models.Profile) bool { return p.Email != "" }},
+	{"a phone number", func(p models.Profile) bool { return p.Phone != "" }},
+	{"a location", func(p models.Profile) bool { return p.Location != "" }},
+	{"a current title", func(p models.Profile) bool { return p.CurrentTitle != "" }},
+	{"desired titles", func(p models.Profile) bool { return len(p.DesiredTitles) > 0 }},
+	{"seniority levels", func(p models.Profile) bool { return len(p.Seniorities) > 0 }},
+	{"years of experience", func(p models.Profile) bool { return p.YearsExperience > 0 }},
+	{"skills", func(p models.Profile) bool { return len(p.Skills) > 0 }},
+	{"work experience", func(p models.Profile) bool { return len(p.Experiences) > 0 }},
+	{"work authorization", func(p models.Profile) bool { return p.WorkAuthorization != "" }},
+	{"a notice period", func(p models.Profile) bool { return p.NoticePeriod != "" }},
+}
+
+// profileCompleteness counts the profile's filled fields out of all of them.
+func profileCompleteness(p models.Profile) (filled, all int) {
+	for _, field := range profileChecklist {
+		if field.filled(p) {
+			filled++
+		}
+	}
+	return filled, len(profileChecklist)
+}
+
+// profileAction names what a profile is missing, so the dashboard says what
+// to add rather than only that something is missing. Empty when complete.
+func profileAction(p models.Profile) string {
+	var missing []string
+	for _, field := range profileChecklist {
+		if !field.filled(p) {
+			missing = append(missing, field.name)
+		}
+	}
+	switch len(missing) {
+	case 0:
+		return ""
+	case 1:
+		return "Complete your candidate profile: add " + missing[0]
+	}
+	return "Complete your candidate profile: add " + strings.Join(missing[:len(missing)-1], ", ") + " and " + missing[len(missing)-1]
+}
+
 func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error) {
 	out := map[string]any{}
 	var profileFields, total, blacklistRejected, filterRejected, good, draft, applied int
@@ -1062,12 +1111,7 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 	if err != nil {
 		return nil, err
 	}
-	checks := []bool{p.Name != "", p.Email != "", p.Phone != "", p.Location != "", p.CurrentTitle != "", len(p.DesiredTitles) > 0, len(p.Seniorities) > 0, p.YearsExperience > 0, len(p.Skills) > 0, len(p.Experiences) > 0, p.WorkAuthorization != "", p.NoticePeriod != ""}
-	for _, ok := range checks {
-		if ok {
-			profileFields++
-		}
-	}
+	profileFields, profileChecks := profileCompleteness(p)
 	matches, _, err := s.Jobs(ctx, u, JobQuery{State: "accepted"})
 	if err != nil {
 		return nil, err
@@ -1079,7 +1123,7 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 			jobs = append(jobs, x)
 		}
 	}
-	out["profile_completeness"] = profileFields * 100 / len(checks)
+	out["profile_completeness"] = profileFields * 100 / profileChecks
 	out["jobs_imported"] = total
 	out["jobs_rejected_blacklist"] = blacklistRejected
 	out["jobs_rejected_filters"] = filterRejected
@@ -1088,8 +1132,8 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 	out["applications_applied"] = applied
 	out["top_jobs"] = jobs
 	actions := []string{}
-	if profileFields < len(checks) {
-		actions = append(actions, "Complete your candidate profile")
+	if action := profileAction(p); action != "" {
+		actions = append(actions, action)
 	}
 	if total == 0 {
 		actions = append(actions, "Import your first job")
