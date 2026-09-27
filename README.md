@@ -202,7 +202,7 @@ Jobs are deliberately **not** owned by one user. Two users may match and apply t
 - `companies`
 - `jobs`
 
-A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
+A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. Boards repost an opening under a new link, which changes the fingerprint, so a discovered posting with an unknown fingerprint is first compared with the same provider's jobs at that company: the same title and location with a description at least 80% alike, by shared words, is the same opening. Its fingerprint is recorded against the stored job (`job_fingerprint_aliases`), and when the repost is dated later its link, external id and date replace the stored ones. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
 
 ### Private per-user data
 
@@ -367,7 +367,8 @@ In the UI, **Related to me** means an accepted match with score at least `70`.
 - It checks for due users once per minute.
 - It claims at most 10 due users with PostgreSQL `FOR UPDATE SKIP LOCKED`.
 - The minimum supported schedule interval is six hours (`360` minutes).
-- A run is capped at 500 jobs.
+- A run takes at most its configured number of postings (1 to 500, default 100), shared across sources: one posting from each source in turn, so every active source is read on every run. Within a source, postings not yet in the catalog come first, so a small share still reaches new jobs. A source with fewer postings than its share leaves the rest to the others.
+- A run counts postings **seen**; jobs **added** to the catalog; how many of those added jobs were **rejected**; and **known** postings (`duplicates_skipped`), which were already in the catalog and are re-scored. Runs recorded before 2026-09-27 also counted re-scored known postings as rejected.
 - A process-local mutex permits only one discovery run at a time.
 - Source failures are stored on the run; a run fails completely only when every active source fails.
 - Global fingerprints deduplicate jobs across users, providers, and repeated runs.
@@ -848,7 +849,8 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `013_job_slugs.sql` | Readable job names for URLs |
 | `014_job_liveness.sql` | Closed postings and the background link check |
 | `015_profile_name_parts.sql` | Given and family names for a form's first and last name fields |
-| `016_employer_links.sql` | The employer's own application page behind an aggregator's posting |
+| `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
+| `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 
 Core entities:
 

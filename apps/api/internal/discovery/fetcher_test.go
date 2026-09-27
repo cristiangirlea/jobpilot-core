@@ -34,6 +34,31 @@ func TestGreenhouseRequiresToken(t *testing.T) {
 	}
 }
 
+// ATS_GREENHOUSE_URL names the Greenhouse origin for the form reader, and
+// board listings live on the same origin, so one setting moves both to a
+// test double. Unset, the public API is used.
+func TestGreenhouseOriginAlsoMovesBoardListings(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/boards/fakeco/jobs" || r.URL.Query().Get("content") != "true" {
+			t.Errorf("unexpected request %s", r.URL)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"jobs":[{"id":1,"title":"Backend Engineer","absolute_url":"https://job-boards.greenhouse.io/fakeco/jobs/1","content":"Go.","location":{"name":"Remote"}}]}`))
+	}))
+	defer srv.Close()
+	f := NewFetcher()
+	public := f.GreenhouseBase
+	f.UseGreenhouseOrigin("")
+	if f.GreenhouseBase != public {
+		t.Fatalf("an empty origin should keep %s, got %s", public, f.GreenhouseBase)
+	}
+	f.UseGreenhouseOrigin(srv.URL + "/")
+	jobs, err := f.Fetch(context.Background(), models.DiscoverySource{Provider: "greenhouse", Identifier: "fakeco", Name: "Fake Co"})
+	if err != nil || len(jobs) != 1 || jobs[0].Input.Company != "Fake Co" {
+		t.Fatal(jobs, err)
+	}
+}
+
 func TestAshbyFetch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

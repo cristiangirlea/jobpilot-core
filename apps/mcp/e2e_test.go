@@ -583,11 +583,107 @@ func TestEndToEnd(t *testing.T) {
 	if job["apply_url"] != nil && job["apply_url"] != "" {
 		t.Fatalf("a rejected import must not carry an apply URL: %s", text)
 	}
+
+	if atsPort != "" {
+		discoveryShareAndCounters(t, r, call)
+		discoveryRecognisesReposts(t, r, call)
+	}
 }
 
-// serveFakeGreenhouse answers the Greenhouse board API for any board and job
-// with one form: four required text fields the profile can answer, so the
-// composed entry carries no blockers. It listens on every interface, because
+// discoveryRecognisesReposts adds board fair-c, which lists one opening twice,
+// the second time under a new link. The fingerprint includes the link, so the
+// repost used to become a second job. It is one job, carrying the newer link.
+// The two boards from the previous step are all known by now, so with a
+// budget of ten they fill eight places and fair-c gives both its postings.
+func discoveryRecognisesReposts(t *testing.T, r *rest, call func(string, map[string]any) (map[string]any, string, bool)) {
+	t.Helper()
+	r.call("PUT", "/api/discovery/settings", map[string]any{"enabled": false, "interval_minutes": 360, "auto_prepare": false, "min_score": 75, "max_jobs_per_run": 10}, nil)
+	if _, text, isErr := call("add_discovery_source", map[string]any{"provider": "greenhouse", "name": "Board fair-c", "identifier": "fair-c"}); isErr {
+		t.Fatalf("add_discovery_source fair-c: %s", text)
+	}
+	out, text, isErr := call("run_discovery", nil)
+	if isErr {
+		t.Fatalf("run_discovery: %s", text)
+	}
+	got := fmt.Sprintf("seen %v, added %v, rejected %v, known %v", out["jobs_seen"], out["jobs_added"], out["jobs_rejected"], out["duplicates_skipped"])
+	if want := "seen 10, added 1, rejected 0, known 9"; got != want {
+		t.Fatalf("a repost should be known, not added: got %s, want %s: %s", got, want, text)
+	}
+	out, text, isErr = call("list_jobs", map[string]any{"state": "all", "limit": 100})
+	if isErr {
+		t.Fatalf("list_jobs: %s", text)
+	}
+	var links []string
+	jobs, _ := out["jobs"].([]any)
+	for _, j := range jobs {
+		m, _ := j.(map[string]any)
+		job, _ := m["job"].(map[string]any)
+		if job["company"] == "Board fair-c" {
+			link, _ := job["apply_url"].(string)
+			links = append(links, link)
+		}
+	}
+	if len(links) != 1 || !strings.HasSuffix(links[0], "/fair-c/302") {
+		t.Fatalf("the reposted opening should be one job with the newer link, got %v", links)
+	}
+}
+
+// discoveryShareAndCounters runs discovery over two fake boards of five
+// postings with a budget of four. The budget used to be spent source by
+// source, so the first board took all four and the second was never read.
+// Shared, each board gives two per run, new postings before known ones, and a
+// known posting is re-scored without counting as a new rejection. Board fair-b
+// is rejected by the filter, so every one of its new jobs is a rejection.
+func discoveryShareAndCounters(t *testing.T, r *rest, call func(string, map[string]any) (map[string]any, string, bool)) {
+	t.Helper()
+	r.call("PUT", "/api/discovery/settings", map[string]any{"enabled": false, "interval_minutes": 360, "auto_prepare": false, "min_score": 75, "max_jobs_per_run": 4}, nil)
+	for _, board := range []string{"fair-a", "fair-b"} {
+		if _, text, isErr := call("add_discovery_source", map[string]any{"provider": "greenhouse", "name": "Board " + board, "identifier": board}); isErr {
+			t.Fatalf("add_discovery_source %s: %s", board, text)
+		}
+	}
+	perBoard := func() map[string]int {
+		out, text, isErr := call("list_jobs", map[string]any{"state": "all", "limit": 100})
+		if isErr {
+			t.Fatalf("list_jobs: %s", text)
+		}
+		counts := map[string]int{}
+		jobs, _ := out["jobs"].([]any)
+		for _, j := range jobs {
+			m, _ := j.(map[string]any)
+			job, _ := m["job"].(map[string]any)
+			if company, _ := job["company"].(string); strings.HasPrefix(company, "Board ") {
+				counts[strings.TrimPrefix(company, "Board ")]++
+			}
+		}
+		return counts
+	}
+
+	for i, want := range []struct{ counts, why string }{
+		{"seen 4, added 4, rejected 2, known 0", "both boards share the budget"},
+		{"seen 4, added 4, rejected 2, known 0", "new postings come before the two known ones on each board"},
+		{"seen 4, added 2, rejected 1, known 2", "one new posting left per board; the known ones are re-scored, not new rejections"},
+	} {
+		out, text, isErr := call("run_discovery", nil)
+		if isErr {
+			t.Fatalf("run %d: %s", i+1, text)
+		}
+		got := fmt.Sprintf("seen %v, added %v, rejected %v, known %v", out["jobs_seen"], out["jobs_added"], out["jobs_rejected"], out["duplicates_skipped"])
+		if got != want.counts {
+			t.Fatalf("run %d (%s): got %s, want %s", i+1, want.why, got, want.counts)
+		}
+		if boards := perBoard(); boards["fair-a"] != boards["fair-b"] {
+			t.Fatalf("run %d: the boards should have contributed equally, got %v", i+1, boards)
+		}
+	}
+	if boards := perBoard(); boards["fair-a"] != 5 || boards["fair-b"] != 5 {
+		t.Fatalf("three runs should have reached every posting on both boards, got %v", boards)
+	}
+}
+
+// serveFakeGreenhouse answers the Greenhouse board API: a listing of five
+// postings for any board, and for any job one form of four required text
+// fields the profile can answer, so the composed entry carries no blockers. It listens on every interface, because
 // an API running in a container reaches it through host.docker.internal.
 func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 	t.Helper()
@@ -597,6 +693,32 @@ func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 	}
 	fake := &fakeGreenhouse{}
 	mux := http.NewServeMux()
+	// Board listings for the discovery steps, in the shape of Greenhouse's
+	// jobs?content=true: five postings per board, except fair-c's repost.
+	// Board fair-b's mention PHP, which the seeded filter excludes, so its
+	// jobs are rejected.
+	mux.HandleFunc("GET /v1/boards/{board}/jobs", func(w http.ResponseWriter, r *http.Request) {
+		board := r.PathValue("board")
+		w.Header().Set("Content-Type", "application/json")
+		if board == "fair-c" {
+			// One opening listed twice: the second is a repost under a new
+			// link two days later, as Arbeitnow reposts.
+			posting := `{"id":%d,"title":"Backend Engineer fair-c","updated_at":%q,"absolute_url":"https://example.test/fair-c/%d","content":"Build services with Go and PostgreSQL.","location":{"name":"Remote, Romania"}}`
+			older, newer := time.Now().Add(-48*time.Hour).UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"jobs":[` + fmt.Sprintf(posting, 301, older, 301) + "," + fmt.Sprintf(posting, 302, newer, 302) + `]}`))
+			return
+		}
+		stack, first := "Go and PostgreSQL", 100
+		if board == "fair-b" {
+			stack, first = "PHP", 200
+		}
+		var jobs []string
+		for i := 1; i <= 5; i++ {
+			jobs = append(jobs, fmt.Sprintf(`{"id":%d,"title":"Backend Engineer %s %d","updated_at":%q,"absolute_url":"https://example.test/%s/%d","content":"Build services with %s.","location":{"name":"Remote, Romania"}}`,
+				first+i, board, i, time.Now().UTC().Format(time.RFC3339), board, i, stack))
+		}
+		_, _ = w.Write([]byte(`{"jobs":[` + strings.Join(jobs, ",") + `]}`))
+	})
 	mux.HandleFunc("GET /v1/boards/{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
 		fake.mu.Lock()
 		fake.requested = append(fake.requested, r.URL.Path)
