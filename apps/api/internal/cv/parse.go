@@ -50,6 +50,13 @@ var (
 	monthNames   = `Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec`
 	datePeriod   = regexp.MustCompile(`(?i)((?:` + monthNames + `)[a-z]*\.?\s*\d{4}|\d{4})\s*[-–—]\s*(present|current|now|(?:` + monthNames + `)[a-z]*\.?\s*\d{4}|\d{4})`)
 	skillsPrefix = regexp.MustCompile(`(?i)^(?:skills|tech(?:nologies)?|stack|tools)\s*[:\-]\s*`)
+	// "Backend & APIs: FastAPI, Flask" starts a categorised skills entry.
+	skillCategory = regexp.MustCompile(`^([A-Z][^:]{1,40}):\s*(.*)$`)
+	// "13+ years building ..." in a summary, where "of experience" is implied.
+	summaryYears = regexp.MustCompile(`(?i)\b(\d{1,2})\s*\+?\s*years?\b`)
+	// PDF text puts spaces round the hyphen in "Full-Stack". A real dash, as in
+	// "Engineer - Contractor", must survive, so only known compounds are joined.
+	spacedCompound = regexp.MustCompile(`(?i)\b(full|front|back)\s+-\s+(stack|end)\b`)
 )
 
 // sectionHeadings map a CV's own headings onto the sections this parser knows
@@ -65,6 +72,7 @@ var sectionHeadings = map[string]string{
 	"languages": "languages", "certifications": "certifications", "certificates": "certifications",
 	"contact": "contact", "contact details": "contact",
 	"projects": "projects", "personal projects": "projects",
+	"selected projects": "projects", "key projects": "projects", "open source": "projects", "publications": "projects",
 }
 
 // Parse turns extracted CV text into candidate facts. It is deterministic and
@@ -81,8 +89,13 @@ func Parse(text string) Parsed {
 	sections := groupSections(lines)
 	parsed.parseContacts(text, lines)
 	parsed.parseIdentity(lines, sections)
+	if parsed.Location == "" {
+		// After the identity, so a contact line that opens with the name or
+		// the title does not report either as the place.
+		parsed.Location = contactLinePlace(lines[:min(len(lines), 25)], parsed.Name)
+	}
 	parsed.parseSummary(sections)
-	parsed.parseSkills(lines)
+	parsed.parseSkills(lines, sections["skills"])
 	parsed.parseExperience(lines)
 	parsed.Education = parseEducation(sections["education"])
 	parsed.Languages = parseLanguageList(sections["languages"])
@@ -91,6 +104,11 @@ func Parse(text string) Parsed {
 	if matches := yearsPattern.FindStringSubmatch(text); len(matches) == 2 {
 		if years, err := strconv.ParseFloat(matches[1], 64); err == nil {
 			parsed.YearsExperience = years
+		}
+	}
+	if parsed.YearsExperience == 0 {
+		if matches := summaryYears.FindStringSubmatch(parsed.Summary); len(matches) == 2 {
+			parsed.YearsExperience, _ = strconv.ParseFloat(matches[1], 64)
 		}
 	}
 	if parsed.YearsExperience == 0 && len(parsed.Skills) > 0 {
@@ -134,24 +152,44 @@ func groupSections(lines []string) map[string][]string {
 // so a long line that merely contains the word "experience" is not one.
 func headingFor(line string) (string, bool) {
 	candidate := strings.ToLower(strings.Trim(line, " :-—–"))
-	if len(candidate) > 32 {
+	if len(candidate) <= 32 {
+		if section, ok := sectionHeadings[candidate]; ok {
+			return section, true
+		}
+	}
+	// "SELECTED PROJECTS & OPEN SOURCE (github.com/someone)": a heading set in
+	// capitals may run on past its keyword, so its start is matched instead.
+	// Capitals are what keep an ordinary sentence starting "Projects" out.
+	text, _, _ := strings.Cut(line, "(")
+	text = strings.TrimSpace(text)
+	if len(text) < 4 || len(text) > 48 || text != strings.ToUpper(text) {
 		return "", false
 	}
-	section, ok := sectionHeadings[candidate]
-	return section, ok
+	lower := strings.ToLower(text)
+	for heading, section := range sectionHeadings {
+		if strings.HasPrefix(lower, heading+" ") {
+			return section, true
+		}
+	}
+	return "", false
 }
 
 func (p *Parsed) parseContacts(text string, lines []string) {
 	if match := emailPattern.FindString(text); match != "" {
 		p.Email = match
 	}
+phone:
 	for _, line := range lines {
-		if match := phonePattern.FindString(line); match != "" && countDigits(match) >= 9 && countDigits(match) <= 15 {
-			// A date range or a metric can look like a phone number; requiring
-			// the line to be mostly the number itself avoids both.
-			if len(strings.TrimSpace(match)) >= len(line)-2 {
-				p.Phone = strings.TrimSpace(match)
-				break
+		// A contact line such as "Country | +40 700 000 000 | me@example.com"
+		// is judged one segment at a time.
+		for _, segment := range contactSegments(line) {
+			if match := phonePattern.FindString(segment); match != "" && countDigits(match) >= 9 && countDigits(match) <= 15 {
+				// A date range or a metric can look like a phone number; requiring
+				// the segment to be mostly the number itself avoids both.
+				if len(strings.TrimSpace(match)) >= len(segment)-2 {
+					p.Phone = strings.TrimSpace(match)
+					break phone
+				}
 			}
 		}
 	}
@@ -175,6 +213,43 @@ func (p *Parsed) parseContacts(text string, lines []string) {
 			break
 		}
 	}
+}
+
+// contactSegments splits a line on the separators contact lines use.
+func contactSegments(line string) []string {
+	parts := strings.FieldsFunc(line, func(r rune) bool { return r == '|' || r == '•' || r == '·' })
+	out := parts[:0]
+	for _, part := range parts {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// contactLinePlace reads the place from a separated contact line, such as
+// "Portugal" in "Portugal | Remote (EU) | +351 ... | me@example.com": the first
+// segment that reads as a place rather than a way to reach the candidate.
+func contactLinePlace(lines []string, name string) string {
+	for _, line := range lines {
+		segments := contactSegments(line)
+		if len(segments) < 2 || !(strings.Contains(line, "@") || phonePattern.MatchString(line)) {
+			continue
+		}
+		for _, segment := range segments {
+			if looksLikePlace(segment) && !strings.EqualFold(segment, name) && !roleWords.MatchString(segment) {
+				return segment
+			}
+		}
+	}
+	return ""
+}
+
+func looksLikePlace(segment string) bool {
+	if segment == "" || !isUpperRune([]rune(segment)[0]) || strings.ContainsAny(segment, "@/.:0123456789") {
+		return false
+	}
+	return !strings.HasPrefix(strings.ToLower(segment), "remote") && len(strings.Fields(segment)) <= 4
 }
 
 // parseIdentity reads the name and headline from the top of the CV, which is
@@ -207,8 +282,14 @@ func (p *Parsed) parseIdentity(lines []string, sections map[string][]string) {
 	p.Name = titleCaseName(best)
 	// The headline is normally the line immediately below the name.
 	for _, next := range lines[bestIndex+1:] {
-		if looksLikeTitle(next) {
-			p.CurrentTitle = strings.TrimSpace(next)
+		// "Lead Engineer | Python | Go | ..." puts the title first and the stack
+		// after it; the stack is not part of the title.
+		candidate := next
+		if strings.Contains(next, "|") {
+			candidate = strings.TrimSpace(strings.Split(next, "|")[0])
+		}
+		if looksLikeTitle(candidate) {
+			p.CurrentTitle = spacedCompound.ReplaceAllString(strings.TrimSpace(candidate), "$1-$2")
 			break
 		}
 	}
@@ -256,9 +337,9 @@ func (p *Parsed) parseSummary(sections map[string][]string) {
 	p.Summary = joined
 }
 
-// parseSkills reads the "<skill> <n> years" entries CV sidebars use, and falls
-// back to the technology vocabulary when a CV lists skills as prose.
-func (p *Parsed) parseSkills(lines []string) {
+// parseSkills reads the "<skill> <n> years" entries CV sidebars use, the
+// "Skills: a, b" lines, and the "Category: a, b, c" entries of a skills section.
+func (p *Parsed) parseSkills(lines, section []string) {
 	seen := map[string]models.Skill{}
 	for _, line := range lines {
 		match := skillYearsPattern.FindStringSubmatch(line)
@@ -297,6 +378,12 @@ func (p *Parsed) parseSkills(lines []string) {
 			}
 		}
 	}
+	for _, name := range categorisedSkills(section) {
+		key := strings.ToLower(name)
+		if _, ok := seen[key]; !ok {
+			seen[key] = models.Skill{Name: name}
+		}
+	}
 	for _, skill := range seen {
 		p.Skills = append(p.Skills, skill)
 	}
@@ -309,6 +396,91 @@ func (p *Parsed) parseSkills(lines []string) {
 	if len(p.Skills) > 120 {
 		p.Skills = p.Skills[:120]
 	}
+}
+
+// categorisedSkills reads "Category: a, b (c, d), e / f" entries. PDF text
+// wraps them, so a line that does not start a new category continues the one
+// before. A note in brackets is dropped unless it is itself a list, "a / b"
+// names two skills, and anything longer than a few words is prose, not a
+// skill.
+func categorisedSkills(section []string) []string {
+	var entries []string
+	for _, line := range section {
+		if match := skillCategory.FindStringSubmatch(line); match != nil && !strings.Contains(match[1], ",") {
+			entries = append(entries, match[2])
+		} else if len(entries) > 0 {
+			entries[len(entries)-1] += " " + line
+		}
+	}
+	var out []string
+	for _, entry := range entries {
+		for _, item := range splitOutsideBrackets(entry) {
+			for _, alternative := range strings.Split(item, " / ") {
+				head, inner := alternative, ""
+				if open := strings.Index(alternative, "("); open >= 0 {
+					head = alternative[:open]
+					inner = strings.TrimSuffix(strings.TrimSpace(alternative[open+1:]), ")")
+				}
+				// "RBAC and ABAC" names two skills.
+				if pair := skillPair.FindStringSubmatch(strings.TrimSpace(head)); pair != nil {
+					out = appendSkillName(appendSkillName(out, pair[1]), pair[2])
+				} else {
+					out = appendSkillName(out, head)
+				}
+				if parts := strings.Split(inner, ","); len(parts) >= 2 {
+					for _, part := range parts {
+						out = appendSkillName(out, part)
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
+// skillQualifiers are words a CV puts before a skill that are not its name.
+var skillQualifiers = []string{"legacy ", "basic ", "some "}
+
+var (
+	skillPair = regexp.MustCompile(`^([A-Z][\w.#+]*) and ([A-Z][\w.#+]*)$`)
+	// PDF text spaces the hyphen in "fault-injection" and "JSON-RPC"; inside a
+	// skill name a hyphen never stands apart.
+	spacedHyphen = regexp.MustCompile(`(\w)\s*-\s*(\w)`)
+)
+
+func appendSkillName(out []string, name string) []string {
+	name = strings.Join(strings.Fields(strings.Trim(name, " .;:-")), " ")
+	name = spacedHyphen.ReplaceAllString(name, "$1-$2")
+	for _, qualifier := range skillQualifiers {
+		name = strings.TrimPrefix(name, qualifier)
+	}
+	if name == "" || len(name) > 40 || looksLikeSentence(name) || strings.ContainsAny(name, ":()") {
+		return out
+	}
+	return append(out, name)
+}
+
+// splitOutsideBrackets splits on commas and semicolons outside brackets, so
+// "AWS (EKS, EC2), Docker" is two items.
+func splitOutsideBrackets(v string) []string {
+	var out []string
+	depth, start := 0, 0
+	for i, r := range v {
+		switch r {
+		case '(':
+			depth++
+		case ')':
+			if depth > 0 {
+				depth--
+			}
+		case ',', ';':
+			if depth == 0 {
+				out = append(out, v[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(out, v[start:])
 }
 
 func looksLikeSentence(v string) bool {
