@@ -172,6 +172,11 @@ func (s *Store) OutboxEntry(ctx context.Context, userID, id string) (models.Outb
 	return entry, nil
 }
 
+// OutboxEntryForJob returns the entry already queued for a job, if there is one.
+func (s *Store) OutboxEntryForJob(ctx context.Context, userID, jobID string) (models.OutboxEntry, error) {
+	return scanOutbox(s.DB.QueryRow(ctx, `SELECT `+outboxColumns+` FROM application_outbox WHERE user_id=$1 AND job_id=$2`, userID, jobID))
+}
+
 // SetOutboxStatus moves an entry through the queue.
 //
 // Approval is refused while blockers stand. The check lives here rather than in

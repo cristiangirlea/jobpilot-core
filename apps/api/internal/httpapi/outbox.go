@@ -72,10 +72,13 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	entry := models.OutboxEntry{JobID: job.Job.ID, Channel: models.ChannelManual, Blockers: []string{}, Notices: []string{}}
 
 	// The CV. A generated one arrives unapproved, which is itself a blocker.
-	decision, err := s.decideCV(ctx, uid, job, profile)
-	if err != nil {
-		internal(w, err)
-		return
+	decision, kept := s.keptCV(ctx, uid, job.Job.ID)
+	if !kept {
+		decision, err = s.decideCV(ctx, uid, job, profile)
+		if err != nil {
+			internal(w, err)
+			return
+		}
 	}
 	entry.CVDocumentID, entry.CVDecision = decision.CV.ID, decision.Decision
 	if !decision.Approved {
@@ -273,6 +276,23 @@ func (s *Server) cancelOutboxEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, entry, err)
+}
+
+// keptCV is the tailored CV an application already carries, once the user has
+// approved it. Preparing the application again keeps it: tailoring afresh can
+// produce a different draft (an AI-written summary never repeats exactly), and
+// a new draft would undo the approval the user just gave. A base CV is not
+// kept, so a newer upload still takes its place.
+func (s *Server) keptCV(ctx context.Context, uid, jobID string) (cvDecision, bool) {
+	previous, err := s.Store.OutboxEntryForJob(ctx, uid, jobID)
+	if err != nil || previous.CVDocumentID == "" {
+		return cvDecision{}, false
+	}
+	doc, err := s.Store.CV(ctx, uid, previous.CVDocumentID)
+	if err != nil || !doc.Approved || doc.Kind != "tailored" {
+		return cvDecision{}, false
+	}
+	return cvDecision{Decision: previous.CVDecision, CV: doc, Approved: true}, true
 }
 
 // closedMessage is the refusal for a posting that has closed.

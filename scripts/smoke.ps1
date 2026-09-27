@@ -137,6 +137,16 @@ if ($recomposed.id -ne $entry.id) { throw "Recomposing should replace the same e
 if ($recomposed.notices -contains "You had approved this application. Rebuilding it withdrew that approval, so it needs approving again.") {
     throw "An entry that was never approved should not report a withdrawn approval"
 }
+
+# A tailored CV starts as a draft that blocks the application. Once approved,
+# preparing the application again keeps that CV rather than drafting another,
+# so the blocker clears.
+$cvBlocker = "A tailored CV was prepared for this role and needs your approval before it can be sent."
+if ($recomposed.blockers -notcontains $cvBlocker) { throw "A freshly tailored CV should block the application until approved" }
+Send-JobPilotRequest POST "/cv/$($recomposed.cv_document_id)/approve" @{ approved = $true } | Out-Null
+$keptCV = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/compose"
+if ($keptCV.cv_document_id -ne $recomposed.cv_document_id) { throw "Preparing again should keep the approved tailored CV" }
+if ($keptCV.blockers -contains $cvBlocker) { throw "An approved CV should no longer block the application" }
 Assert-NotFound { Send-JobPilotRequest DELETE "/answers/00000000-0000-0000-0000-000000000000" } "Deleting an unknown answer"
 Assert-NotFound { Send-JobPilotRequest DELETE "/cv/00000000-0000-0000-0000-000000000000" } "Deleting an unknown CV"
 
