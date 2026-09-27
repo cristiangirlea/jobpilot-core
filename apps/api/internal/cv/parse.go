@@ -89,6 +89,11 @@ func Parse(text string) Parsed {
 	sections := groupSections(lines)
 	parsed.parseContacts(text, lines)
 	parsed.parseIdentity(lines, sections)
+	if parsed.Location == "" {
+		// After the identity, so a contact line that opens with the name or
+		// the title does not report either as the place.
+		parsed.Location = contactLinePlace(lines[:min(len(lines), 25)], parsed.Name)
+	}
 	parsed.parseSummary(sections)
 	parsed.parseSkills(lines, sections["skills"])
 	parsed.parseExperience(lines)
@@ -208,9 +213,6 @@ phone:
 			break
 		}
 	}
-	if p.Location == "" {
-		p.Location = contactLinePlace(lines[:min(len(lines), 25)])
-	}
 }
 
 // contactSegments splits a line on the separators contact lines use.
@@ -228,14 +230,14 @@ func contactSegments(line string) []string {
 // contactLinePlace reads the place from a separated contact line, such as
 // "Portugal" in "Portugal | Remote (EU) | +351 ... | me@example.com": the first
 // segment that reads as a place rather than a way to reach the candidate.
-func contactLinePlace(lines []string) string {
+func contactLinePlace(lines []string, name string) string {
 	for _, line := range lines {
 		segments := contactSegments(line)
 		if len(segments) < 2 || !(strings.Contains(line, "@") || phonePattern.MatchString(line)) {
 			continue
 		}
 		for _, segment := range segments {
-			if looksLikePlace(segment) {
+			if looksLikePlace(segment) && !strings.EqualFold(segment, name) && !roleWords.MatchString(segment) {
 				return segment
 			}
 		}

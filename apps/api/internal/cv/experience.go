@@ -26,8 +26,11 @@ func (p *Parsed) parseExperience(lines []string) {
 	}
 	var blocks []block
 	previous := ""
-	// A heading for another section (EDUCATION, PROJECTS) ends the role above
-	// it, so a projects list after the last role is not read as its bullets.
+	// A heading for a section that follows the role list (EDUCATION, PROJECTS,
+	// CERTIFICATIONS) ends the role above it, so a projects list after the last
+	// role is not read as its bullets. Sidebar headings (SKILLS, LANGUAGES,
+	// CONTACT) do not: a two-column PDF can put them between a role and its
+	// bullets.
 	inOtherSection := false
 	for _, line := range unwrapRoleHeaders(lines) {
 		if title, company, start, end, ok := roleHeading(line); ok {
@@ -36,7 +39,12 @@ func (p *Parsed) parseExperience(lines []string) {
 			continue
 		}
 		if section, ok := headingFor(line); ok {
-			inOtherSection = section != "experience"
+			switch section {
+			case "experience":
+				inOtherSection = false
+			case "education", "projects", "certifications":
+				inOtherSection = true
+			}
 			previous = line
 			continue
 		}
@@ -174,7 +182,7 @@ func unwrapRoleHeaders(lines []string) []string {
 		if i+1 < len(lines) && strings.Contains(line, "|") && !strings.HasPrefix(line, "-") && !datePeriod.MatchString(line) {
 			next := lines[i+1]
 			if (danglingRange.MatchString(line) && leadingYear.MatchString(next)) ||
-				(strings.Contains(next, "|") && datePeriod.MatchString(next)) {
+				(strings.Contains(next, "|") && datePeriod.MatchString(next) && continuesHeader(line, next)) {
 				line += " " + next
 				i++
 			}
@@ -182,6 +190,17 @@ func unwrapRoleHeaders(lines []string) []string {
 		out = append(out, line)
 	}
 	return out
+}
+
+// continuesHeader tells a wrapped header's second half ("(remote) | 2020 -
+// 2021", "| City | Dates", or anything after a trailing comma) from the next
+// role's own header, which starts afresh with a capitalised company name.
+func continuesHeader(line, next string) bool {
+	if strings.HasSuffix(strings.TrimSpace(line), ",") {
+		return true
+	}
+	first := []rune(strings.TrimSpace(next))
+	return len(first) > 0 && (first[0] == '|' || first[0] == '(' || (first[0] >= 'a' && first[0] <= 'z'))
 }
 
 // bareDateRange matches a line that is nothing but a period, such as

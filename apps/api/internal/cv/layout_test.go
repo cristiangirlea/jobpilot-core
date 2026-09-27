@@ -109,3 +109,35 @@ func TestParseReadsWrappedPipeRoleHeaders(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSkipsTheNameAndTitleInAContactLine(t *testing.T) {
+	p := Parse("JANE DOE\nBackend Engineer\nJane Doe | Senior Engineer | Portugal | jane.doe@example.com\n")
+	if p.Location != "Portugal" {
+		t.Errorf("location = %q, want Portugal", p.Location)
+	}
+}
+
+// A body line with pipes sits right above the next role's header; only a line
+// that continues a header (starting "|", "(", lowercase, or after a trailing
+// comma) may be joined to one.
+func TestParseKeepsPipedBodyLinesApartFromTheNextRole(t *testing.T) {
+	text := "EXPERIENCE\nGlobex | Platform Engineer | Remote | 2020 - 2022\n- Built the queue consumers and their autoscaling.\nStack: Go | Kafka | Postgres\nAcme | Backend Engineer | Berlin | 2021 - 2020\n- Rebuilt the billing service and its reconciliation jobs.\n"
+	p := Parse(text)
+	if len(p.Experiences) != 2 || p.Experiences[1].Company != "Acme" {
+		t.Fatalf("roles = %+v, want Globex then Acme", p.Experiences)
+	}
+	if !strings.Contains(p.Experiences[0].Description, "Stack: Go | Kafka | Postgres") {
+		t.Errorf("the stack line belongs to the first role: %q", p.Experiences[0].Description)
+	}
+}
+
+// Sidebar headings (skills, languages, contact) can land between a role and
+// its bullets in a two-column PDF, so only sections that follow the role list
+// end a role.
+func TestParseKeepsBulletsAfterASidebarHeading(t *testing.T) {
+	text := "EXPERIENCE\nGlobex | Platform Engineer | Remote | 2020 - 2022\nLANGUAGES\n- Built the queue consumers and their autoscaling policies.\n"
+	p := Parse(text)
+	if len(p.Experiences) != 1 || !strings.Contains(p.Experiences[0].Description, "queue consumers") {
+		t.Fatalf("the bullet after a sidebar heading was lost: %+v", p.Experiences)
+	}
+}
