@@ -35,7 +35,8 @@ $registration = Send-JobPilotRequest POST "/auth/register" @{ email = $Email; pa
 $script:Headers = @{ Authorization = "Bearer $($registration.token)" }
 
 $profile = @{
-    name = "Smoke Candidate"; email = $Email; phone = "+400000000"; location = "Bucharest, Romania"
+    name = "Candidate Smoke"; given_name = "Smoke"; family_name = "Candidate"
+    email = $Email; phone = "+400000000"; location = "Bucharest, Romania"
     linkedin = ""; github = ""; portfolio = ""; current_title = "Senior Backend Engineer"
     desired_titles = @("Backend Engineer"); seniorities = @("mid", "senior"); years_experience = 7
     certifications = @(); languages = @("English"); salary_expectation = 90000; rate_expectation = 0; currency = "EUR"
@@ -44,6 +45,10 @@ $profile = @{
     experiences = @(); skills = @(); projects = @()
 }
 Send-JobPilotRequest PUT "/profile" $profile | Out-Null
+# Stored surname first, as some candidates write it: forms take the stated
+# given and family names, never a split of this one.
+$stored = Send-JobPilotRequest GET "/profile"
+if ($stored.given_name -ne "Smoke" -or $stored.family_name -ne "Candidate") { throw "The profile should keep the given and family names it was saved with" }
 Send-JobPilotRequest POST "/experiences" @{ company = "CurrentCo"; company_domain = "current.example"; title = "Senior Backend Engineer"; start_date = "2022"; end_date = ""; current = $true; description = "Built backend services." } | Out-Null
 Send-JobPilotRequest POST "/skills" @{ name = "Go"; level = "advanced"; years = 5 } | Out-Null
 Send-JobPilotRequest POST "/skills" @{ name = "PostgreSQL"; level = "advanced"; years = 5 } | Out-Null

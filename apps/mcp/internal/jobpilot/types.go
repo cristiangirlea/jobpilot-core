@@ -229,6 +229,8 @@ type Project struct {
 
 type Profile struct {
 	Name                string           `json:"name"`
+	GivenName           string           `json:"given_name"`
+	FamilyName          string           `json:"family_name"`
 	Email               string           `json:"email"`
 	Phone               string           `json:"phone"`
 	Location            string           `json:"location"`

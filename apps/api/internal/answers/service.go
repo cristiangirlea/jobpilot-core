@@ -156,6 +156,22 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 		}
 	}
 
+	// A first or last name split out of the one stored name guesses at word
+	// order: "Pirvan Octavian" is surname first. With neither the stated name
+	// parts nor the candidate's own approved answer to go on, the split is
+	// offered, held for review. A name nothing stored supplies is left for the
+	// candidate, because a provider could only invent one.
+	if nameKeys[key] {
+		if answer, ok := splitName(key, subject.Profile.Name); ok {
+			if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
+				resolution.Answer, resolution.Source, resolution.NeedsReview = fitted, SourceProfile, true
+				return resolution, nil
+			}
+		}
+		resolution.Source, resolution.NeedsReview = SourceUnanswered, true
+		return resolution, nil
+	}
+
 	// 4. Generate. Stored unapproved so it cannot be reused until reviewed.
 	if s.LLM.Enabled() {
 		answer, err := s.generate(ctx, question, subject, key)
@@ -381,11 +397,14 @@ func skillYears(question string, p models.Profile) (answer string, scoped bool) 
 func profileAnswer(key string, p models.Profile) (string, bool) {
 	switch key {
 	case KeyFullName:
-		return nonEmpty(p.Name)
+		if name, ok := nonEmpty(p.Name); ok {
+			return name, true
+		}
+		return nonEmpty(p.GivenName + " " + p.FamilyName)
 	case KeyFirstName, KeyPreferredName:
-		return nonEmpty(firstName(p.Name))
+		return nonEmpty(p.GivenName)
 	case KeyLastName:
-		return nonEmpty(lastName(p.Name))
+		return nonEmpty(p.FamilyName)
 	case KeySponsorship:
 		// Only an explicit statement counts. Inferring "no sponsorship needed"
 		// from a citizenship alone would answer for the wrong jurisdiction: an
@@ -581,6 +600,21 @@ func subjectAnswer(key string, subject Subject) (string, bool) {
 			}
 		}
 		return "No", true
+	}
+	return "", false
+}
+
+// nameKeys are the questions only the candidate's own name answers.
+var nameKeys = map[string]bool{KeyFullName: true, KeyFirstName: true, KeyLastName: true, KeyPreferredName: true}
+
+// splitName answers a first or last name question from the full name alone,
+// taking the first word as the given name. Callers hold the result for review.
+func splitName(key, name string) (string, bool) {
+	switch key {
+	case KeyFirstName, KeyPreferredName:
+		return nonEmpty(firstName(name))
+	case KeyLastName:
+		return nonEmpty(lastName(name))
 	}
 	return "", false
 }

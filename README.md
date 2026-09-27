@@ -460,7 +460,7 @@ Every completion is cached in `llm_cache`, keyed on provider, model, task, syste
 
 Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
 
-1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed.
+1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone.
 2. **Exact reuse** - this same question, previously approved for this role family.
 3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
 4. **Provider** - only on a genuine miss. Stored unapproved.
@@ -842,6 +842,10 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `009_cv_documents.sql` | Uploaded and generated CVs, extracted text, parse result, approval |
 | `010_outbox.sql` | Composed applications held for approval, with blockers and notices |
 | `011_agent_tokens.sql` | Revocable, scoped tokens for agents and scripts |
+| `012_match_lists_never_null.sql` | Repairs stored match lists saved as JSON null |
+| `013_job_slugs.sql` | Readable job names for URLs |
+| `014_job_liveness.sql` | Closed postings and the background link check |
+| `015_profile_name_parts.sql` | Given and family names for a form's first and last name fields |
 
 Core entities:
 
