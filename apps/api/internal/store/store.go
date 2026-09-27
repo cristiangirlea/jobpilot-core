@@ -291,20 +291,34 @@ func (s *Store) CatalogJob(ctx context.Context, id string) (models.Job, error) {
 	return j, err
 }
 
-func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string) (models.Job, error) {
+// catalogJobColumns and scanCatalogJob read a catalog job the same way
+// wherever one is looked up.
+const catalogJobColumns = `id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug,closed_at,closed_reason`
+
+func scanCatalogJob(row scanner) (models.Job, error) {
 	var j models.Job
-	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug,closed_at,closed_reason FROM jobs WHERE fingerprint=$1`, fingerprint).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug, &j.ClosedAt, &j.ClosedReason)
+	err := row.Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug, &j.ClosedAt, &j.ClosedReason)
 	return j, err
 }
 
+// CatalogJobByFingerprint finds the job a posting's fingerprint belongs to:
+// the job stored with it, or the job it was recognised as a repost of.
+func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string) (models.Job, error) {
+	return scanCatalogJob(s.DB.QueryRow(ctx, `SELECT `+catalogJobColumns+` FROM jobs
+		WHERE fingerprint=$1 OR id IN (SELECT job_id FROM job_fingerprint_aliases WHERE fingerprint=$1)
+		ORDER BY fingerprint=$1 DESC LIMIT 1`, fingerprint))
+}
+
 // KnownFingerprints reports which of these fingerprints the catalog already
-// holds, in one query, so a discovery run can put new postings first.
+// holds, in one query, so a discovery run can put new postings first. A
+// repost's fingerprint counts once it has been recognised.
 func (s *Store) KnownFingerprints(ctx context.Context, fingerprints []string) (map[string]bool, error) {
 	known := map[string]bool{}
 	if len(fingerprints) == 0 {
 		return known, nil
 	}
-	rows, err := s.DB.Query(ctx, `SELECT fingerprint FROM jobs WHERE fingerprint = ANY($1)`, fingerprints)
+	rows, err := s.DB.Query(ctx, `SELECT fingerprint FROM jobs WHERE fingerprint = ANY($1)
+		UNION SELECT fingerprint FROM job_fingerprint_aliases WHERE fingerprint = ANY($1)`, fingerprints)
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +332,52 @@ func (s *Store) KnownFingerprints(ctx context.Context, fingerprints []string) (m
 	}
 	return known, rows.Err()
 }
+
+// RepostCandidates returns the jobs one provider has stored for a company,
+// newest first: the only jobs a new posting from that provider can repost.
+func (s *Store) RepostCandidates(ctx context.Context, provider, companyNormalized string) ([]models.Job, error) {
+	rows, err := s.DB.Query(ctx, `SELECT `+catalogJobColumns+` FROM jobs
+		WHERE company_normalized=$1 AND source_provider=$2 ORDER BY created_at DESC LIMIT 200`, companyNormalized, provider)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []models.Job
+	for rows.Next() {
+		job, scanErr := scanCatalogJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, job)
+	}
+	return out, rows.Err()
+}
+
+// AttachRepost records fingerprint as another posting of job id. A repost
+// posted later than the stored one is the live listing, so its link, external
+// id and date replace the stored ones, and a job closed for a reason in
+// reopen, such as its old link going dead, opens again.
+func (s *Store) AttachRepost(ctx context.Context, id, fingerprint, externalID string, in models.JobInput, reopen []string) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, `INSERT INTO job_fingerprint_aliases(fingerprint, job_id) VALUES($1,$2)
+		ON CONFLICT (fingerprint) DO UPDATE SET job_id=EXCLUDED.job_id`, fingerprint, id); err != nil {
+		return err
+	}
+	if in.PostedAt != nil {
+		if _, err = tx.Exec(ctx, `UPDATE jobs SET apply_url=$2, external_id=$3, posted_at=$4,
+			closed_at=CASE WHEN closed_reason = ANY($5) THEN NULL ELSE closed_at END,
+			closed_reason=CASE WHEN closed_reason = ANY($5) THEN '' ELSE closed_reason END
+			WHERE id=$1 AND (posted_at IS NULL OR posted_at < $4)`, id, in.ApplyURL, externalID, in.PostedAt, reopen); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, sourceProvider, sourceName, externalID, fingerprint string, in models.JobInput) (models.Job, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {

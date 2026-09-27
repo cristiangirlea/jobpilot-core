@@ -202,7 +202,7 @@ Jobs are deliberately **not** owned by one user. Two users may match and apply t
 - `companies`
 - `jobs`
 
-A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
+A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. Boards repost an opening under a new link, which changes the fingerprint, so a discovered posting with an unknown fingerprint is first compared with the same provider's jobs at that company: the same title and location with a description at least 80% alike, by shared words, is the same opening. Its fingerprint is recorded against the stored job (`job_fingerprint_aliases`), and when the repost is dated later its link, external id and date replace the stored ones. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
 
 ### Private per-user data
 
@@ -847,6 +847,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `013_job_slugs.sql` | Readable job names for URLs |
 | `014_job_liveness.sql` | Closed postings and the background link check |
 | `015_profile_name_parts.sql` | Given and family names for a form's first and last name fields |
+| `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 
 Core entities:
 
