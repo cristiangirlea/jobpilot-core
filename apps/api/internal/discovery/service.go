@@ -42,11 +42,48 @@ var deadLinkReasons = []string{ReasonGone, ReasonNotFound, ReasonBoard}
 // partial, and SmartRecruiters is fetched a page at a time.
 var fullBoard = map[string]bool{"greenhouse": true, "lever": true, "ashby": true}
 
+// employerBoard lists the providers whose source is one employer's board,
+// which lists every open role there. Their terms apply to titles, here, while
+// the feeds apply theirs to whole postings as they are fetched.
+var employerBoard = map[string]bool{"greenhouse": true, "lever": true, "ashby": true, "smartrecruiters": true}
+
+// keepWanted keeps the postings on an employer board whose title contains one
+// of the source's search terms, if it has any, and none of its excluded terms.
+// A board lists every open role, and one of Grafana's brought 148, sales
+// included, into a run whose budget is small once it is shared.
+func keepWanted(source models.DiscoverySource, jobs []models.DiscoveredJob) []models.DiscoveredJob {
+	if !employerBoard[source.Provider] {
+		return jobs
+	}
+	terms, excluded := splitOrTerms(source.SearchQuery), splitOrTerms(source.ExcludedSearchQuery)
+	if len(terms) == 0 && len(excluded) == 0 {
+		return jobs
+	}
+	out := make([]models.DiscoveredJob, 0, len(jobs))
+	for _, candidate := range jobs {
+		title := strings.ToLower(candidate.Input.Title)
+		if (len(terms) == 0 || containsAny(title, terms)) && !containsAny(title, excluded) {
+			out = append(out, candidate)
+		}
+	}
+	return out
+}
+
+func containsAny(text string, terms []string) bool {
+	for _, term := range terms {
+		if strings.Contains(text, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Service) ValidateSource(ctx context.Context, source models.DiscoverySource) (int, string, error) {
 	jobs, err := s.Fetcher.Fetch(ctx, source)
 	if err != nil {
 		return 0, "", err
 	}
+	jobs = keepWanted(source, jobs)
 	sample := ""
 	if len(jobs) > 0 {
 		sample = jobs[0].Input.Title
@@ -136,7 +173,9 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 				slog.Info("closed jobs no longer listed", "provider", source.Provider, "board", source.Identifier, "count", closed)
 			}
 		}
-		fetched[i] = jobs
+		// Unlisted jobs are judged against the whole board above; the
+		// source's terms only choose which postings this run takes.
+		fetched[i] = keepWanted(source, jobs)
 	}
 	var fingerprints []string
 	for _, jobs := range fetched {

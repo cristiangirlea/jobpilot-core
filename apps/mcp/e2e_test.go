@@ -585,6 +585,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 
 	if atsPort != "" {
+		boardTermsChooseTitles(t, call)
 		discoveryShareAndCounters(t, r, call)
 		discoveryRecognisesReposts(t, r, call)
 	}
@@ -625,6 +626,23 @@ func discoveryRecognisesReposts(t *testing.T, r *rest, call func(string, map[str
 	}
 	if len(links) != 1 || !strings.HasSuffix(links[0], "/fair-c/302") {
 		t.Fatalf("the reposted opening should be one job with the newer link, got %v", links)
+	}
+}
+
+// boardTermsChooseTitles validates an employer board with title terms. A
+// board lists every open role, so its source's terms choose the titles: none
+// of fair-a's titles mention sales, and four of five are backend roles other
+// than the excluded fifth. Validation only reads, so nothing is stored.
+func boardTermsChooseTitles(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool)) {
+	t.Helper()
+	for _, c := range []struct {
+		terms, excluded string
+		want            float64
+	}{{"sales", "", 0}, {"backend", "fair-a 5", 4}} {
+		out, text, isErr := call("validate_discovery_source", map[string]any{"provider": "greenhouse", "name": "Board fair-a", "identifier": "fair-a", "search_query": c.terms, "excluded_search_query": c.excluded})
+		if isErr || out["count"] != c.want {
+			t.Fatalf("board fair-a with terms %q, not %q: want %v postings: %s", c.terms, c.excluded, c.want, text)
+		}
 	}
 }
 

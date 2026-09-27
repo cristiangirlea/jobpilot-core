@@ -65,3 +65,34 @@ func TestNewPostingsComeFirstWithinASource(t *testing.T) {
 		t.Fatalf("got %s, want %s", got, want)
 	}
 }
+
+// Found in early use: an employer board lists every open role, so
+// Grafana's brought all 148 postings, sales included, into a run whose budget
+// is small once shared. A board source's own terms now keep only the titles
+// wanted. Feeds that search whole postings already apply their terms.
+func TestBoardSourcesKeepOnlyWantedTitles(t *testing.T) {
+	listing := []models.DiscoveredJob{
+		{ExternalID: "1", Input: models.JobInput{Title: "Senior Backend Engineer - Databases"}},
+		{ExternalID: "2", Input: models.JobInput{Title: "Enterprise Account Executive"}},
+		{ExternalID: "3", Input: models.JobInput{Title: "Engineering Manager, Mimir"}},
+		{ExternalID: "4", Input: models.JobInput{Title: "Go Developer"}},
+	}
+	ids := func(jobs []models.DiscoveredJob) string {
+		var out []string
+		for _, job := range jobs {
+			out = append(out, job.ExternalID)
+		}
+		return strings.Join(out, " ")
+	}
+	board := models.DiscoverySource{Provider: "greenhouse", SearchQuery: "engineer, developer", ExcludedSearchQuery: "manager"}
+	if got := ids(keepWanted(board, listing)); got != "1 4" {
+		t.Fatalf("board terms should keep engineering titles and drop managers, got %s", got)
+	}
+	if got := ids(keepWanted(models.DiscoverySource{Provider: "lever"}, listing)); got != "1 2 3 4" {
+		t.Fatalf("a board source without terms keeps every posting, got %s", got)
+	}
+	feed := models.DiscoverySource{Provider: "arbeitnow", SearchQuery: "nothing here"}
+	if got := ids(keepWanted(feed, listing)); got != "1 2 3 4" {
+		t.Fatalf("a feed has already applied its terms to the whole posting, got %s", got)
+	}
+}
