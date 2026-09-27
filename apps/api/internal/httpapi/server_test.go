@@ -121,3 +121,17 @@ func TestJobQueryReadsListParameters(t *testing.T) {
 		}
 	}
 }
+
+// Found in early use: a company's own careers page was refused as
+// "an aggregator link", which it is not. The refusal says which links work
+// without guessing what the pasted one was.
+func TestDetectBoardDoesNotCallEveryLinkAnAggregator(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&Server{}).detectBoard(rec, httptest.NewRequest("POST", "/api/discovery/detect", strings.NewReader(`{"url":"https://larchmont.example/careers"}`)))
+	if rec.Code != 422 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if body := rec.Body.String(); strings.Contains(body, "an aggregator link") || !strings.Contains(body, "careers page") {
+		t.Fatalf("the refusal should not call a careers page an aggregator: %s", body)
+	}
+}

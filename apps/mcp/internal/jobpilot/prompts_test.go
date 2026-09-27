@@ -64,3 +64,22 @@ func TestPromptsOnlyNameToolsThatExist(t *testing.T) {
 		}
 	}
 }
+
+// Found in early use: the review asks whether the filters are too
+// narrow, but never had the model read them, so it could only guess.
+func TestWeeklyReviewReadsTheFilters(t *testing.T) {
+	cs, _ := session(t)
+	res, err := cs.GetPrompt(context.Background(), &mcp.GetPromptParams{Name: "weekly_review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	for _, m := range res.Messages {
+		if tc, ok := m.Content.(*mcp.TextContent); ok {
+			text.WriteString(tc.Text)
+		}
+	}
+	if !strings.Contains(text.String(), "get_filters") {
+		t.Fatalf("the review should read the filters before judging them: %s", text.String())
+	}
+}

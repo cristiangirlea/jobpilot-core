@@ -65,11 +65,12 @@ Use only facts from get_profile, get_job and generate_documents. Never invent ex
 2. Call list_jobs with min_score 70 and limit 10 for my strongest current matches.
 3. Call list_applications, and look at what sits in draft and ready as well as what is already applied or interviewing.
 4. Call list_discovery_runs to check discovery is actually finding things, and flag any source errors.
+5. Call get_filters, and list_jobs with state rejected and limit 10, to see which rules reject the best-scoring jobs.
 
 Then tell me, briefly:
 - How the pipeline looks and what changed worth noticing.
 - Anything stalled: drafts I never sent, applications with no movement, matches I have not acted on.
-- Whether discovery is healthy, and if my filters look too narrow given how many jobs are being rejected rather than accepted.
+- Whether discovery is healthy, and whether my filters look too narrow: name the rule behind the strongest rejections, from the filter itself.
 - The two or three things worth doing next.
 
 Do not change any application status without asking me first, and do not describe anything as submitted.`},
