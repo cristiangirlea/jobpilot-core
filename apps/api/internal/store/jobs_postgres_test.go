@@ -94,4 +94,14 @@ func TestJobsQueryAgainstPostgres(t *testing.T) {
 	if len(jobs) != 1 || jobs[0].Job.Description != "" || jobs[0].Job.Title == "" {
 		t.Fatalf("summary should keep the job but leave its description out, got %s", fmt.Sprint(jobs))
 	}
+
+	// A closed posting cannot be applied to, so it is not a good match to act
+	// on: of open90 and closed80, only open90 counts.
+	dashboard, err := st.Dashboard(ctx, user.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard["good_matches"] != 1 {
+		t.Fatalf("good matches should leave out closed postings, got %v", dashboard["good_matches"])
+	}
 }

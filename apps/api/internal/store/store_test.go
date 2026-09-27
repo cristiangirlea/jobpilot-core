@@ -76,16 +76,31 @@ func TestScanJobMatchWithholdsApplyURLForRejectedMatches(t *testing.T) {
 	}
 }
 
-// applicationRow builds the 24 values scanApplication reads, in column order:
-// the joined rejected flag, then the employer URL.
+// applicationRow builds the 26 values scanApplication reads, in column order:
+// the joined rejected flag, the employer URL, then when and why the job closed.
 func applicationRow(applyURL string, rejected bool) *fakeRow {
 	return &fakeRow{values: []any{
 		"app-1", "job-1", "ready", "keep me", time.Now(), time.Now(),
 		"job-1", "Senior Backend Engineer", "Fresh Systems GmbH", "fresh systems", "fresh.example",
 		"Bucharest", "remote", 95000.0, 110000.0, "EUR", "full-time", "Software",
 		"Long description.", applyURL, (*time.Time)(nil), time.Now(), rejected,
-		"https://job-boards.greenhouse.io/fresh/jobs/1",
+		"https://job-boards.greenhouse.io/fresh/jobs/1", (*time.Time)(nil), "",
 	}}
+}
+
+// An application is the candidate's history, so a job that closes stays on
+// it, and says it closed and why, rather than leaving with the job lists.
+func TestScanApplicationKeepsAClosedJobAndSaysWhy(t *testing.T) {
+	row := applicationRow("https://example.test/apply", false)
+	closedAt := time.Now()
+	row.values[24], row.values[25] = &closedAt, "its link now returns 404 Not Found"
+	application, err := scanApplication(row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if application.Job == nil || application.Job.ClosedAt == nil || application.Job.ClosedReason != "its link now returns 404 Not Found" {
+		t.Fatalf("the application should keep its job and say it closed, got %+v", application.Job)
+	}
 }
 
 func TestScanApplicationWithholdsApplyURLWhenBlocked(t *testing.T) {

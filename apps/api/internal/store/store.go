@@ -789,7 +789,7 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 }
 
 func (s *Store) Applications(ctx context.Context, u string) ([]models.Application, error) {
-	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -805,13 +805,13 @@ func (s *Store) Applications(ctx context.Context, u string) ([]models.Applicatio
 	return out, rows.Err()
 }
 func (s *Store) Application(ctx context.Context, u, id string) (models.Application, error) {
-	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
+	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
 }
 func scanApplication(row scanner) (models.Application, error) {
 	var a models.Application
 	var j models.Job
 	var rejected bool
-	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected, &j.EmployerURL)
+	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected, &j.EmployerURL, &j.ClosedAt, &j.ClosedReason)
 	if rejected {
 		j.ApplyURL, j.EmployerURL = "", ""
 	}
@@ -1103,7 +1103,7 @@ func profileAction(p models.Profile) string {
 func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error) {
 	out := map[string]any{}
 	var profileFields, total, blacklistRejected, filterRejected, good, draft, applied int
-	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=false AND score>=70),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
+	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
 	if err != nil {
 		return nil, err
 	}

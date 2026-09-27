@@ -30,7 +30,7 @@ The full local stack is implemented and usable:
 - CV tailoring per posting, with approve-once-reuse-many for similar roles.
 - Reading the employer's published application form (Greenhouse) and resolving it.
 - An outbox that composes a whole application and holds it for approval.
-- Closed-posting detection: links returning 404/410 and jobs dropped from a full employer board are marked closed, leave recommendations, and cannot be composed.
+- Closed-posting detection: links returning 404/410 and jobs dropped from a full employer board are marked closed, leave job lists and recommendations for everyone, and cannot be composed; an application keeps its closed job as history.
 - Curated employer boards and board-token extraction from a pasted careers URL.
 - Web pages for CVs, the answer bank, and the outbox.
 
@@ -373,6 +373,12 @@ In the UI, **Related to me** means an accepted match with score at least `70`.
 - Source failures are stored on the run; a run fails completely only when every active source fails.
 - Global fingerprints deduplicate jobs across users, providers, and repeated runs.
 - Every discovered job gets a private match evaluation for the requesting user.
+
+### Closed postings
+
+The scheduler's loop also checks posting links: every 5 minutes it takes up to 25 open jobs that someone still matches, least recently checked first, and checks each at most once a day. A `404` or `410`, or Greenhouse sending a posting back to its board, closes the job for everyone; `403`, `429`, `5xx` and network errors say nothing about the posting and leave it open. An Arbeitnow posting is checked at the employer's page too, once known. Jobs nobody matches are not checked.
+
+A closed job is never deleted. It leaves the job lists the web app shows (`open=true`), the dashboard's recommendations and good-match count, and the MCP `list_jobs` default, and composing an application for it is a `409`. An application for it stays, as the candidate's history, and says the posting closed and why.
 
 This is intentionally low-resource architecture for one local API instance. The process-local mutex is not sufficient for a horizontally scaled multi-instance deployment; use a PostgreSQL advisory lock or a real work queue before scaling out.
 
