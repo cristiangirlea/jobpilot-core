@@ -296,6 +296,28 @@ func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string)
 	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug,closed_at,closed_reason FROM jobs WHERE fingerprint=$1`, fingerprint).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug, &j.ClosedAt, &j.ClosedReason)
 	return j, err
 }
+
+// KnownFingerprints reports which of these fingerprints the catalog already
+// holds, in one query, so a discovery run can put new postings first.
+func (s *Store) KnownFingerprints(ctx context.Context, fingerprints []string) (map[string]bool, error) {
+	known := map[string]bool{}
+	if len(fingerprints) == 0 {
+		return known, nil
+	}
+	rows, err := s.DB.Query(ctx, `SELECT fingerprint FROM jobs WHERE fingerprint = ANY($1)`, fingerprints)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var fingerprint string
+		if err = rows.Scan(&fingerprint); err != nil {
+			return nil, err
+		}
+		known[fingerprint] = true
+	}
+	return known, rows.Err()
+}
 func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, sourceProvider, sourceName, externalID, fingerprint string, in models.JobInput) (models.Job, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {

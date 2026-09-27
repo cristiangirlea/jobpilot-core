@@ -12,8 +12,9 @@ type Config struct {
 	DatabaseURL string
 	JWTSecret   string
 	FrontendURL string
-	// ATSGreenhouseURL is the Greenhouse board API origin. Tests point it at
-	// a fake so a composed application can be exercised end to end.
+	// ATSGreenhouseURL is the Greenhouse board API origin, for both the form
+	// reader and discovery's board listings. Tests point it at a fake so a
+	// discovery run and a composed application can be exercised end to end.
 	ATSGreenhouseURL string
 	TokenTTL         time.Duration
 	LLM              LLMConfig

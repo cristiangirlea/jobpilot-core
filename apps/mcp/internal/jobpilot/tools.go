@@ -257,7 +257,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	addTool(s, &mcp.Tool{
 		Name:        "list_discovery_runs",
 		Title:       "List discovery runs",
-		Description: "Return recent discovery runs with how many jobs each one saw, added, rejected, skipped as duplicates, and auto-prepared, plus any provider errors.",
+		Description: "Return recent discovery runs with how many postings each one saw, how many jobs it added and how many of those it rejected, how many were already known (duplicates_skipped, re-scored), and how many it auto-prepared, plus any provider errors. A run's budget is shared across sources.",
 		Annotations: readOnly("List discovery runs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listRunsInput) (*mcp.CallToolResult, RunList, error) {
 		runs, err := c.DiscoveryRuns(ctx)

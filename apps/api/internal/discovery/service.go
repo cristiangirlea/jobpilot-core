@@ -110,7 +110,8 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 	}
 	succeeded := 0
 	var sourceErrors []string
-	for _, source := range sources {
+	fetched := make([][]models.DiscoveredJob, len(sources))
+	for i, source := range sources {
 		jobs, fetchErr := s.Fetcher.Fetch(ctx, source)
 		if fetchErr != nil {
 			message := fetchErr.Error()
@@ -131,68 +132,82 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 				slog.Info("closed jobs no longer listed", "provider", source.Provider, "board", source.Identifier, "count", closed)
 			}
 		}
+		fetched[i] = jobs
+	}
+	var fingerprints []string
+	for _, jobs := range fetched {
 		for _, candidate := range jobs {
-			if run.JobsSeen >= settings.MaxJobsPerRun {
-				break
-			}
-			run.JobsSeen++
-			if strings.TrimSpace(candidate.Input.Title) == "" || strings.TrimSpace(candidate.Input.Company) == "" || strings.TrimSpace(candidate.Input.Description) == "" {
-				continue
-			}
-			fingerprint := Fingerprint(candidate.Input)
-			job, getErr := s.Store.CatalogJobByFingerprint(ctx, fingerprint)
-			duplicate := getErr == nil
-			if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
-				return s.finish(ctx, userID, run, getErr)
-			}
-			if !duplicate {
-				job, getErr = s.Store.CreateDiscoveredJob(ctx, userID, source.ID, source.Provider, source.Name, candidate.ExternalID, fingerprint, candidate.Input)
+			fingerprints = append(fingerprints, Fingerprint(candidate.Input))
+		}
+	}
+	known, err := s.Store.KnownFingerprints(ctx, fingerprints)
+	if err != nil {
+		return s.finish(ctx, userID, run, err)
+	}
+	for i := range fetched {
+		fetched[i] = newFirst(fetched[i], known)
+	}
+	for _, next := range shareBudget(sources, fetched, settings.MaxJobsPerRun) {
+		source, candidate := next.source, next.candidate
+		run.JobsSeen++
+		if strings.TrimSpace(candidate.Input.Title) == "" || strings.TrimSpace(candidate.Input.Company) == "" || strings.TrimSpace(candidate.Input.Description) == "" {
+			continue
+		}
+		fingerprint := Fingerprint(candidate.Input)
+		job, getErr := s.Store.CatalogJobByFingerprint(ctx, fingerprint)
+		duplicate := getErr == nil
+		if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
+			return s.finish(ctx, userID, run, getErr)
+		}
+		if !duplicate {
+			job, getErr = s.Store.CreateDiscoveredJob(ctx, userID, source.ID, source.Provider, source.Name, candidate.ExternalID, fingerprint, candidate.Input)
+			if getErr != nil {
+				job, getErr = s.Store.CatalogJobByFingerprint(ctx, fingerprint)
 				if getErr != nil {
-					job, getErr = s.Store.CatalogJobByFingerprint(ctx, fingerprint)
-					if getErr != nil {
-						return s.finish(ctx, userID, run, getErr)
-					}
-					duplicate = true
-				} else {
-					run.JobsAdded++
+					return s.finish(ctx, userID, run, getErr)
 				}
-			}
-			if err = s.Store.MarkSeen(ctx, job.ID, ReasonUnlisted); err != nil {
-				return s.finish(ctx, userID, run, err)
-			}
-			if duplicate {
-				run.DuplicatesSkipped++
-				// Keep a known posting's text current: providers edit postings,
-				// and text stored before Readable kept paragraphs was flattened.
-				// Only text this provider stored is replaced, so a description a
-				// user pasted into a manual import stays theirs.
-				if job.SourceProvider == source.Provider && job.Description != candidate.Input.Description {
-					if err = s.Store.RefreshDescription(ctx, job.ID, candidate.Input.Description); err != nil {
-						return s.finish(ctx, userID, run, err)
-					}
-					job.Description = candidate.Input.Description
-				}
-			}
-			evaluation := matching.Evaluate(profile, blacklist, filter, job.JobInput, time.Now())
-			if _, err = s.Store.SaveJobMatch(ctx, userID, job.ID, evaluation, filterID); err != nil {
-				return s.finish(ctx, userID, run, err)
-			}
-			if evaluation.Rejected {
-				run.JobsRejected++
-				continue
-			}
-			if settings.AutoPrepare && evaluation.Score >= settings.MinScore && job.ClosedAt == nil {
-				prepared, prepErr := s.prepare(ctx, userID, job, evaluation)
-				if prepErr != nil {
-					return s.finish(ctx, userID, run, prepErr)
-				}
-				if prepared {
-					run.ApplicationsPrepared++
-				}
+				duplicate = true
+			} else {
+				run.JobsAdded++
 			}
 		}
-		if run.JobsSeen >= settings.MaxJobsPerRun {
-			break
+		if err = s.Store.MarkSeen(ctx, job.ID, ReasonUnlisted); err != nil {
+			return s.finish(ctx, userID, run, err)
+		}
+		if duplicate {
+			run.DuplicatesSkipped++
+			// Keep a known posting's text current: providers edit postings,
+			// and text stored before Readable kept paragraphs was flattened.
+			// Only text this provider stored is replaced, so a description a
+			// user pasted into a manual import stays theirs.
+			if job.SourceProvider == source.Provider && job.Description != candidate.Input.Description {
+				if err = s.Store.RefreshDescription(ctx, job.ID, candidate.Input.Description); err != nil {
+					return s.finish(ctx, userID, run, err)
+				}
+				job.Description = candidate.Input.Description
+			}
+		}
+		evaluation := matching.Evaluate(profile, blacklist, filter, job.JobInput, time.Now())
+		if _, err = s.Store.SaveJobMatch(ctx, userID, job.ID, evaluation, filterID); err != nil {
+			return s.finish(ctx, userID, run, err)
+		}
+		if evaluation.Rejected {
+			// Rejections count among the jobs this run added. A known
+			// posting is re-scored too, but counting it here made a run
+			// that added 6 jobs report 100 rejected.
+			if !duplicate {
+				run.JobsRejected++
+			}
+			continue
+		}
+		if settings.AutoPrepare && evaluation.Score >= settings.MinScore && job.ClosedAt == nil {
+			prepared, prepErr := s.prepare(ctx, userID, job, evaluation)
+			if prepErr != nil {
+				return s.finish(ctx, userID, run, prepErr)
+			}
+			if prepared {
+				run.ApplicationsPrepared++
+			}
 		}
 	}
 	var runErr error
@@ -200,6 +215,51 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 		runErr = fmt.Errorf("all discovery sources failed: %s", strings.Join(sourceErrors, "; "))
 	}
 	return s.finish(ctx, userID, run, runErr)
+}
+
+// sourceJob is one fetched posting and the source it came from.
+type sourceJob struct {
+	source    models.DiscoverySource
+	candidate models.DiscoveredJob
+}
+
+// newFirst puts the postings the catalog does not hold yet ahead of known
+// ones, keeping each group's order. Once the budget is shared a source's share
+// is small, and a board that lists known postings first would otherwise spend
+// it re-scoring them every run and never reach a new one.
+func newFirst(jobs []models.DiscoveredJob, known map[string]bool) []models.DiscoveredJob {
+	out := make([]models.DiscoveredJob, 0, len(jobs))
+	var seen []models.DiscoveredJob
+	for _, candidate := range jobs {
+		if known[Fingerprint(candidate.Input)] {
+			seen = append(seen, candidate)
+		} else {
+			out = append(out, candidate)
+		}
+	}
+	return append(out, seen...)
+}
+
+// shareBudget takes one posting from each source in turn until the run's
+// budget is spent. Spent source by source, the budget went to the first
+// sources every run and a later source was never read. A source with fewer
+// postings than its share leaves the rest to the others, and each source's
+// own order is kept.
+func shareBudget(sources []models.DiscoverySource, fetched [][]models.DiscoveredJob, budget int) []sourceJob {
+	var out []sourceJob
+	for i := 0; len(out) < budget; i++ {
+		took := false
+		for s := range fetched {
+			if i < len(fetched[s]) && len(out) < budget {
+				out = append(out, sourceJob{source: sources[s], candidate: fetched[s][i]})
+				took = true
+			}
+		}
+		if !took {
+			break
+		}
+	}
+	return out
 }
 
 func (s *Service) prepare(ctx context.Context, userID string, job models.Job, evaluation models.Evaluation) (bool, error) {
