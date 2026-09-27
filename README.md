@@ -380,6 +380,8 @@ The scheduler's loop also checks posting links: every 5 minutes it takes up to 2
 
 A closed job is never deleted. It leaves the job lists the web app shows (`open=true`), the dashboard's recommendations and good-match count, and the MCP `list_jobs` default, and composing an application for it is a `409`. An application for it stays, as the candidate's history, and says the posting closed and why.
 
+A page that says a role is filled but still answers `200` is invisible to the check, so anyone can report a posting as no longer available from its job page (`POST /api/jobs/{id}/report`). The report checks the link at once, and a definite answer closes the job for everyone. Otherwise the job leaves the reporter's lists, recommendations and good-match count, and closes for everyone when a second person reports it: the catalog is shared, and one mistaken report must not hide a live job from others. `DELETE` on the same path takes a report back; a job that closed on reports alone reopens when fewer than two remain, while one its link closed stays closed.
+
 This is intentionally low-resource architecture for one local API instance. The process-local mutex is not sufficient for a horizontally scaled multi-instance deployment; use a PostgreSQL advisory lock or a real work queue before scaling out.
 
 ### Auto-prepare
@@ -645,13 +647,14 @@ Authorization: Bearer <token>
 | `GET`, `POST` | `/api/filters` | List or create filter presets |
 | `PUT`, `DELETE` | `/api/filters/{id}` | Save or delete a filter preset |
 | `GET`, `POST` | `/api/jobs` | List matched jobs or manually import one |
+| `POST`, `DELETE` | `/api/jobs/{id}/report` | Report a posting as no longer available, or take the report back |
 | `GET` | `/api/jobs/{id}` | Job and user-specific match details; `{id}` may also be the job's slug, such as `arbeitnow-remote-python-backend-engineer-berlin-100001` |
 | `POST` | `/api/jobs/{id}/generate` | Generate factual application documents |
 | `POST` | `/api/jobs/{id}/outbound` | Record attribution and return allowed apply URL |
 | `GET` | `/api/matches` | List accepted matches |
 | `GET` | `/api/matches/{id}` | Read one match |
 
-Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all`; `/api/matches` is accepted only), `min_score` (0 to 100), `open=true` to leave closed postings out, `fields=summary` to leave descriptions out, and `limit` (1 to 500) with `offset`. A bad value is a `422` naming the parameter. Without any, the list is whole, as clients built before the parameters expect. Every response carries `X-Total-Count`, the number of jobs matching before `limit` and `offset`. A whole list is large: it was 14.4 MB on a full account, mostly descriptions, so a client that pages should ask for the summary and read one job for its text.
+Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all`; `/api/matches` is accepted only), `min_score` (0 to 100), `open=true` to leave out closed postings and ones the user reported gone, `fields=summary` to leave descriptions out, and `limit` (1 to 500) with `offset`. A bad value is a `422` naming the parameter. Without any, the list is whole, as clients built before the parameters expect. Every response carries `X-Total-Count`, the number of jobs matching before `limit` and `offset`. A whole list is large: it was 14.4 MB on a full account, mostly descriptions, so a client that pages should ask for the summary and read one job for its text.
 
 ### Discovery endpoints
 
@@ -861,6 +864,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `015_profile_name_parts.sql` | Given and family names for a form's first and last name fields |
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
+| `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
 
 Core entities:
 

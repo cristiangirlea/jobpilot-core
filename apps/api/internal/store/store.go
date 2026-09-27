@@ -492,6 +492,57 @@ func (s *Store) RecordLinkCheck(ctx context.Context, id string, closed bool, rea
 	return err
 }
 
+// ReportsToClose is how many people must report a posting gone, when its
+// link cannot confirm it, before it closes for everyone. One is not enough:
+// the catalog is shared, and a mistaken report must not hide a live job.
+const ReportsToClose = 2
+
+// ReportJob records that user u reports job id as no longer available, and
+// returns how many people have reported it. Reporting twice counts once.
+func (s *Store) ReportJob(ctx context.Context, u, id string) (int, error) {
+	if _, err := s.DB.Exec(ctx, `INSERT INTO job_reports(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING`, id, u); err != nil {
+		return 0, err
+	}
+	var reporters int
+	err := s.DB.QueryRow(ctx, `SELECT count(*) FROM job_reports WHERE job_id=$1`, id).Scan(&reporters)
+	return reporters, err
+}
+
+// WithdrawReport takes back u's report. A job closed with reportedReason,
+// on reports alone, reopens once fewer than ReportsToClose remain; a job its
+// link check closed stays closed.
+func (s *Store) WithdrawReport(ctx context.Context, u, id, reportedReason string) error {
+	if _, err := s.DB.Exec(ctx, `DELETE FROM job_reports WHERE job_id=$1 AND user_id=$2`, id, u); err != nil {
+		return err
+	}
+	_, err := s.DB.Exec(ctx, `UPDATE jobs SET closed_at=NULL, closed_reason='' WHERE id=$1 AND closed_reason=$2
+		AND (SELECT count(*) FROM job_reports WHERE job_id=$1) < $3`, id, reportedReason, ReportsToClose)
+	return err
+}
+
+// HasReported reports whether user u reported job id as gone.
+func (s *Store) HasReported(ctx context.Context, u, id string) (bool, error) {
+	var yes bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM job_reports WHERE job_id=$1 AND user_id=$2)`, id, u).Scan(&yes)
+	return yes, err
+}
+
+// CloseJob closes an open job for everyone with reason.
+func (s *Store) CloseJob(ctx context.Context, id, reason string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE jobs SET closed_at=now(), closed_reason=$2 WHERE id=$1 AND closed_at IS NULL`, id, reason)
+	return err
+}
+
+// JobLinks returns the links a check of job id reads, from the catalog row:
+// a user's own view withholds the apply link of a match they cannot apply to.
+func (s *Store) JobLinks(ctx context.Context, id string) (LinkToCheck, error) {
+	rows, err := s.DB.Query(ctx, `SELECT id,apply_url,source_provider,employer_url FROM jobs WHERE id=$1`, id)
+	if err != nil {
+		return LinkToCheck{}, err
+	}
+	return pgx.CollectExactlyOneRow(rows, pgx.RowToStructByName[LinkToCheck])
+}
+
 // CloseUnlisted closes the jobs of an employer board that the board's full
 // feed no longer lists. It only applies to providers whose feed is the whole
 // board; any user's source for the same board counts, since the catalog is
@@ -666,7 +717,7 @@ func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluati
 type JobQuery struct {
 	State    string // "accepted", "rejected", or "" and "all" for both
 	MinScore int
-	OpenOnly bool // leave closed postings out
+	OpenOnly bool // leave out closed postings, and ones this user reported gone
 	Limit    int  // 0 for no limit
 	Offset   int
 	Summary  bool // leave descriptions out, which are most of a job's size
@@ -692,7 +743,8 @@ func (s *Store) Jobs(ctx context.Context, u string, q JobQuery) ([]models.JobWit
 		where += fmt.Sprintf(` AND m.score>=$%d`, len(args))
 	}
 	if q.OpenOnly {
-		where += ` AND j.closed_at IS NULL`
+		// Open for this user: not closed, and not reported gone by them.
+		where += ` AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)`
 	}
 	columns := jobMatchColumns
 	if q.Summary {
@@ -1103,7 +1155,7 @@ func profileAction(p models.Profile) string {
 func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error) {
 	out := map[string]any{}
 	var profileFields, total, blacklistRejected, filterRejected, good, draft, applied int
-	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
+	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
 	if err != nil {
 		return nil, err
 	}
@@ -1112,16 +1164,11 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 		return nil, err
 	}
 	profileFields, profileChecks := profileCompleteness(p)
-	matches, _, err := s.Jobs(ctx, u, JobQuery{State: "accepted"})
+	// Recommendations are for jobs that can still be applied to, and that
+	// this user has not reported gone.
+	jobs, _, err := s.Jobs(ctx, u, JobQuery{State: "accepted", OpenOnly: true, Limit: 5})
 	if err != nil {
 		return nil, err
-	}
-	// Recommendations are for jobs that can still be applied to.
-	jobs := []models.JobWithMatch{}
-	for _, x := range matches {
-		if x.Job.ClosedAt == nil && len(jobs) < 5 {
-			jobs = append(jobs, x)
-		}
 	}
 	out["profile_completeness"] = profileFields * 100 / profileChecks
 	out["jobs_imported"] = total

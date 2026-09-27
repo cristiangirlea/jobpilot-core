@@ -21,6 +21,9 @@ const (
 	// ReasonReposted closes an older copy of an opening a board reposted.
 	// Seeing the old posting again does not reopen it.
 	ReasonReposted = "a later posting of the same opening replaces it"
+	// ReasonReported closes a posting that enough people reported gone when
+	// its link could not confirm it.
+	ReasonReported = "two people reported it is no longer available"
 )
 
 // LinkChecker tells whether a posting's link still leads to the posting, and

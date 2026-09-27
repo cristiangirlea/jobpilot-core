@@ -104,6 +104,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/jobs", p(s.listJobs))
 	m.Handle("POST /api/jobs", w(s.importJob))
 	m.Handle("GET /api/jobs/{id}", p(s.getJob))
+	m.Handle("POST /api/jobs/{id}/report", w(s.reportJob))
+	m.Handle("DELETE /api/jobs/{id}/report", w(s.withdrawReport))
 	m.Handle("POST /api/jobs/{id}/generate", w(s.generate))
 	m.Handle("GET /api/matches", p(s.listMatches))
 	m.Handle("GET /api/matches/{id}", p(s.getMatch))
@@ -587,7 +589,12 @@ func jobQuery(r *http.Request, fixedState string) (store.JobQuery, string) {
 	return q, ""
 }
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
-	x, e := s.Store.Job(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
+	ctx := r.Context()
+	uid := auth.UserID(ctx)
+	x, e := s.Store.Job(ctx, uid, r.PathValue("id"))
+	if e == nil {
+		x.Reported, e = s.Store.HasReported(ctx, uid, x.Job.ID)
+	}
 	respond(w, x, e)
 }
 func (s *Server) listMatches(w http.ResponseWriter, r *http.Request) {

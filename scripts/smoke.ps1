@@ -201,4 +201,24 @@ $script:Headers = @{ Authorization = "Bearer $($second.token)" }
 $secondMatch = Send-JobPilotRequest POST "/jobs" $acceptedBody
 if ($secondMatch.job.id -ne $accepted.job.id) { throw "Shared catalog deduplication smoke check failed" }
 
-Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, notes preservation, the outbox approval gate, and scoped agent tokens."
+# A posting reported gone. Its link cannot be checked here, so one report
+# hides it from its reporter only; a second person's report closes it for
+# everyone, and taking one back reopens it.
+$goneBody = $acceptedBody.Clone()
+$goneBody.company = "Gone Systems GmbH"; $goneBody.company_domain = "gone.example"; $goneBody.apply_url = "https://example.test/gone-$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())"
+$script:Headers = $sessionHeaders
+$gone = Send-JobPilotRequest POST "/jobs" $goneBody
+$firstReport = Send-JobPilotRequest POST "/jobs/$($gone.job.id)/report"
+if ($firstReport.closed -or -not $firstReport.hidden_for_you) { throw "One unconfirmed report should hide the job from its reporter only" }
+if (@(Send-JobPilotRequest GET "/jobs?open=true" | Where-Object { $_.job.id -eq $gone.job.id }).Count -ne 0) { throw "A reported job should leave its reporter's list" }
+if (-not (Send-JobPilotRequest GET "/jobs/$($gone.job.id)").reported) { throw "The job page should know its reader reported it" }
+$script:Headers = @{ Authorization = "Bearer $($second.token)" }
+Send-JobPilotRequest POST "/jobs" $goneBody | Out-Null
+if (@(Send-JobPilotRequest GET "/jobs?open=true" | Where-Object { $_.job.id -eq $gone.job.id }).Count -ne 1) { throw "Someone else's report must not hide a job from others" }
+$secondReport = Send-JobPilotRequest POST "/jobs/$($gone.job.id)/report"
+if (-not $secondReport.closed) { throw "A second person's report should close the job for everyone" }
+$script:Headers = $sessionHeaders
+Send-JobPilotRequest DELETE "/jobs/$($gone.job.id)/report" | Out-Null
+if ((Send-JobPilotRequest GET "/jobs/$($gone.job.id)").job.closed_at) { throw "Taking a report back should reopen a job closed on reports alone" }
+
+Write-Host "JobPilot smoke test passed: discovery config, shared catalog, scoring, generation, outbound attribution, application tracking, notes preservation, the outbox approval gate, scoped agent tokens, and reports of postings that are gone."
