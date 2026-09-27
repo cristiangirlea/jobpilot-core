@@ -18,7 +18,8 @@ export default function ApplicationDetail(){
   if(!data)return <Shell><ErrorMessage message={error}/><div className="card">Loading application…</div></Shell>;
   const a=data.application,d=data.documents;
   return <Shell>
-    <Header eyebrow="Application record" title={a.job?.title||"Application"} description={`${a.job?.company||""} · created ${new Date(a.created_at).toLocaleDateString()}`} action={!data.blocked&&a.job?.apply_url?<OpenApplyButton jobId={a.job_id}/>:undefined}/>
+    <Header eyebrow="Application record" title={a.job?.title||"Application"} description={`${a.job?.company||""} · created ${new Date(a.created_at).toLocaleDateString()}`} action={!data.blocked&&!a.job?.closed_at&&a.job?.apply_url?<OpenApplyButton jobId={a.job_id}/>:undefined}/>
+    {a.job?.closed_at&&<section className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><strong>This posting has closed</strong> ({new Date(a.job.closed_at).toLocaleDateString()}){a.job.closed_reason?`: ${a.job.closed_reason}`:""}. The application stays in your history; other people no longer see the job.</section>}
     <ErrorMessage message={error}/>{saved&&<p className="mb-4 text-sm text-emerald-700">{saved}</p>}
     {data.blocked&&<div className="mb-5 rounded-2xl border border-red-100 bg-red-50 p-4 text-sm text-red-800"><strong>Application locked.</strong> This job is now rejected, so its apply link is disabled and it cannot be newly marked as applied. Existing history and documents remain available.<div className="mt-1 text-xs">{data.block_reasons.join(" · ")}</div></div>}
     <div className="grid gap-5 lg:grid-cols-[.7fr_1.3fr]">

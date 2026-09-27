@@ -18,7 +18,7 @@ export function JobList({matchesOnly=false}:{matchesOnly?:boolean}){
   const [loading,setLoading]=useState(true);
   const [technology,setTechnology]=useState("");
   const [relatedOnly,setRelatedOnly]=useState(false);
-  useEffect(()=>{api<JobMatch[]>(matchesOnly?"/matches":"/jobs").then(setItems).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[matchesOnly]);
+  useEffect(()=>{api<JobMatch[]>(matchesOnly?"/matches?open=true":"/jobs?open=true").then(setItems).catch(e=>setError(e.message)).finally(()=>setLoading(false))},[matchesOnly]);
   const visible=useMemo(()=>{
     const needle=technology.trim().toLowerCase();
     return items.filter(item=>{
