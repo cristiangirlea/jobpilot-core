@@ -253,7 +253,7 @@ Authentication tokens are stored in browser `localStorage`. The API client sends
 
 ## Candidate profile
 
-The profile is filled manually. CV parsing is intentionally deferred.
+The profile can be filled by hand or imported from an uploaded CV (PDF or DOCX). Parsing is deterministic and never invents a value: a field it cannot find stays empty and earns a warning. It reads sidebar layouts ("Go 5 years"), "Skills: a, b" lines, "Category: a, b (c, d), e / f" skills sections that wrap across lines, pipe-separated headlines and contact lines, and role headers written "Company | Title | Location | Dates" even when the PDF wraps them.
 
 Supported data includes:
 
