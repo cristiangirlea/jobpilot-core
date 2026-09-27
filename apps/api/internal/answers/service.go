@@ -162,9 +162,13 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	}
 
 	// 5. Deterministic wording, when the generator already covers this question.
+	// Fitted like every other source: template prose must never land in a
+	// select, and one that cannot be matched to an option stays unanswered.
 	if answer, ok := templateAnswer(key, subject.Documents); ok {
-		resolution.Answer, resolution.Source, resolution.NeedsReview = answer, SourceTemplate, true
-		return resolution, nil
+		if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
+			resolution.Answer, resolution.Source, resolution.NeedsReview = fitted, SourceTemplate, true
+			return resolution, nil
+		}
 	}
 
 	resolution.Source, resolution.NeedsReview = SourceUnanswered, true
