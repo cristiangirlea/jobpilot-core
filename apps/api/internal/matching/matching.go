@@ -12,8 +12,9 @@ import (
 )
 
 // splitWords returns the runs of [a-z0-9+#.] in s, the way the regexp of that
-// class did. Every evaluation tokenises the whole job description, and the
-// regexp engine made that most of what re-scoring a user's matches cost.
+// class did, without leading or trailing dots. Every evaluation tokenises the
+// whole job description, and the regexp engine made that most of what
+// re-scoring a user's matches cost.
 // Callers lowercase first; bytes of multi-byte UTF-8 runes are all 0x80 or
 // above, so they separate words exactly as the regexp's character class did.
 func splitWords(s string) []string {
@@ -28,12 +29,23 @@ func splitWords(s string) []string {
 			continue
 		}
 		if start >= 0 {
-			out = append(out, s[start:i])
+			out = appendWord(out, s[start:i])
 			start = -1
 		}
 	}
 	if start >= 0 {
-		out = append(out, s[start:])
+		out = appendWord(out, s[start:])
+	}
+	return out
+}
+
+// appendWord keeps dots inside a word, as in "node.js" or "asp.net", and drops
+// them at its ends, where they are punctuation: "aws." at the end of a
+// sentence is the word "aws". Both sides of every comparison are split here,
+// so a skill written ".NET" still matches ".NET" in a posting.
+func appendWord(out []string, word string) []string {
+	if word = strings.Trim(word, "."); word != "" {
+		out = append(out, word)
 	}
 	return out
 }
@@ -222,10 +234,18 @@ func scoreSkills(profile []models.Skill, required []string, description string) 
 	for _, s := range profile {
 		known[strings.ToLower(strings.TrimSpace(s.Name))] = s.Name
 	}
+	// The filter's skills focus the score, but only where the job mentions
+	// them. Counting a listed skill the job never asks for gave every job the
+	// same skill score and let generated text call it relevant. When the job
+	// mentions none of the listed skills, score on the profile's skills it
+	// does mention, as if there were no list.
 	var relevant []string
-	if len(required) > 0 {
-		relevant = required
-	} else {
+	for _, r := range required {
+		if phraseInWords(strings.ToLower(strings.TrimSpace(r)), descWords) {
+			relevant = append(relevant, r)
+		}
+	}
+	if len(relevant) == 0 {
 		for key, original := range known {
 			if phraseInWords(key, descWords) {
 				relevant = append(relevant, original)

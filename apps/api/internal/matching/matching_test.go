@@ -75,7 +75,9 @@ func TestSeniorityUsesBestSelectedLevel(t *testing.T) {
 }
 
 // splitWords replaced a regexp in the hot path of every evaluation, so it has
-// to tokenise exactly as the pattern it replaced did.
+// to tokenise as the pattern it replaced did, with one deliberate difference:
+// dots at either end of a word are punctuation and are dropped, so that a
+// word ending a sentence is still that word.
 func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
 	pattern := regexp.MustCompile(`[a-z0-9+#.]+`)
 	for _, text := range []string{
@@ -85,7 +87,12 @@ func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
 		"emoji 🚀 inside, go-live, e-mail", `under_score and back\slash`,
 	} {
 		lower := strings.ToLower(text)
-		want := pattern.FindAllString(lower, -1)
+		var want []string
+		for _, word := range pattern.FindAllString(lower, -1) {
+			if word = strings.Trim(word, "."); word != "" {
+				want = append(want, word)
+			}
+		}
 		got := splitWords(lower)
 		if len(want) == 0 && len(got) == 0 {
 			continue
@@ -111,5 +118,64 @@ func TestSkillListsAreNeverNull(t *testing.T) {
 				t.Errorf("%s: a skill list encodes as null, want an array", name)
 			}
 		}
+	}
+}
+
+// Found in early use: a filter's "skills used for score" were
+// counted whether or not the job mentioned them, so every job matched the
+// same three skills, got the same skill score, and every cover letter called
+// them the relevant skills, including for a Python role that never mentions
+// Go. The listed skills now count only where the job mentions them.
+func TestScoreSkillsOnlyCountSkillsTheJobMentions(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Go"}, {Name: "Docker"}, {Name: "AWS"}, {Name: "Python"}, {Name: "PostgreSQL"}}}
+	filter := &models.FilterPreset{RequiredSkills: []string{"Go", "Docker", "AWS"}}
+
+	pythonRole := Evaluate(profile, nil, filter, models.JobInput{Title: "Python Backend Engineer", Description: "Build Python services on AWS."}, time.Now())
+	if strings.Join(pythonRole.MatchedSkills, ",") != "AWS" {
+		t.Fatalf("only listed skills the job mentions may match, got %v", pythonRole.MatchedSkills)
+	}
+	if pythonRole.Breakdown["skill_match"] != 30 {
+		t.Fatalf("the one listed skill the job mentions is held, so the skill score is full, got %d", pythonRole.Breakdown["skill_match"])
+	}
+
+	// None of the listed skills appear: score on the profile's skills the job
+	// mentions, as without a list, rather than claiming the list.
+	elsewhere := Evaluate(profile, nil, filter, models.JobInput{Title: "Backend Engineer", Description: "Python and PostgreSQL."}, time.Now())
+	if strings.Join(elsewhere.MatchedSkills, ",") != "PostgreSQL,Python" {
+		t.Fatalf("with no listed skill mentioned, the profile's mentioned skills should count, got %v", elsewhere.MatchedSkills)
+	}
+	for _, skill := range elsewhere.MatchedSkills {
+		if skill == "Go" || skill == "Docker" || skill == "AWS" {
+			t.Fatalf("%s is not in the job and must not be claimed", skill)
+		}
+	}
+
+	// A listed skill the job wants and the profile lacks is the useful gap.
+	gap := Evaluate(profile, nil, &models.FilterPreset{RequiredSkills: []string{"Kafka", "Go"}}, models.JobInput{Title: "Backend Engineer", Description: "Go services on Kafka."}, time.Now())
+	if strings.Join(gap.MatchedSkills, ",") != "Go" || strings.Join(gap.MissingSkills, ",") != "Kafka" {
+		t.Fatalf("expected Go matched and Kafka missing, got %v and %v", gap.MatchedSkills, gap.MissingSkills)
+	}
+
+	// A listed skill the job asks for and the profile lacks lowers the score,
+	// so two jobs no longer score the same whatever they say.
+	if pythonRole.Breakdown["skill_match"] == gap.Breakdown["skill_match"] {
+		t.Fatalf("a gap in the listed skills should lower the skill score, both got %d", gap.Breakdown["skill_match"])
+	}
+}
+
+// The word pattern keeps dots so that "node.js" survives, which also glued a
+// sentence's full stop onto its last word: "Build on AWS." never matched the
+// skill AWS, and "Maintain a PHP app." dodged an excluded-technology rule only
+// when PHP ended the sentence. Dots now count only inside a word.
+func TestSentenceEndingWordsAreStillWords(t *testing.T) {
+	got := strings.Join(splitWords(strings.ToLower("Build on AWS. We use Node.js, Next.js and ASP.NET... Ship it.")), " ")
+	want := "build on aws we use node.js next.js and asp.net ship it"
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	f := models.FilterPreset{ExcludedTechnologies: []string{"PHP"}}
+	e := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "You will maintain our legacy PHP."}, time.Now())
+	if !e.Rejected {
+		t.Fatal("an excluded technology at the end of a sentence must still reject")
 	}
 }
