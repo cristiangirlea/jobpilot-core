@@ -51,7 +51,7 @@ export default function Filters(){
           <Field label="Required technologies"><ListInput value={form.included_technologies} onChange={list("included_technologies")} placeholder="Go, TypeScript, PostgreSQL"/></Field>
           <Field label="Excluded technologies"><ListInput value={form.excluded_technologies} onChange={list("excluded_technologies")} placeholder="PHP, WordPress"/></Field>
           <Field label="Skills used for score"><ListInput value={form.required_skills} onChange={list("required_skills")} placeholder="Go, Docker, AWS"/></Field>
-          <div className="rounded-xl bg-sage/70 p-4 text-sm text-ink/70">Required technologies are hard filters. Skills used for score affect the 30-point skill score and show as matched or missing.</div>
+          <div className="rounded-xl bg-sage/70 p-4 text-sm text-ink/70">Required technologies are hard filters. Skills used for score count toward the 30-point skill score only when a job mentions them, and show as matched or missing. When a job mentions none of them, the profile skills it mentions are scored instead.</div>
         </section>
         <section className="space-y-4">
           <div><h2 className="font-semibold">Location & compensation</h2><p className="muted mt-1">Remote jobs outside the location list are flagged for review, not silently discarded.</p></div>
