@@ -257,6 +257,9 @@ const (
 	linkCheckBatch = 25
 	linkCheckAgain = 24 * time.Hour
 	linkCheckPause = 2 * time.Second
+	// linkCheckTimeout bounds one check, so a batch of slow sites holds the
+	// discovery loop for at most about five minutes.
+	linkCheckTimeout = 10 * time.Second
 )
 
 func (s *Service) checkLinks(ctx context.Context) {
@@ -274,7 +277,7 @@ func (s *Service) checkLinks(ctx context.Context) {
 			case <-time.After(linkCheckPause):
 			}
 		}
-		if gone, _ := s.CheckJob(ctx, link.ID, link.ApplyURL, 20*time.Second); gone {
+		if gone, _ := s.CheckJob(ctx, link.ID, link.ApplyURL, linkCheckTimeout); gone {
 			closed++
 		}
 	}
