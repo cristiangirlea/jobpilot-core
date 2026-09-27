@@ -586,6 +586,45 @@ func TestEndToEnd(t *testing.T) {
 
 	if atsPort != "" {
 		discoveryShareAndCounters(t, r, call)
+		discoveryRecognisesReposts(t, r, call)
+	}
+}
+
+// discoveryRecognisesReposts adds board fair-c, which lists one opening twice,
+// the second time under a new link. The fingerprint includes the link, so the
+// repost used to become a second job. It is one job, carrying the newer link.
+// The two boards from the previous step are all known by now, so with a
+// budget of ten they fill eight places and fair-c gives both its postings.
+func discoveryRecognisesReposts(t *testing.T, r *rest, call func(string, map[string]any) (map[string]any, string, bool)) {
+	t.Helper()
+	r.call("PUT", "/api/discovery/settings", map[string]any{"enabled": false, "interval_minutes": 360, "auto_prepare": false, "min_score": 75, "max_jobs_per_run": 10}, nil)
+	if _, text, isErr := call("add_discovery_source", map[string]any{"provider": "greenhouse", "name": "Board fair-c", "identifier": "fair-c"}); isErr {
+		t.Fatalf("add_discovery_source fair-c: %s", text)
+	}
+	out, text, isErr := call("run_discovery", nil)
+	if isErr {
+		t.Fatalf("run_discovery: %s", text)
+	}
+	got := fmt.Sprintf("seen %v, added %v, rejected %v, known %v", out["jobs_seen"], out["jobs_added"], out["jobs_rejected"], out["duplicates_skipped"])
+	if want := "seen 10, added 1, rejected 0, known 9"; got != want {
+		t.Fatalf("a repost should be known, not added: got %s, want %s: %s", got, want, text)
+	}
+	out, text, isErr = call("list_jobs", map[string]any{"state": "all", "limit": 100})
+	if isErr {
+		t.Fatalf("list_jobs: %s", text)
+	}
+	var links []string
+	jobs, _ := out["jobs"].([]any)
+	for _, j := range jobs {
+		m, _ := j.(map[string]any)
+		job, _ := m["job"].(map[string]any)
+		if job["company"] == "Board fair-c" {
+			link, _ := job["apply_url"].(string)
+			links = append(links, link)
+		}
+	}
+	if len(links) != 1 || !strings.HasSuffix(links[0], "/fair-c/302") {
+		t.Fatalf("the reposted opening should be one job with the newer link, got %v", links)
 	}
 }
 
@@ -654,11 +693,21 @@ func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 	}
 	fake := &fakeGreenhouse{}
 	mux := http.NewServeMux()
-	// Board listings for the discovery step: five postings per board, in
-	// the shape of Greenhouse's jobs?content=true. Board fair-b's mention PHP,
-	// which the seeded filter excludes, so its jobs are rejected.
+	// Board listings for the discovery steps, in the shape of Greenhouse's
+	// jobs?content=true: five postings per board, except fair-c's repost.
+	// Board fair-b's mention PHP, which the seeded filter excludes, so its
+	// jobs are rejected.
 	mux.HandleFunc("GET /v1/boards/{board}/jobs", func(w http.ResponseWriter, r *http.Request) {
 		board := r.PathValue("board")
+		w.Header().Set("Content-Type", "application/json")
+		if board == "fair-c" {
+			// One opening listed twice: the second is a repost under a new
+			// link two days later, as Arbeitnow reposts.
+			posting := `{"id":%d,"title":"Backend Engineer fair-c","updated_at":%q,"absolute_url":"https://example.test/fair-c/%d","content":"Build services with Go and PostgreSQL.","location":{"name":"Remote, Romania"}}`
+			older, newer := time.Now().Add(-48*time.Hour).UTC().Format(time.RFC3339), time.Now().UTC().Format(time.RFC3339)
+			_, _ = w.Write([]byte(`{"jobs":[` + fmt.Sprintf(posting, 301, older, 301) + "," + fmt.Sprintf(posting, 302, newer, 302) + `]}`))
+			return
+		}
 		stack, first := "Go and PostgreSQL", 100
 		if board == "fair-b" {
 			stack, first = "PHP", 200
@@ -668,7 +717,6 @@ func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 			jobs = append(jobs, fmt.Sprintf(`{"id":%d,"title":"Backend Engineer %s %d","updated_at":%q,"absolute_url":"https://example.test/%s/%d","content":"Build services with %s.","location":{"name":"Remote, Romania"}}`,
 				first+i, board, i, time.Now().UTC().Format(time.RFC3339), board, i, stack))
 		}
-		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"jobs":[` + strings.Join(jobs, ",") + `]}`))
 	})
 	mux.HandleFunc("GET /v1/boards/{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {

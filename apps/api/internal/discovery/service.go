@@ -33,6 +33,10 @@ func NewService(s *store.Store) *Service {
 	return &Service{Store: s, Fetcher: NewFetcher(), Links: NewLinkChecker(false)}
 }
 
+// deadLinkReasons are the closures a newer repost undoes: the old link went
+// dead, and the repost's link is the one now listed.
+var deadLinkReasons = []string{ReasonGone, ReasonNotFound, ReasonBoard}
+
 // fullBoard lists the providers whose feed is every open job on the board, so
 // a job missing from it has been taken down. Aggregator and search feeds are
 // partial, and SmartRecruiters is fetched a page at a time.
@@ -158,6 +162,20 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 		duplicate := getErr == nil
 		if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
 			return s.finish(ctx, userID, run, getErr)
+		}
+		if !duplicate {
+			// A board reposts an opening under a new link, which gives it a
+			// new fingerprint. It is still the stored job, not another one.
+			stored, repostErr := s.Store.RepostCandidates(ctx, source.Provider, company.Normalize(candidate.Input.Company))
+			if repostErr != nil {
+				return s.finish(ctx, userID, run, repostErr)
+			}
+			if original, ok := repostOf(candidate.Input, stored); ok {
+				if err = s.Store.AttachRepost(ctx, original.ID, fingerprint, candidate.ExternalID, candidate.Input, deadLinkReasons); err != nil {
+					return s.finish(ctx, userID, run, err)
+				}
+				job, duplicate = original, true
+			}
 		}
 		if !duplicate {
 			job, getErr = s.Store.CreateDiscoveredJob(ctx, userID, source.ID, source.Provider, source.Name, candidate.ExternalID, fingerprint, candidate.Input)
