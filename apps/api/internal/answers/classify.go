@@ -85,7 +85,12 @@ var rules = []rule{
 	{KeyCurrentTitle, regexp.MustCompile(`^current (job )?title|current role|your present (job )?title`)},
 	{KeySpokenLanguages, regexp.MustCompile(`languages you speak|which languages|languages? (do you|you) speak|select all the languages`)},
 	{KeyWorkedHere, regexp.MustCompile(`previously worked (at|for)|worked at or consulted for|(been|were you) employed (at|by)|former (employee|contractor) of|worked (here|with us) before`)},
-	{KeyWhyCompany, regexp.MustCompile(`why (do you want to |would you like to )?(work|join|apply).*(at|for|with) (us|our|this comp|the comp)|why (us|our company|this company)|what (interests|excites|attracts) you about (us|our|this comp)`)},
+	// Wanting the role outranks the broader company rule below, which would
+	// otherwise read "apply for this role" as the company.
+	{KeyWhyRole, regexp.MustCompile(`why (do you want|would you like) (this|the) (role|position|job|opportunity)|why (do you want to |would you like to )?(work|apply) (at|for|in|to) (this|the) (role|position|job|opportunity)`)},
+	// A named employer counts ("work at Larchmont", "join Grafana Labs"), and
+	// so does "here"; "work with", "remotely" or "in fintech" name none.
+	{KeyWhyCompany, regexp.MustCompile(`why (do you want to |would you like to )?(work|join|apply).*(at|for|with) (us|our|this comp|the comp)|why (us|our company|this company)|what (interests|excites|attracts) you about (us|our|this comp)|why (do you want to |would you like to )?(work (at|for) |join )[a-z0-9]|why (do you want to |would you like to )?work here`)},
 	{KeyWhyRole, regexp.MustCompile(`why (are you |do you )?(interested|excited|applying).*(role|position|job|opportunity)|what (interests|attracts|excites) you about (this|the) (role|position)|why (this|the) (role|position)`)},
 	{KeyWhyFit, regexp.MustCompile(`why (are you |do you think you are |would you be )?(a )?(good |great |strong |the right )?(fit|match|candidate)|what makes you (a )?(good|great|strong|the right)|why should we (hire|consider)`)},
 	{KeyAboutYou, regexp.MustCompile(`tell (us|me) (a bit |something )?about (yourself|you)|introduce yourself|who are you|describe yourself|your background`)},
