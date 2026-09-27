@@ -645,6 +645,8 @@ Authorization: Bearer <token>
 | `GET` | `/api/matches` | List accepted matches |
 | `GET` | `/api/matches/{id}` | Read one match |
 
+Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all`; `/api/matches` is accepted only), `min_score` (0 to 100), `open=true` to leave closed postings out, `fields=summary` to leave descriptions out, and `limit` (1 to 500) with `offset`. A bad value is a `422` naming the parameter. Without any, the list is whole, as clients built before the parameters expect. Every response carries `X-Total-Count`, the number of jobs matching before `limit` and `offset`. A whole list is large: it was 14.4 MB on a full account, mostly descriptions, so a client that pages should ask for the summary and read one job for its text.
+
 ### Discovery endpoints
 
 | Method | Path | Purpose |
@@ -750,7 +752,7 @@ The catalog an agent host downloads at the start of every session is about 23 KB
 | Tool | Kind | Purpose |
 |---|---|---|
 | `get_profile` | read | Candidate facts the agent may use when writing |
-| `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit` |
+| `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
@@ -1059,7 +1061,7 @@ These are known gaps, not hidden surprises:
 
 1. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
 2. **Source management depth:** sources can be added, edited, validated, paused/resumed, and deleted. Per-source schedules and richer per-provider diagnostics can still be improved.
-3. **Catalog scale:** job and match lists need stronger pagination/search/index review before very large catalogs.
+3. **Catalog scale:** the job lists page and filter on the server, and the MCP server uses that. The web job list still loads the whole list, because it searches descriptions in the browser; it should move to server-side search and paging before catalogs grow much further.
 4. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
 5. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.

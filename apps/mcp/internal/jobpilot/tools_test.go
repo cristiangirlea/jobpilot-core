@@ -33,10 +33,24 @@ type fakeAPI struct {
 	// noContract makes the fake look like an API from before the health
 	// endpoint reported a contract version.
 	noContract bool
+	// pages makes the job lists behave like an API that pages: it records
+	// the query, answers with one job, and reports a total of 42.
+	pages      atomic.Bool
+	jobQueries []string
+}
+
+func (f *fakeAPI) lastJobQuery() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.jobQueries) == 0 {
+		return ""
+	}
+	return f.jobQueries[len(f.jobQueries)-1]
 }
 
 const acceptedJob = `{"job":{"id":"job-a","title":"Senior Backend Engineer","company":"Fresh Systems GmbH","location":"Bucharest, Romania","remote_type":"remote","salary_min":95000,"salary_max":110000,"currency":"EUR","employment_type":"full-time","industry":"Software","description":"Long description A about Go and PostgreSQL.","apply_url":"https://example.test/apply-a","posted_at":"2026-09-10T00:00:00Z","created_at":"2026-09-11T00:00:00Z","source_name":"Remotive feed","source_provider":"remotive"},"match":{"rejected":false,"rejection_reasons":[],"warnings":["No salary band"],"score":82,"reasons":["The job title aligns with a desired role."],"matched_skills":["Go","PostgreSQL"],"missing_skills":["Kafka"],"red_flags":[],"breakdown":{"title_match":25,"skill_match":30}},"match_id":"m-a"}`
 const rejectedJob = `{"job":{"id":"job-b","title":"Backend Engineer","company":"CurrentCo LLC","location":"Romania","remote_type":"remote","description":"Long description B.","apply_url":"https://example.test/apply-b","created_at":"2026-09-11T00:00:00Z"},"match":{"rejected":true,"rejection_reasons":["Company matches your current employer."],"warnings":[],"score":40,"reasons":[],"matched_skills":[],"missing_skills":[],"red_flags":[],"breakdown":{}},"match_id":"m-b"}`
+const closedJob = `{"job":{"id":"job-d","title":"Staff Backend Engineer","company":"Gone GmbH","location":"Remote","remote_type":"remote","description":"Long description D.","apply_url":"https://example.test/apply-d","created_at":"2026-09-11T00:00:00Z","closed_at":"2026-09-20T00:00:00Z","closed_reason":"its link now returns 404 Not Found"},"match":{"rejected":false,"rejection_reasons":[],"warnings":[],"score":90,"reasons":[],"matched_skills":["Go"],"missing_skills":[],"red_flags":[],"breakdown":{}},"match_id":"m-d"}`
 const weakJob = `{"job":{"id":"job-c","title":"Platform Engineer","company":"Other Ltd","location":"Remote","remote_type":"remote","description":"Long description C.","apply_url":"https://example.test/apply-c","created_at":"2026-09-11T00:00:00Z"},"match":{"rejected":false,"rejection_reasons":[],"warnings":[],"score":65,"reasons":[],"matched_skills":["Go"],"missing_skills":[],"red_flags":[],"breakdown":{}},"match_id":"m-c"}`
 const application = `{"id":"app-1","job_id":"job-a","status":"ready","notes":"keep me","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-12T00:00:00Z","job":{"id":"job-a","title":"Senior Backend Engineer","company":"Fresh Systems GmbH","location":"Bucharest, Romania","remote_type":"remote","description":"Long description A about Go and PostgreSQL.","apply_url":"https://example.test/apply-a","created_at":"2026-09-11T00:00:00Z"}}`
 const appliedApplication = `{"id":"app-2","job_id":"job-c","status":"applied","notes":"","created_at":"2026-09-12T00:00:00Z","updated_at":"2026-09-13T00:00:00Z","job":{"id":"job-c","title":"Platform Engineer","company":"Other Ltd","location":"Remote","remote_type":"remote","description":"Long description C.","apply_url":"https://example.test/apply-c","created_at":"2026-09-11T00:00:00Z"}}`
@@ -54,11 +68,32 @@ func (f *fakeAPI) handler() http.Handler {
 	m.HandleFunc("GET /api/profile", func(w http.ResponseWriter, r *http.Request) {
 		send(w, 200, `{"name":"Octavian","current_title":"Senior Backend Engineer","desired_titles":["Backend Engineer"],"seniorities":["senior"],"years_experience":9,"skills":[{"name":"Go","level":"advanced","years":6}],"experiences":[{"company":"CurrentCo","title":"Senior Backend Engineer","current":true}],"projects":[]}`)
 	})
+	// Without pages, the lists are whole and uncounted, like an API from
+	// before paging, which the tools must still filter themselves.
+	paged := func(w http.ResponseWriter, r *http.Request) bool {
+		if !f.pages.Load() {
+			return false
+		}
+		f.mu.Lock()
+		f.jobQueries = append(f.jobQueries, r.URL.Path+"?"+r.URL.RawQuery)
+		f.mu.Unlock()
+		w.Header().Set("X-Total-Count", "42")
+		if r.URL.Query().Get("open") == "true" {
+			send(w, 200, "["+rejectedJob+"]")
+		} else {
+			send(w, 200, "["+closedJob+"]")
+		}
+		return true
+	}
 	m.HandleFunc("GET /api/jobs", func(w http.ResponseWriter, r *http.Request) {
-		send(w, 200, "["+acceptedJob+","+weakJob+","+rejectedJob+"]")
+		if !paged(w, r) {
+			send(w, 200, "["+acceptedJob+","+weakJob+","+rejectedJob+","+closedJob+"]")
+		}
 	})
 	m.HandleFunc("GET /api/matches", func(w http.ResponseWriter, r *http.Request) {
-		send(w, 200, "["+acceptedJob+","+weakJob+"]")
+		if !paged(w, r) {
+			send(w, 200, "["+acceptedJob+","+weakJob+","+closedJob+"]")
+		}
 	})
 	m.HandleFunc("GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("id") {
@@ -345,6 +380,55 @@ func TestListJobsFiltersAndSummarizes(t *testing.T) {
 	res, text = call(t, cs, "list_jobs", map[string]any{"state": "bogus"})
 	if !res.IsError || !strings.Contains(text, "state") {
 		t.Fatalf("invalid state must be a tool error: %s", text)
+	}
+
+	// A closed posting cannot be applied to, so it is left out unless asked
+	// for, and then says it is closed.
+	res, text = call(t, cs, "list_jobs", map[string]any{"state": "all", "include_closed": true})
+	got = structured[listing](t, res)
+	if got.Total != 4 {
+		t.Fatalf("include_closed should add the closed job, got %s", text)
+	}
+	for _, job := range got.Jobs {
+		if closed := job.Job.ID == "job-d"; job.Job.Closed != closed || (closed && job.Job.ClosedReason == "") {
+			t.Fatalf("only the closed job should say it is closed, and why: %s", text)
+		}
+	}
+}
+
+// Found in early use: listing rejected or all jobs downloaded every
+// job, 14.4 MB on a full account and 45% of the response cap, to keep one
+// page. An API that pages is asked for the page, as summaries, and its total
+// is reported.
+func TestListJobsAsksTheServerForOnePage(t *testing.T) {
+	cs, fake := session(t)
+	fake.pages.Store(true)
+	type listing struct {
+		Total int            `json:"total"`
+		Jobs  []MatchSummary `json:"jobs"`
+	}
+	res, text := call(t, cs, "list_jobs", map[string]any{"state": "rejected", "min_score": 30, "limit": 5})
+	if res.IsError {
+		t.Fatal(text)
+	}
+	got := structured[listing](t, res)
+	if got.Total != 42 || len(got.Jobs) != 1 || got.Jobs[0].Job.ID != "job-b" {
+		t.Fatalf("the page and the server's total should come back as served, got %s", text)
+	}
+	if want := "/api/jobs?fields=summary&limit=5&min_score=30&open=true&state=rejected"; fake.lastJobQuery() != want {
+		t.Fatalf("asked for %s, want %s", fake.lastJobQuery(), want)
+	}
+
+	// Accepted jobs keep their own list, and closed postings can be asked for.
+	res, text = call(t, cs, "list_jobs", map[string]any{"include_closed": true})
+	if res.IsError {
+		t.Fatal(text)
+	}
+	if want := "/api/matches?fields=summary&limit=20"; fake.lastJobQuery() != want {
+		t.Fatalf("asked for %s, want %s", fake.lastJobQuery(), want)
+	}
+	if got = structured[listing](t, res); len(got.Jobs) != 1 || !got.Jobs[0].Job.Closed {
+		t.Fatalf("a closed job should say so: %s", text)
 	}
 }
 

@@ -660,28 +660,72 @@ func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluati
 	return s.DB.SendBatch(ctx, batch).Close()
 }
 
-func (s *Store) Jobs(ctx context.Context, u string, onlyMatches bool) ([]models.JobWithMatch, error) {
-	q := `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1`
-	if onlyMatches {
-		q += ` AND m.rejected=false`
+// JobQuery narrows a user's job list. The zero value is the whole list, as
+// it always was; a client that pages sets Limit.
+type JobQuery struct {
+	State    string // "accepted", "rejected", or "" and "all" for both
+	MinScore int
+	OpenOnly bool // leave closed postings out
+	Limit    int  // 0 for no limit
+	Offset   int
+	Summary  bool // leave descriptions out, which are most of a job's size
+}
+
+const (
+	jobMatchColumns        = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url`
+	jobMatchSummaryColumns = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,'',j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url`
+)
+
+// Jobs returns the user's evaluated jobs that match q, and how many match
+// before Limit and Offset apply.
+func (s *Store) Jobs(ctx context.Context, u string, q JobQuery) ([]models.JobWithMatch, int, error) {
+	where, args := ` FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1`, []any{u}
+	switch q.State {
+	case "accepted":
+		where += ` AND m.rejected=false`
+	case "rejected":
+		where += ` AND m.rejected=true`
+	}
+	if q.MinScore > 0 {
+		args = append(args, q.MinScore)
+		where += fmt.Sprintf(` AND m.score>=$%d`, len(args))
+	}
+	if q.OpenOnly {
+		where += ` AND j.closed_at IS NULL`
+	}
+	columns := jobMatchColumns
+	if q.Summary {
+		columns = jobMatchSummaryColumns
 	}
 	// Closed postings sink to the bottom: they stay visible for the record but
-	// can no longer be applied to.
-	q += ` ORDER BY (j.closed_at IS NOT NULL) ASC,m.rejected ASC,m.score DESC,j.created_at DESC`
-	rows, err := s.DB.Query(ctx, q, u)
+	// can no longer be applied to. The id breaks ties, so pages do not overlap.
+	query := `SELECT ` + columns + where + ` ORDER BY (j.closed_at IS NOT NULL) ASC,m.rejected ASC,m.score DESC,j.created_at DESC,j.id`
+	if q.Limit > 0 {
+		query += fmt.Sprintf(` LIMIT %d OFFSET %d`, q.Limit, q.Offset)
+	}
+	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer rows.Close()
 	out := []models.JobWithMatch{}
 	for rows.Next() {
 		x, err := scanJobMatch(rows)
 		if err != nil {
-			return nil, err
+			return nil, 0, err
 		}
 		out = append(out, x)
 	}
-	return out, rows.Err()
+	if err = rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	total := len(out)
+	if q.Limit > 0 {
+		if err = s.DB.QueryRow(ctx, `SELECT count(*)`+where, args...).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+	}
+	return out, total, nil
 }
 
 // uuidPattern tells a job id from a slug in a URL; ids keep working so older
@@ -1024,7 +1068,7 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 			profileFields++
 		}
 	}
-	matches, err := s.Jobs(ctx, u, true)
+	matches, _, err := s.Jobs(ctx, u, JobQuery{State: "accepted"})
 	if err != nil {
 		return nil, err
 	}

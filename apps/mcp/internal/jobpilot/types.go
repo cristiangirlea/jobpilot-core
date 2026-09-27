@@ -27,6 +27,8 @@ type Job struct {
 	DiscoveredAt   *time.Time `json:"discovered_at,omitempty"`
 	SourceName     string     `json:"source_name,omitempty"`
 	SourceProvider string     `json:"source_provider,omitempty"`
+	ClosedAt       *time.Time `json:"closed_at,omitempty"`
+	ClosedReason   string     `json:"closed_reason,omitempty"`
 }
 
 type Evaluation struct {
@@ -74,6 +76,9 @@ type JobSummary struct {
 	EmployerURL    string     `json:"employer_url,omitempty"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	Source         string     `json:"source,omitempty"`
+	// Closed postings can no longer be applied to.
+	Closed       bool   `json:"closed,omitempty"`
+	ClosedReason string `json:"closed_reason,omitempty"`
 }
 
 func summarizeJob(j Job) JobSummary {
@@ -84,7 +89,7 @@ func summarizeJob(j Job) JobSummary {
 	case source == "":
 		source = j.SourceProvider
 	}
-	return JobSummary{ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, EmployerURL: j.EmployerURL, PostedAt: j.PostedAt, Source: source}
+	return JobSummary{ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, EmployerURL: j.EmployerURL, PostedAt: j.PostedAt, Source: source, Closed: j.ClosedAt != nil, ClosedReason: j.ClosedReason}
 }
 
 type MatchSummary struct {

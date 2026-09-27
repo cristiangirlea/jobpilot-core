@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"jobpilot/core/api/internal/store"
 )
 
 // A status-only PATCH must leave notes untouched. The field is a pointer so
@@ -79,5 +81,43 @@ func TestHealthReportsTheContract(t *testing.T) {
 func TestUnreadableLinkPointsToTheEmployerBoard(t *testing.T) {
 	if reason := unsupportedReason(""); !strings.Contains(reason, "discovery source") || !strings.Contains(reason, "Greenhouse") {
 		t.Fatalf("the blocker should say how to get readable forms: %s", reason)
+	}
+}
+
+// Listing every job was the only way to list any, which is 14.4 MB on a real
+// account. The optional parameters page and narrow the list on the server;
+// without them the list is whole, as clients built before them expect.
+func TestJobQueryReadsListParameters(t *testing.T) {
+	for _, c := range []struct {
+		url, fixed string
+		want       store.JobQuery
+		problem    string
+	}{
+		{url: "/api/jobs", want: store.JobQuery{}},
+		{url: "/api/jobs?state=rejected&min_score=70&limit=20&offset=40&fields=summary&open=true",
+			want: store.JobQuery{State: "rejected", MinScore: 70, Limit: 20, Offset: 40, Summary: true, OpenOnly: true}},
+		{url: "/api/jobs?state=all", want: store.JobQuery{State: "all"}},
+		{url: "/api/matches?limit=5", fixed: "accepted", want: store.JobQuery{State: "accepted", Limit: 5}},
+		{url: "/api/matches?state=accepted", fixed: "accepted", want: store.JobQuery{State: "accepted"}},
+		{url: "/api/matches?state=rejected", fixed: "accepted", problem: "state"},
+		{url: "/api/jobs?state=maybe", problem: "state"},
+		{url: "/api/jobs?min_score=101", problem: "min_score"},
+		{url: "/api/jobs?limit=0", problem: "limit"},
+		{url: "/api/jobs?limit=501", problem: "limit"},
+		{url: "/api/jobs?offset=-1", problem: "offset"},
+		{url: "/api/jobs?offset=10", problem: "offset"},
+		{url: "/api/jobs?fields=everything", problem: "fields"},
+		{url: "/api/jobs?open=yes", problem: "open"},
+	} {
+		got, problem := jobQuery(httptest.NewRequest("GET", c.url, nil), c.fixed)
+		if c.problem != "" {
+			if !strings.Contains(problem, c.problem) {
+				t.Errorf("%s: want a problem naming %s, got %q", c.url, c.problem, problem)
+			}
+			continue
+		}
+		if problem != "" || got != c.want {
+			t.Errorf("%s: got %+v (%q), want %+v", c.url, got, problem, c.want)
+		}
 	}
 }

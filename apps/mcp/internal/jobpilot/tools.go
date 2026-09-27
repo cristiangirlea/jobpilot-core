@@ -48,6 +48,8 @@ type listJobsInput struct {
 	State    string `json:"state,omitempty" jsonschema:"Which evaluated jobs to return: accepted (default), rejected, or all"`
 	MinScore int    `json:"min_score,omitempty" jsonschema:"Only return jobs whose match score is at or above this value, 0 to 100"`
 	Limit    int    `json:"limit,omitempty" jsonschema:"Maximum jobs to return: default 20, maximum 100. The total before the cap is always reported"`
+	// IncludeClosed also lists postings that have closed.
+	IncludeClosed bool `json:"include_closed,omitempty" jsonschema:"Also list postings that have closed; they can no longer be applied to"`
 }
 
 type jobInput struct {
@@ -139,7 +141,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	addTool(s, &mcp.Tool{
 		Name:        "list_jobs",
 		Title:       "List evaluated jobs",
-		Description: "List jobs evaluated for the user as summaries, sorted by match score. By default only accepted matches are returned; ask for rejected or all to see jobs a hard rule excluded, together with the rejection reasons. Descriptions are omitted; call get_job for the full posting and score breakdown. total counts the matching jobs before the limit; score is 0 to 100 and a rejection always wins over it.",
+		Description: "List jobs evaluated for the user as summaries, sorted by match score. By default only accepted matches are returned; ask for rejected or all to see jobs a hard rule excluded, together with the rejection reasons. Descriptions are omitted; call get_job for the full posting and score breakdown. Closed postings are left out unless include_closed, and then are marked closed. total counts the matching jobs before the limit; score is 0 to 100 and a rejection always wins over it.",
 		Annotations: readOnly("List evaluated jobs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in listJobsInput) (*mcp.CallToolResult, JobList, error) {
 		state := strings.ToLower(strings.TrimSpace(in.State))
@@ -152,16 +154,27 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 		if in.MinScore < 0 || in.MinScore > 100 {
 			return nil, JobList{}, fmt.Errorf("min_score must be between 0 and 100, not %d", in.MinScore)
 		}
-		jobs, err := c.Jobs(ctx, state == "accepted")
+		jobs, total, counted, err := c.Jobs(ctx, JobQuery{State: state, MinScore: in.MinScore, OpenOnly: !in.IncludeClosed, Limit: pageSize(in.Limit), Summary: true})
 		if err != nil {
 			return nil, JobList{}, toolError(err)
 		}
 		out := JobList{Jobs: make([]MatchSummary, 0, len(jobs))}
+		if counted {
+			out.Total = total
+			for _, x := range jobs {
+				out.Jobs = append(out.Jobs, summarizeMatch(x))
+			}
+			return nil, out, nil
+		}
+		// An API from before paging sent every job; filter them here.
 		for _, x := range jobs {
 			if state == "rejected" && !x.Match.Rejected {
 				continue
 			}
 			if x.Match.Score < in.MinScore {
+				continue
+			}
+			if x.Job.ClosedAt != nil && !in.IncludeClosed {
 				continue
 			}
 			out.Total++
