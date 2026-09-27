@@ -277,7 +277,7 @@ func (s *Service) checkLinks(ctx context.Context) {
 			case <-time.After(linkCheckPause):
 			}
 		}
-		if gone, _ := s.CheckJob(ctx, link.ID, link.ApplyURL, linkCheckTimeout); gone {
+		if s.CheckJob(ctx, link, linkCheckTimeout).Closed {
 			closed++
 		}
 	}
@@ -286,20 +286,35 @@ func (s *Service) checkLinks(ctx context.Context) {
 	}
 }
 
+// LinkResult is what one check of a job's link found.
+type LinkResult struct {
+	Closed bool
+	Reason string
+	// EmployerURL is where the posting applies, when this check found it.
+	EmployerURL string
+}
+
 // CheckJob checks one job's link now, giving the site at most timeout, and
-// records the answer. It reports whether the posting is closed and why; a
-// failed check counts as open, so an unreachable site never hides a job.
-func (s *Service) CheckJob(ctx context.Context, id, link string, timeout time.Duration) (bool, string) {
+// records the answer. A failed check counts as open, so an unreachable site
+// never hides a job. An open posting from an aggregator that hands over to
+// the employer also learns where, once; the aggregator's own page still
+// decides whether the posting is open.
+func (s *Service) CheckJob(ctx context.Context, job store.LinkToCheck, timeout time.Duration) LinkResult {
 	checkCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	closed, reason, err := s.Links.Check(checkCtx, link)
-	if err != nil {
-		closed, reason = false, ""
+	var result LinkResult
+	if closed, reason, err := s.Links.Check(checkCtx, job.ApplyURL); err == nil {
+		result.Closed, result.Reason = closed, reason
 	}
-	if recordErr := s.Store.RecordLinkCheck(ctx, id, closed, reason); recordErr != nil {
-		slog.Error("record link check", "job_id", id, "error", recordErr)
+	if !result.Closed && job.EmployerURL == "" && RedirectsToEmployer(job.SourceProvider) {
+		if employer, err := s.Links.EmployerURL(checkCtx, job.SourceProvider, job.ApplyURL); err == nil {
+			result.EmployerURL = employer
+		}
 	}
-	return closed, reason
+	if recordErr := s.Store.RecordLinkCheck(ctx, job.ID, result.Closed, result.Reason, result.EmployerURL); recordErr != nil {
+		slog.Error("record link check", "job_id", job.ID, "error", recordErr)
+	}
+	return result
 }
 func (s *Service) runDue(ctx context.Context) {
 	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10)

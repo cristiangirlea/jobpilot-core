@@ -29,7 +29,8 @@ export default function JobDetail(){
     <Header eyebrow={match.rejected?"Rejected at import":job.discovered_at?"Discovered job":"Job evaluation"} title={job.title} description={`${job.company} · ${job.location||"Location unstated"} · ${job.remote_type||"Arrangement unstated"}`} action={<div className="flex gap-2">{!match.rejected&&!job.closed_at&&job.apply_url&&<OpenApplyButton jobId={job.id} className="btn-secondary"/>}<Link href="/jobs" className="btn-secondary">All jobs</Link></div>}/>
     {job.closed_at&&<section className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><strong>This posting has closed</strong> ({new Date(job.closed_at).toLocaleDateString()}): {job.closed_reason||"it is no longer available"}. It stays here for your records, but it can no longer be applied to.</section>}
     {job.referral_disclosure&&<div className="mb-4 rounded-xl bg-blue-50 px-4 py-3 text-xs text-blue-800">{job.referral_disclosure}</div>}
-    {job.source_name&&<div className="mb-4 text-xs text-ink/50">Discovered via {job.source_provider==="remotive"?<a className="font-semibold text-moss" href="https://remotive.com/remote-jobs" target="_blank" rel="noreferrer">Remotive</a>:job.source_name}.</div>}
+    {job.source_name&&<div className="mb-4 text-xs text-ink/50">Discovered via {job.source_provider==="remotive"?<a className="font-semibold text-moss" href="https://remotive.com/remote-jobs" target="_blank" rel="noreferrer">Remotive</a>:job.source_name}.
+      {job.employer_url&&<> Applies on the employer's own page at <span className="font-semibold text-ink/70">{hostOf(job.employer_url)}</span>, where the apply button takes you.</>}</div>}
     <ErrorMessage message={error}/>
     {match.rejected&&<section className="mb-5 rounded-2xl border border-red-100 bg-red-50 p-5"><h2 className="font-semibold text-red-800">{companyBlocked?"Application locked: excluded company":"This role was hard-rejected"}</h2><p className="mt-1 text-sm text-red-700">{companyBlocked?"You can inspect this job, but JobPilot will not open its apply URL, generate materials, create an application, or mark one as applied.":"Application actions are unavailable while this job is rejected."}</p><ul className="mt-3 space-y-1 text-sm text-red-700">{match.rejection_reasons.map(x=><li key={x}>• {x}</li>)}</ul></section>}
     {match.warnings.length>0&&<section className="mb-5 rounded-2xl border border-amber-100 bg-amber-50 p-4 text-sm text-amber-800"><strong>Check before applying:</strong> {match.warnings.join(" · ")}</section>}
@@ -48,3 +49,5 @@ export default function JobDetail(){
   </Shell>
 }
 function Document({title,text}:{title:string;text:string}){return <article className="card"><div className="flex justify-between gap-3"><h3 className="font-semibold">{title}</h3><CopyButton text={text}/></div><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-ink/70">{text}</p></article>}
+
+function hostOf(link:string){try{return new URL(link).hostname.replace(/^www\./,"")}catch{return link}}

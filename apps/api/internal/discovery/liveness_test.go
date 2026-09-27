@@ -76,3 +76,66 @@ func TestCheckPostingRefusesPrivateAddresses(t *testing.T) {
 		t.Fatal("a refused check must never close a job")
 	}
 }
+
+// Arbeitnow's "<posting>/apply" redirects to the employer's own page. The
+// redirect is read, not followed, and only an http(s) page off the aggregator
+// counts as the employer.
+func TestEmployerURLReadsTheAggregatorsRedirect(t *testing.T) {
+	var followed bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/jobs/ashby/apply":
+			http.Redirect(w, r, "https://jobs.ashbyhq.com/acme/6afff2cc/application?utm_source=arbeitnow.com", http.StatusFound)
+		case "/jobs/login/apply":
+			http.Redirect(w, r, "https://www.arbeitnow.com/login", http.StatusFound)
+		case "/jobs/script/apply":
+			w.Header().Set("Location", "javascript:alert(1)")
+			w.WriteHeader(http.StatusFound)
+		case "/jobs/relative/apply":
+			http.Redirect(w, r, "/elsewhere", http.StatusFound)
+		case "/elsewhere":
+			followed = true
+		case "/jobs/gone/apply":
+			w.WriteHeader(http.StatusNotFound)
+		default:
+			w.Write([]byte("<h1>Apply here</h1>"))
+		}
+	}))
+	defer server.Close()
+	checker := NewLinkChecker(true)
+	cases := map[string]string{
+		"/jobs/ashby":    "https://jobs.ashbyhq.com/acme/6afff2cc/application?utm_source=arbeitnow.com",
+		"/jobs/login":    "",
+		"/jobs/script":   "",
+		"/jobs/gone":     "",
+		"/jobs/no-hop":   "",
+		"/jobs/relative": server.URL + "/elsewhere",
+	}
+	for path, want := range cases {
+		got, err := checker.EmployerURL(context.Background(), "arbeitnow", server.URL+path)
+		if err != nil {
+			t.Fatalf("%s: %v", path, err)
+		}
+		if got != want {
+			t.Errorf("%s: employer URL %q, want %q", path, got, want)
+		}
+	}
+	if followed {
+		t.Error("the redirect should be read, not followed")
+	}
+}
+
+// Only aggregators known to hand over by redirect are asked at all: Remotive's
+// "/apply" is a 404 that says nothing about the posting.
+func TestEmployerURLAsksOnlyKnownAggregators(t *testing.T) {
+	asked := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { asked = true }))
+	defer server.Close()
+	got, err := NewLinkChecker(true).EmployerURL(context.Background(), "remotive", server.URL+"/remote-jobs/x")
+	if err != nil || got != "" || asked {
+		t.Fatalf("remotive should not be asked, got %q err=%v asked=%v", got, err, asked)
+	}
+	if !RedirectsToEmployer("arbeitnow") || RedirectsToEmployer("greenhouse") {
+		t.Fatal("only arbeitnow hands over by redirect")
+	}
+}

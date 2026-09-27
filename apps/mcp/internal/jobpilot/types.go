@@ -21,6 +21,7 @@ type Job struct {
 	Industry       string     `json:"industry"`
 	Description    string     `json:"description"`
 	ApplyURL       string     `json:"apply_url"`
+	EmployerURL    string     `json:"employer_url,omitempty"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	DiscoveredAt   *time.Time `json:"discovered_at,omitempty"`

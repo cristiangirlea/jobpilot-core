@@ -128,6 +128,9 @@ type Job struct {
 	// ClosedAt is set once the posting is known to be gone; ClosedReason says how.
 	ClosedAt     *time.Time `json:"closed_at,omitempty"`
 	ClosedReason string     `json:"closed_reason,omitempty"`
+	// EmployerURL is the employer's own application page for a posting found
+	// through an aggregator, once the aggregator's redirect has been read.
+	EmployerURL string `json:"employer_url,omitempty"`
 }
 
 type Evaluation struct {
