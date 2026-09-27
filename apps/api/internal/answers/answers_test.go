@@ -584,3 +584,30 @@ func TestMultiSelectRefusesWhenNothingMatches(t *testing.T) {
 		t.Errorf("expected only the value that could be placed, got %v", matched)
 	}
 }
+
+// Found in early use: a template answer went into a Yes/No select
+// verbatim, because the template branch was the one source that never fitted
+// its answer to the question's options. "EU" is not an option; a question
+// that cannot be answered with one of its own options stays unanswered.
+func TestTemplateAnswersAreFittedToSelectOptions(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(nil, nil, 0, 0)}
+	s := subject()
+	s.Profile.WorkAuthorization = "EU"
+	s.Documents.Answers = map[string]string{"Work authorization.": "EU"}
+	for _, text := range []string{
+		"Are you currently eligible to work in your country of residence?",
+		"Are you legally authorized to work in the European Union?",
+	} {
+		options := []string{"Yes", "No"}
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: text, Kind: "select", Options: options}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Answer != "" && resolution.Answer != "Yes" && resolution.Answer != "No" {
+			t.Fatalf("%q: a select was answered with free text %q from %s", text, resolution.Answer, resolution.Source)
+		}
+		if resolution.Answer == "" && !resolution.NeedsReview {
+			t.Fatalf("%q: an unanswered select must be flagged for review: %+v", text, resolution)
+		}
+	}
+}
