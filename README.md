@@ -534,7 +534,9 @@ Both choices are load-bearing rather than aesthetic. A two-column CV interleaves
 
 Greenhouse publishes a complete form schema: every question, its type, whether it is required, and the full option list for each select. Reading it up front is what makes automated applying tractable, because each question can be resolved against the answer bank before anything is submitted, and a select is answered with one of its own options rather than by guessing at a page's DOM.
 
-Lever, Ashby and SmartRecruiters are detected so the composer can name the ATS, but they do not publish their schemas, so those jobs report `ErrUnsupported` and are applied to by hand.
+Ashby has no documented form API, but its public job page loads the form from `jobs.ashbyhq.com/api/non-user-graphql` (`ApiJobPosting`), and the reader asks that endpoint for the same data: sections of fields with a title, a type and a required flag, and the options of each select. It needs no account and returns only what any visitor to the posting sees. Types map onto the same fields as Greenhouse's (a yes/no question becomes a Yes/No select), the resume upload is recognised by Ashby's `_systemfield_resume`, any other upload stays a question for the user, deactivated fields are left out, and a type the reader does not know is kept as text rather than dropped, so a required question is never silently lost. Ashby answers a posting it no longer has with `jobPosting: null`, which closes the job like a 404. Equal-opportunity survey forms are counted as skipped and never answered.
+
+Lever and SmartRecruiters are detected so the composer can name the ATS, but their forms are not read yet, so those jobs report `ErrUnsupported` and are applied to by hand.
 
 Two kinds of question are never answered automatically, and both are matched on the **label** rather than on where the question sits:
 
