@@ -149,6 +149,9 @@ type JobWithMatch struct {
 	Job     Job        `json:"job"`
 	Match   Evaluation `json:"match"`
 	MatchID string     `json:"match_id,omitempty"`
+	// Reported is set on one job's detail when this user reported the posting
+	// as no longer available.
+	Reported bool `json:"reported,omitempty"`
 }
 
 type Application struct {
