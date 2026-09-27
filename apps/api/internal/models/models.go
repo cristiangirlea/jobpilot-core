@@ -35,7 +35,11 @@ type Project struct {
 }
 
 type Profile struct {
-	Name                string           `json:"name"`
+	Name string `json:"name"`
+	// GivenName and FamilyName answer a form's first and last name fields.
+	// Which word of Name is which cannot be told from Name alone.
+	GivenName           string           `json:"given_name"`
+	FamilyName          string           `json:"family_name"`
 	Email               string           `json:"email"`
 	Phone               string           `json:"phone"`
 	Location            string           `json:"location"`

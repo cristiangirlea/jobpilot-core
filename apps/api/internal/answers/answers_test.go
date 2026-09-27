@@ -424,7 +424,35 @@ func TestFreeTextIsNeverSubmittedIntoASelect(t *testing.T) {
 	}
 }
 
-func TestNameQuestionsSplitTheStoredName(t *testing.T) {
+// Found in early use: the stored name "Pirvan Octavian" is surname
+// first, and its first word went into Greenhouse's First Name as a verified
+// fact. The given and family names, once stated, are the facts those fields
+// ask for, whatever order the full name is written in.
+func TestNameQuestionsUseTheStatedNameParts(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s := subject()
+	s.Profile.Name, s.Profile.GivenName, s.Profile.FamilyName = "Pirvan Octavian", "Octavian", "Pirvan"
+	cases := map[string]string{
+		"First Name":                            "Octavian",
+		"Last Name":                             "Pirvan",
+		"What name would you prefer us to use?": "Octavian",
+		"Full name":                             "Pirvan Octavian",
+	}
+	for question, want := range cases {
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: question}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Source != SourceProfile || resolution.Answer != want || resolution.NeedsReview || !resolution.Approved {
+			t.Errorf("%q = %q from %q (review %v), want %q as an approved profile fact", question, resolution.Answer, resolution.Source, resolution.NeedsReview, want)
+		}
+	}
+}
+
+// Without them, which word of one name field is the given name is a guess:
+// the first word is offered, since that order is the common one, but held
+// for review rather than sent as a fact.
+func TestNameSplitFromTheFullNameNeedsReview(t *testing.T) {
 	service := &Service{Bank: &fakeBank{}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
 	s := subject()
 	s.Profile.Name = "Octavian Pîrvan"
@@ -438,9 +466,28 @@ func TestNameQuestionsSplitTheStoredName(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resolution.Source != SourceProfile || resolution.Answer != want {
-			t.Errorf("%q = %q from %q, want %q from profile", question, resolution.Answer, resolution.Source, want)
+		if resolution.Answer != want || !resolution.NeedsReview || resolution.Approved {
+			t.Errorf("%q = %q (review %v, approved %v), want %q held for review", question, resolution.Answer, resolution.NeedsReview, resolution.Approved, want)
 		}
+	}
+
+	// The full name is stored as written, so it is still a fact.
+	resolution, err := service.Resolve(context.Background(), "u1", Question{Text: "Full name"}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Answer != "Octavian Pîrvan" || resolution.NeedsReview {
+		t.Errorf("full name = %q (review %v), want the stored name as a fact", resolution.Answer, resolution.NeedsReview)
+	}
+
+	// A single word cannot be split at all: no surname is invented.
+	s.Profile.Name = "Octavian"
+	resolution, err = service.Resolve(context.Background(), "u1", Question{Text: "Last Name"}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Answer != "" || resolution.Source == SourceProfile {
+		t.Errorf("a one-word name has no surname to offer, got %q from %q", resolution.Answer, resolution.Source)
 	}
 }
 

@@ -121,7 +121,8 @@ var corpus = []corpusCase{
 func corpusSubject() Subject {
 	return Subject{
 		Profile: models.Profile{
-			Name: "Ana Pop", Email: "ana@example.com", Phone: "+40 700 000 000",
+			Name: "Ana Pop", GivenName: "Ana", FamilyName: "Pop",
+			Email: "ana@example.com", Phone: "+40 700 000 000",
 			Location: "București, Romania", LinkedIn: "https://linkedin.com/in/anapop",
 			Portfolio: "https://anapop.dev", CurrentTitle: "Senior Backend Engineer",
 			YearsExperience: 9, NoticePeriod: "30 days",
