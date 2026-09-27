@@ -183,3 +183,25 @@ func TestClientMapsAPIErrors(t *testing.T) {
 		t.Fatalf("unexpected message %q", err.Error())
 	}
 }
+
+// An unconfigured client never touches the network: every request fails with
+// the configuration problem, which names the fix.
+func TestUnconfiguredClientExplainsInsteadOfCalling(t *testing.T) {
+	c := Unconfigured(errors.New("jobpilot: a token, or an email and password, is required"))
+	if c.Configured() {
+		t.Fatal("an unconfigured client must say so")
+	}
+	_, err := c.Profile(context.Background())
+	var cfg *ConfigError
+	if !errors.As(err, &cfg) {
+		t.Fatalf("expected a ConfigError, got %T %v", err, err)
+	}
+	for _, want := range []string{"not configured", "a token, or an email and password", "agent-token.ps1", "restart"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error should mention %q: %v", want, err)
+		}
+	}
+	if _, err = c.CheckContract(context.Background()); !errors.As(err, &cfg) {
+		t.Fatalf("the contract check must fail the same way, got %v", err)
+	}
+}
