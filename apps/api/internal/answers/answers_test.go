@@ -480,7 +480,23 @@ func TestNameSplitFromTheFullNameNeedsReview(t *testing.T) {
 		t.Errorf("full name = %q (review %v), want the stored name as a fact", resolution.Answer, resolution.NeedsReview)
 	}
 
-	// A single word cannot be split at all: no surname is invented.
+	// The candidate's own approved answer outranks the guess: bank entries
+	// are per user and served only once approved, so this is their wording.
+	banked := &Service{Bank: &fakeBank{entries: []models.AnswerEntry{{
+		ID: "e1", QuestionKey: KeyLastName, QuestionNormalized: Normalize("Last Name"),
+		Answer: "Pîrvan", Approved: true,
+	}}}, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s.Profile.Name = "Pîrvan Octavian"
+	resolution, err = banked.Resolve(context.Background(), "u1", Question{Text: "Last Name"}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Answer != "Pîrvan" || resolution.Source != SourceBank || resolution.NeedsReview {
+		t.Errorf("an approved banked last name should be reused, got %q from %q (review %v)", resolution.Answer, resolution.Source, resolution.NeedsReview)
+	}
+
+	// A single word cannot be split at all: no surname is invented, and no
+	// provider is asked for one.
 	s.Profile.Name = "Octavian"
 	resolution, err = service.Resolve(context.Background(), "u1", Question{Text: "Last Name"}, s)
 	if err != nil {

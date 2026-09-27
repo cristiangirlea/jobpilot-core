@@ -131,21 +131,6 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 			return resolution, nil
 		}
 	}
-	// A first or last name split out of the one stored name guesses at word
-	// order: "Pirvan Octavian" is surname first. The split is offered, held for
-	// review, until the profile states the given and family names. A name the
-	// profile cannot supply is left for the candidate: a banked answer may be
-	// about another name, and a provider could only invent one.
-	if nameKeys[key] {
-		if answer, ok := splitName(key, subject.Profile.Name); ok {
-			if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
-				resolution.Answer, resolution.Source, resolution.NeedsReview = fitted, SourceProfile, true
-				return resolution, nil
-			}
-		}
-		resolution.Source, resolution.NeedsReview = SourceUnanswered, true
-		return resolution, nil
-	}
 
 	// 2. This exact question, answered before for this role family.
 	if s.Bank != nil {
@@ -169,6 +154,22 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 				return resolution, nil
 			}
 		}
+	}
+
+	// A first or last name split out of the one stored name guesses at word
+	// order: "Pirvan Octavian" is surname first. With neither the stated name
+	// parts nor the candidate's own approved answer to go on, the split is
+	// offered, held for review. A name nothing stored supplies is left for the
+	// candidate, because a provider could only invent one.
+	if nameKeys[key] {
+		if answer, ok := splitName(key, subject.Profile.Name); ok {
+			if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
+				resolution.Answer, resolution.Source, resolution.NeedsReview = fitted, SourceProfile, true
+				return resolution, nil
+			}
+		}
+		resolution.Source, resolution.NeedsReview = SourceUnanswered, true
+		return resolution, nil
 	}
 
 	// 4. Generate. Stored unapproved so it cannot be reused until reviewed.
