@@ -16,6 +16,11 @@ func TestClassifyGroupsRewordedQuestions(t *testing.T) {
 		"Why are you interested in this role?":                   KeyWhyRole,
 		"What attracts you about this position?":                 KeyWhyRole,
 		"Why do you want to work at our company?":                KeyWhyCompany,
+		"Why do you want to work at Larchmont?":                  KeyWhyCompany,
+		"Why would you like to join Grafana Labs?":               KeyWhyCompany,
+		"Why do you want to work here?":                          KeyWhyCompany,
+		"Why do you want to apply for this role?":                KeyWhyRole,
+		"Why do you want this job?":                              KeyWhyRole,
 		"Why are you a good fit for this job?":                   KeyWhyFit,
 		"What are your salary expectations?":                     KeySalary,
 		"Expected day rate":                                      KeySalary,
@@ -35,6 +40,38 @@ func TestClassifyGroupsRewordedQuestions(t *testing.T) {
 		if got := Classify(question); got != want {
 			t.Errorf("Classify(%q) = %q, want %q", question, got, want)
 		}
+	}
+}
+
+// Found in early use: "Why do you want to work at Larchmont?" was
+// left unanswered although the generated documents hold why-this-role text,
+// because only "us", "our company" and "this company" counted as the
+// company. A named employer counts too, but a technology or a way of working
+// is not an employer.
+func TestWhyCompanyNeedsAnEmployer(t *testing.T) {
+	for _, question := range []string{
+		"Why do you want to work with Go?",
+		"Why do you want to work remotely?",
+		"Why do you want to work in fintech?",
+	} {
+		if got := Classify(question); got == KeyWhyCompany {
+			t.Errorf("Classify(%q) = %q; it names no employer", question, got)
+		}
+	}
+}
+
+// Classified, the question gets the generator's why-this-role text, held for
+// review like every template answer, instead of staying unanswered.
+func TestNamedEmployerQuestionGetsTheTemplateAnswer(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(nil, nil, 0, 0)}
+	s := subject()
+	s.Documents.Answers["Why are you interested in this role?"] = "why this role"
+	resolution, err := service.Resolve(context.Background(), "u1", Question{Text: "Why do you want to work at Larchmont?"}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.Source != SourceTemplate || resolution.Answer != "why this role" || !resolution.NeedsReview {
+		t.Fatalf("got %q from %q (review %v), want the template answer held for review", resolution.Answer, resolution.Source, resolution.NeedsReview)
 	}
 }
 
@@ -712,6 +749,34 @@ func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
 		}
 		if c.want != "" && resolution.Source != SourceProfile {
 			t.Errorf("%q: a recorded fact should come from the profile, got %s", c.question, resolution.Source)
+		}
+	}
+}
+
+// A salary goes out as an amount with its period, and is held for review:
+// the period is how matching reads the stored number, not something the
+// candidate wrote, and an employer will hold them to it. A notice period of
+// zero says so in words; a bare number, whose unit is unknown, is held.
+func TestLogisticsAnswersAreWordedAndHeldWhereUnclear(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(nil, nil, 0, 0)}
+	s := subject()
+	s.Profile.SalaryExpectation, s.Profile.Currency, s.Profile.NoticePeriod = 48000, "EUR", "0"
+	for _, c := range []struct {
+		notice, question, want string
+		review                 bool
+	}{
+		{"0", "What are your salary expectations?", "48,000 EUR per year", true},
+		{"0", "What is your notice period?", "Available immediately", false},
+		{"30", "What is your notice period?", "30", true},
+		{"30 days", "What is your notice period?", "30 days", false},
+	} {
+		s.Profile.NoticePeriod = c.notice
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: c.question}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Source != SourceProfile || resolution.Answer != c.want || resolution.NeedsReview != c.review || resolution.Approved == c.review {
+			t.Errorf("%q with notice %q = %q (review %v, approved %v), want %q with review %v", c.question, c.notice, resolution.Answer, resolution.NeedsReview, resolution.Approved, c.want, c.review)
 		}
 	}
 }

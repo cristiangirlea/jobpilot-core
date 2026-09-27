@@ -122,12 +122,17 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 		}
 	}
 	if answer, ok := profileAnswer(key, subject.Profile); ok && !skillScoped {
+		// A stored fact is approved as it stands, unless something in it is
+		// the candidate's to confirm; then it is offered for review.
+		confirm := needsConfirming(key, subject.Profile)
 		if len(question.Options) == 0 {
-			resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
+			resolution.Answer, resolution.Source = answer, SourceProfile
+			resolution.Approved, resolution.NeedsReview = !confirm, confirm
 			return resolution, nil
 		}
 		if option, matched := fitToQuestion(answer, question.Options, question.Kind); matched {
-			resolution.Answer, resolution.Source, resolution.Approved = option, SourceProfile, true
+			resolution.Answer, resolution.Source = option, SourceProfile
+			resolution.Approved, resolution.NeedsReview = !confirm, confirm
 			return resolution, nil
 		}
 	}
@@ -466,14 +471,10 @@ func profileAnswer(key string, p models.Profile) (string, bool) {
 			return fmt.Sprintf("%.0f", p.YearsExperience), true
 		}
 	case KeyNotice:
-		return nonEmpty(p.NoticePeriod)
+		notice, _ := p.NoticeText()
+		return nonEmpty(notice)
 	case KeySalary:
-		if p.SalaryExpectation > 0 {
-			return strings.TrimSpace(fmt.Sprintf("%.0f %s", p.SalaryExpectation, p.Currency)), true
-		}
-		if p.RateExpectation > 0 {
-			return strings.TrimSpace(fmt.Sprintf("%.0f %s per day", p.RateExpectation, p.Currency)), true
-		}
+		return nonEmpty(p.SalaryText())
 	case KeyRemotePreference:
 		if len(p.WorkPreference) > 0 {
 			return strings.Join(p.WorkPreference, ", "), true
@@ -602,6 +603,21 @@ func subjectAnswer(key string, subject Subject) (string, bool) {
 		return "No", true
 	}
 	return "", false
+}
+
+// needsConfirming reports whether a profile answer to key holds something the
+// candidate did not write and an employer will hold them to: the salary's
+// period, which is how matching reads the stored number, and the unit of a
+// notice period stored as a bare number.
+func needsConfirming(key string, p models.Profile) bool {
+	switch key {
+	case KeySalary:
+		return true
+	case KeyNotice:
+		_, unitless := p.NoticeText()
+		return unitless
+	}
+	return false
 }
 
 // nameKeys are the questions only the candidate's own name answers.

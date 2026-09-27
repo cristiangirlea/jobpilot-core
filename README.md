@@ -461,7 +461,7 @@ Every completion is cached in `llm_cache`, keyed on provider, model, task, syste
 
 Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
 
-1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone.
+1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone. A salary is stated with its period, "85,000 EUR per year" (yearly, as matching compares it with job salary ranges; a contract rate is per day), and is offered for review, because an employer will hold the candidate to a period the candidate did not write. A notice period of `0` reads "Available immediately"; a bare number, whose unit is unknown, is offered for review.
 2. **Exact reuse** - this same question, previously approved for this role family.
 3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
 4. **Provider** - only on a genuine miss. Stored unapproved.
