@@ -32,9 +32,10 @@ func main() {
 	}
 	dataStore := store.New(pool)
 	// Catalog upkeep for jobs stored before a feature existed runs in the
-	// background, so a large catalog does not hold up startup. Neither step is
+	// background, so a large catalog does not hold up startup. No step is
 	// needed to serve requests, so a failure is logged rather than fatal: an
-	// unnamed job stays reachable by id, and a description keeps its old text.
+	// unnamed job stays reachable by id, a description keeps its old text, and
+	// an older copy of a reposted job stays open.
 	go func() {
 		if named, err := dataStore.NameUnnamedJobs(ctx); err != nil {
 			slog.Error("naming jobs failed", "error", err, "named", named)
@@ -47,6 +48,13 @@ func main() {
 			slog.Error("tidying job descriptions failed", "error", err, "rewritten", rewritten)
 		} else if rewritten > 0 {
 			slog.Info("tidied job descriptions", "count", rewritten)
+		}
+		// Openings a board reposted were stored once per posting until
+		// reposts were recognised; close the older copies once.
+		if closed, err := discovery.CloseStoredReposts(ctx, dataStore); err != nil {
+			slog.Error("closing older copies of reposted jobs failed", "error", err, "closed", closed)
+		} else if closed > 0 {
+			slog.Info("closed older copies of reposted jobs", "count", closed)
 		}
 	}()
 	aiClient, err := llm.Build(llm.Options{

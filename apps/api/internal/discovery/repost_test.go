@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"testing"
+	"time"
 
 	"jobpilot/core/api/internal/models"
 )
@@ -44,5 +45,35 @@ func TestDescriptionSimilarityIgnoresCaseAndPunctuation(t *testing.T) {
 	}
 	if got := descriptionSimilarity("", ""); got != 0 {
 		t.Fatalf("two empty descriptions say nothing about being the same opening, got %v", got)
+	}
+}
+
+// Jobs stored twice before reposts were recognised stay in the catalog. Of
+// each opening's copies, the newest posting is the live one; the older copies
+// are the ones to close. A copy with nothing to match stays open.
+func TestOlderCopiesPointAtTheNewestPosting(t *testing.T) {
+	day := func(month time.Month, d int) *time.Time {
+		at := time.Date(2026, month, d, 0, 0, 0, 0, time.UTC)
+		return &at
+	}
+	opening := models.JobInput{Title: "Remote Python Backend Engineer", Location: "Berlin", Description: "Build the scheduling platform in Python and own services end to end."}
+	copyOf := func(id string, posted *time.Time) models.Job {
+		job := models.Job{ID: id, JobInput: opening}
+		job.PostedAt = posted
+		return job
+	}
+	other := models.Job{ID: "frontend", JobInput: models.JobInput{Title: "Frontend Engineer", Location: "Berlin", Description: opening.Description}}
+	undated := copyOf("undated", nil)
+	undated.CreatedAt = time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)
+
+	copies := olderCopies([]models.Job{copyOf("aug27", day(time.August, 27)), other, copyOf("sep14", day(time.September, 14)), undated, copyOf("sep09", day(time.September, 9))})
+	want := map[string]string{"aug27": "sep14", "sep09": "sep14", "undated": "sep14"}
+	if len(copies) != len(want) {
+		t.Fatalf("got %v, want %v", copies, want)
+	}
+	for copyID, survivor := range want {
+		if copies[copyID] != survivor {
+			t.Errorf("%s should be closed in favour of %s, got %q", copyID, survivor, copies[copyID])
+		}
 	}
 }

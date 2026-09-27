@@ -111,6 +111,13 @@ jobs:
           for f in migrations/*.sql; do
             psql -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d jobpilot -f "$f"
           done
+      # Tests whose subject is SQL run against the migrated database, before
+      # the API starts; without the variable they skip.
+      - name: Postgres-backed API tests
+        working-directory: apps/api
+        env:
+          JOBPILOT_TEST_DATABASE_URL: postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable
+        run: go test -count=1 -v -run Postgres ./...
       - name: Build and start the API
         env:
           API_ADDR: ":8080"
