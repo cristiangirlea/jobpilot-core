@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {OutboxEntry} from "@/lib/types";
+import {CVDocument,OutboxEntry} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
@@ -40,6 +40,19 @@ export default function OutboxPage(){
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   };
 
+  // Approving the CV alone leaves its blocker on the stored entry, so the
+  // application is prepared again: the approved CV is then reused as it is.
+  const approveCV=async(entry:OutboxEntry)=>{
+    if(!entry.cv_document_id)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api(`/cv/${entry.cv_document_id}/approve`,{method:"POST",body:JSON.stringify({approved:true})});
+      const updated=await api<OutboxEntry>(`/jobs/${entry.job_id}/compose`,{method:"POST",body:"{}"});
+      setOpen(updated);await load();
+      setNotice(`CV approved, and the application was prepared again with it.${updated.cover_letter_source==="ai"?" The cover letter was drafted again, so read it before approving.":""}`);
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+
   const waiting=items.filter(item=>item.status==="needs_review").length;
 
   return <Shell>
@@ -70,13 +83,14 @@ export default function OutboxPage(){
                   {item.blockers.length>0&&` · ${item.blockers.length} to fix`}</p>
               </button>)}
           </div>
-          {open&&<Detail entry={open} busy={busy} onAct={act}/>}
+          {open&&<Detail entry={open} busy={busy} onAct={act} onApproveCV={approveCV}/>}
         </div>
       </>}
   </Shell>;
 }
 
-function Detail({entry,busy,onAct}:{entry:OutboxEntry;busy:boolean;onAct:(entry:OutboxEntry,action:"approve"|"cancel")=>void}){
+function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
+  onAct:(entry:OutboxEntry,action:"approve"|"cancel")=>void;onApproveCV:(entry:OutboxEntry)=>void}){
   const blocked=entry.blockers.length>0;
   const done=entry.status==="sent"||entry.status==="cancelled";
   return <div className="card space-y-5">
@@ -106,6 +120,8 @@ function Detail({entry,busy,onAct}:{entry:OutboxEntry;busy:boolean;onAct:(entry:
       Approved and queued. Sending is not built yet, so nothing has left your machine.
     </div>}
 
+    {entry.cv_document_id&&<CVCard entry={entry} busy={busy} done={done} onApprove={onApproveCV}/>}
+
     <div>
       <div className="flex items-baseline justify-between">
         <h3 className="font-semibold">Cover letter</h3>
@@ -134,5 +150,40 @@ function Detail({entry,busy,onAct}:{entry:OutboxEntry;busy:boolean;onAct:(entry:
         Answer anything marked “needs you” on the <Link className="underline" href="/answers">Answers</Link> page, then prepare this application again. Approved answers are reused for similar roles.
       </p>
     </div>}
+  </div>;
+}
+
+const decisionLabel:Record<string,string>={
+  base:"Your base CV, sent as it is",
+  reused:"A tailored CV you approved for a similar role",
+  generated:"Tailored for this role",
+};
+
+// CVCard names the CV this application carries and how well it covers the
+// job, with a way to read it in full and, when it is still a draft, approve it.
+function CVCard({entry,busy,done,onApprove}:{entry:OutboxEntry;busy:boolean;done:boolean;onApprove:(entry:OutboxEntry)=>void}){
+  const [cv,setCV]=useState<CVDocument|null>(null);
+  useEffect(()=>{
+    setCV(null);
+    api<CVDocument>(`/cv/${entry.cv_document_id}`).then(setCV).catch(()=>{});
+  },[entry.cv_document_id,entry.updated_at]);
+  const tailored=cv?.parsed?.tailored;
+  const missing=tailored?.missing??[];
+  return <div className="rounded-xl border border-black/10 px-4 py-3">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h3 className="font-semibold">CV</h3>
+        <p className="muted text-sm">{decisionLabel[entry.cv_decision||""]||"Attached CV"}{cv&&` · ${cv.filename}`}</p>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {cv&&<span className={`rounded-lg px-2 py-1 text-[10px] font-bold ${cv.approved?"bg-sage text-moss":"bg-amber-50 text-amber-700"}`}>
+          {cv.approved?"APPROVED":"NEEDS REVIEW"}</span>}
+        <Link className="btn-secondary !py-2" href={`/cv?open=${entry.cv_document_id}`}>Preview</Link>
+        {cv&&!cv.approved&&!done&&<button className="btn-primary !py-2" disabled={busy} onClick={()=>onApprove(entry)}>Approve CV</button>}
+      </div>
+    </div>
+    {tailored&&<p className="muted mt-2 text-xs">
+      Covers {Math.round(tailored.alignment*100)}% of the job's technologies.
+      {missing.length>0&&` Not on your CV, so not added: ${missing.join(", ")}.`}</p>}
   </div>;
 }
