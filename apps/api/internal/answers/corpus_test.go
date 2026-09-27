@@ -38,6 +38,9 @@ type corpusCase struct {
 	options []string
 	// want is the expected answer for handledFact cases.
 	want string
+	// review marks a stored fact that is still offered for review, because
+	// part of it is the candidate's to confirm, like a salary's period.
+	review bool
 }
 
 var yesNo = []string{"Yes", "No"}
@@ -87,7 +90,7 @@ var corpus = []corpusCase{
 	{label: "Please select all the languages you speak fluently.", kind: handledFact,
 		options: []string{"English", "French", "Romanian", "German"}, want: "English, Romanian"},
 	{label: "What is your notice period?", kind: handledFact, want: "30 days"},
-	{label: "What are your salary expectations?", kind: handledFact, want: "85000 EUR"},
+	{label: "What are your salary expectations?", kind: handledFact, want: "85,000 EUR per year", review: true},
 	{label: "How many years of professional experience do you have?", kind: handledFact, want: "9"},
 
 	// Only the candidate can answer these. Nothing may be invented.
@@ -182,8 +185,8 @@ func TestCorpusFactsResolveWithoutAProvider(t *testing.T) {
 		if got.Answer != c.want {
 			t.Errorf("%q = %q, want %q", c.label, got.Answer, c.want)
 		}
-		if got.NeedsReview {
-			t.Errorf("%q is a stored fact and should not need review", c.label)
+		if got.NeedsReview != c.review {
+			t.Errorf("%q is a stored fact; needs review = %v, want %v", c.label, got.NeedsReview, c.review)
 		}
 	}
 }

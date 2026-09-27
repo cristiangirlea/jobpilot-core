@@ -84,7 +84,8 @@ func letterFacts(p models.Profile) string {
 	line("Location", p.Location)
 	line("Summary", p.Summary)
 	line("Work authorization", p.WorkAuthorization)
-	line("Notice period", p.NoticePeriod)
+	notice, _ := p.NoticeText()
+	line("Notice period", notice)
 
 	names := make([]string, 0, len(p.Skills))
 	for _, skill := range p.Skills {
