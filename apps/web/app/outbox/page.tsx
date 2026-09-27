@@ -152,9 +152,11 @@ function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
   </div>;
 }
 
+// Where the CV came from. Whether it is approved now is the chip's to say: an
+// approval can be withdrawn after the application was prepared.
 const decisionLabel:Record<string,string>={
-  base:"Your base CV, sent as it is",
-  reused:"A tailored CV you already approved",
+  base:"Your uploaded CV, sent as it is",
+  reused:"A tailored CV kept from before",
   generated:"Tailored for this role",
 };
 
