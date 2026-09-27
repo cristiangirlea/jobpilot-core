@@ -18,6 +18,9 @@ const (
 	ReasonNotFound = "its link now returns 404 Not Found"
 	ReasonBoard    = "the employer's board no longer shows it"
 	ReasonUnlisted = "it is no longer listed on the employer's board"
+	// ReasonReposted closes an older copy of an opening a board reposted.
+	// Seeing the old posting again does not reopen it.
+	ReasonReposted = "a later posting of the same opening replaces it"
 )
 
 // LinkChecker tells whether a posting's link still leads to the posting.

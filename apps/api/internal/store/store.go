@@ -353,6 +353,43 @@ func (s *Store) RepostCandidates(ctx context.Context, provider, companyNormalize
 	return out, rows.Err()
 }
 
+// RepeatGroups lists the provider and company pairs that hold more than one
+// open job with the same title and location: the only places an older copy
+// of a reposted opening can be.
+func (s *Store) RepeatGroups(ctx context.Context) ([][2]string, error) {
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT source_provider, company_normalized FROM (
+		SELECT source_provider, company_normalized FROM jobs WHERE closed_at IS NULL AND source_provider<>''
+		GROUP BY source_provider, company_normalized, lower(regexp_replace(title, '\s+', ' ', 'g')), lower(regexp_replace(location, '\s+', ' ', 'g'))
+		HAVING count(*) > 1) repeats`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out [][2]string
+	for rows.Next() {
+		var group [2]string
+		if err = rows.Scan(&group[0], &group[1]); err != nil {
+			return nil, err
+		}
+		out = append(out, group)
+	}
+	return out, rows.Err()
+}
+
+// CloseReposts closes these jobs as older copies of a reposted opening,
+// except any a user has an application or outbox entry for: that work stays
+// attached to an open job. It reports how many it closed.
+func (s *Store) CloseReposts(ctx context.Context, ids []string, reason string) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tag, err := s.DB.Exec(ctx, `UPDATE jobs SET closed_at=now(), closed_reason=$2
+		WHERE id = ANY($1::uuid[]) AND closed_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM applications a WHERE a.job_id=jobs.id)
+		AND NOT EXISTS (SELECT 1 FROM application_outbox o WHERE o.job_id=jobs.id)`, ids, reason)
+	return tag.RowsAffected(), err
+}
+
 // AttachRepost records fingerprint as another posting of job id. A repost
 // posted later than the stored one is the live listing, so its link, external
 // id and date replace the stored ones, and a job closed for a reason in

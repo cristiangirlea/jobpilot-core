@@ -202,7 +202,7 @@ Jobs are deliberately **not** owned by one user. Two users may match and apply t
 - `companies`
 - `jobs`
 
-A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. Boards repost an opening under a new link, which changes the fingerprint, so a discovered posting with an unknown fingerprint is first compared with the same provider's jobs at that company: the same title and location with a description at least 80% alike, by shared words, is the same opening. Its fingerprint is recorded against the stored job (`job_fingerprint_aliases`), and when the repost is dated later its link, external id and date replace the stored ones. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
+A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. Boards repost an opening under a new link, which changes the fingerprint, so a discovered posting with an unknown fingerprint is first compared with the same provider's jobs at that company: the same title and location with a description at least 80% alike, by shared words, is the same opening. Its fingerprint is recorded against the stored job (`job_fingerprint_aliases`), and when the repost is dated later its link, external id and date replace the stored ones. Openings stored once per posting before this existed are tidied once at startup: of each opening's open copies, all but the newest posting are closed with the reason "a later posting of the same opening replaces it", except a copy someone has an application or outbox entry for. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
 
 ### Private per-user data
 
@@ -1003,7 +1003,7 @@ make smoke-mcp
 
 ### Continuous integration
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI.
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI.
 
 The test suites cover:
 
