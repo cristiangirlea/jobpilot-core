@@ -330,7 +330,7 @@ func (p *Parsed) parseSummary(sections map[string][]string) {
 		return
 	}
 	joined := strings.Join(body, " ")
-	joined = strings.Join(strings.Fields(joined), " ")
+	joined = closeHyphens(strings.Join(strings.Fields(joined), " "))
 	if len(joined) > 1200 {
 		joined = strings.TrimSpace(joined[:1200])
 	}
@@ -481,6 +481,23 @@ func splitOutsideBrackets(v string) []string {
 		}
 	}
 	return append(out, v[start:])
+}
+
+// PDF text breaks "AI-assisted" into "AI - assisted", "dataset -generation" or
+// "LLM- ready". A dash in prose has spaces on both sides and, as in "Engineer -
+// Contractor", usually a capital after it, so only these shapes are closed up.
+var (
+	hyphenSpacedBoth  = regexp.MustCompile(`(\p{L}) - (\p{Ll})`)
+	hyphenSpacedLeft  = regexp.MustCompile(`(\p{L}) -(\p{L})`)
+	hyphenSpacedRight = regexp.MustCompile(`(\p{L})- (\p{Ll})`)
+)
+
+// closeHyphens rejoins words that PDF text split around a hyphen.
+func closeHyphens(s string) string {
+	for _, pattern := range []*regexp.Regexp{hyphenSpacedBoth, hyphenSpacedLeft, hyphenSpacedRight} {
+		s = pattern.ReplaceAllString(s, "$1-$2")
+	}
+	return s
 }
 
 func looksLikeSentence(v string) bool {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/llm"
@@ -43,18 +45,26 @@ type Tailored struct {
 	Skills        []string       `json:"skills"`
 	Experiences   []TailoredRole `json:"experiences"`
 	Education     []string       `json:"education"`
-	RoleFamily    string         `json:"role_family"`
-	Technologies  []string       `json:"technologies"`
-	Alignment     float64        `json:"alignment"`
-	Highlighted   []string       `json:"highlighted"`
-	Missing       []string       `json:"missing"`
+	// Certifications and Languages come from the profile, or the CV when the
+	// profile has none.
+	Certifications []string `json:"certifications"`
+	Languages      []string `json:"languages"`
+	RoleFamily     string   `json:"role_family"`
+	Technologies   []string `json:"technologies"`
+	Alignment      float64  `json:"alignment"`
+	Highlighted    []string `json:"highlighted"`
+	Missing        []string `json:"missing"`
 }
 
 // TailoredRole is one role with its bullets selected and ordered for this job.
 type TailoredRole struct {
-	Title   string   `json:"title"`
-	Company string   `json:"company"`
-	Period  string   `json:"period"`
+	Title   string `json:"title"`
+	Company string `json:"company"`
+	Period  string `json:"period"`
+	// Context is the role's opening line when it has one, such as "Payments
+	// platform for retail banks. Stack: Go, Kafka.", kept whole above the
+	// bullets rather than competing with them.
+	Context string   `json:"context,omitempty"`
 	Bullets []string `json:"bullets"`
 }
 
@@ -77,40 +87,113 @@ func candidateSignature(profile models.Profile, extraText string) []string {
 	return answers.TechnologySignature(40, parts...)
 }
 
-// Tailor builds a CV aimed at one posting. It works with no AI configured: the
-// summary then falls back to deterministic wording built from stored facts.
+// Tailor builds a CV aimed at one posting from the candidate's profile and
+// their own uploaded CV (baseText), which fills whatever the profile leaves
+// empty. It works with no AI configured: the summary is then the candidate's
+// own.
 func Tailor(ctx context.Context, client *llm.Client, profile models.Profile, job models.Job, match models.Evaluation, baseText string) Tailored {
 	posting := answers.TechnologySignature(20, job.Title, job.Description)
 	postingSet := map[string]bool{}
 	for _, tech := range posting {
 		postingSet[tech] = true
 	}
+	facts, education := withCV(profile, baseText)
 
 	tailored := Tailored{
-		Name:         strings.TrimSpace(profile.Name),
-		Headline:     headline(profile, job),
-		Contact:      contactLines(profile),
-		Education:    []string{},
-		RoleFamily:   answers.RoleFamily(job.Title),
-		Technologies: posting,
-		Alignment:    Alignment(profile, baseText, job),
+		Name:           strings.TrimSpace(facts.Name),
+		Headline:       strings.TrimSpace(facts.CurrentTitle),
+		Contact:        contactLines(facts),
+		Education:      nonNil(education),
+		Certifications: nonNil(facts.Certifications),
+		Languages:      nonNil(facts.Languages),
+		RoleFamily:     answers.RoleFamily(job.Title),
+		Technologies:   posting,
+		Alignment:      Alignment(profile, baseText, job),
 	}
-	tailored.Skills, tailored.Highlighted, tailored.Missing = orderSkills(profile, job, postingSet)
-	tailored.Experiences = orderExperiences(profile.Experiences, postingSet)
-	tailored.Summary, tailored.SummarySource = summarise(ctx, client, profile, job, match, tailored.Highlighted)
+	tailored.Skills, tailored.Highlighted, tailored.Missing = orderSkills(facts, job, postingSet)
+	tailored.Experiences = orderExperiences(facts.Experiences, postingSet)
+	tailored.Summary, tailored.SummarySource = summarise(ctx, client, facts, job, match, tailored.Highlighted)
 	return tailored
 }
 
-// headline names the target role without claiming to hold it. "Senior Backend
-// Engineer" as a headline over a CV applying for that role is normal practice;
-// inventing a title the candidate never had is not, so the candidate's own
-// current title is what is stated.
-func headline(profile models.Profile, job models.Job) string {
-	current := strings.TrimSpace(profile.CurrentTitle)
-	if current == "" {
-		return strings.TrimSpace(job.Title)
+// withCV fills the profile's gaps from the candidate's uploaded CV, read with
+// the current parser. The profile wins wherever it has a value, because the
+// candidate edits it; the CV supplies the rest. Roles from both are kept (see
+// mergeRoles), since a hand-entered profile often lists titles without the
+// bullets the CV has, and the CV may lag a new job. The headline is only ever the
+// candidate's own title: using the posting's would claim a role they never held.
+func withCV(profile models.Profile, baseText string) (models.Profile, []string) {
+	if strings.TrimSpace(baseText) == "" {
+		return profile, nil
 	}
-	return current
+	fromCV := Parse(baseText)
+	merged := profile
+	for _, field := range []struct {
+		into *string
+		from string
+	}{
+		{&merged.Name, fromCV.Name}, {&merged.Email, fromCV.Email}, {&merged.Phone, fromCV.Phone},
+		{&merged.Location, fromCV.Location}, {&merged.LinkedIn, fromCV.LinkedIn}, {&merged.GitHub, fromCV.GitHub},
+		{&merged.Portfolio, fromCV.Portfolio}, {&merged.CurrentTitle, fromCV.CurrentTitle}, {&merged.Summary, fromCV.Summary},
+	} {
+		if strings.TrimSpace(*field.into) == "" {
+			*field.into = field.from
+		}
+	}
+	if merged.YearsExperience == 0 {
+		merged.YearsExperience = fromCV.YearsExperience
+	}
+	if len(merged.Skills) == 0 {
+		merged.Skills = fromCV.Skills
+	}
+	merged.Experiences = mergeRoles(profile.Experiences, fromCV.Experiences)
+	if len(merged.Certifications) == 0 {
+		merged.Certifications = fromCV.Certifications
+	}
+	if len(merged.Languages) == 0 {
+		merged.Languages = fromCV.Languages
+	}
+	return merged, fromCV.Education
+}
+
+// mergeRoles keeps every role from both sources, since tailoring never drops
+// one. The profile's roles come first, in its order, and a profile role with
+// no description takes the CV's bullets for the same employer; the CV's other
+// roles follow in the CV's order.
+func mergeRoles(profile, fromCV []models.WorkExperience) []models.WorkExperience {
+	if len(profile) == 0 {
+		return fromCV
+	}
+	byCompany := map[string]models.WorkExperience{}
+	for _, role := range fromCV {
+		key := strings.ToLower(strings.TrimSpace(role.Company))
+		if _, seen := byCompany[key]; key != "" && !seen {
+			byCompany[key] = role
+		}
+	}
+	merged := make([]models.WorkExperience, 0, len(profile)+len(fromCV))
+	used := map[string]bool{}
+	for _, role := range profile {
+		key := strings.ToLower(strings.TrimSpace(role.Company))
+		if match, ok := byCompany[key]; ok && strings.TrimSpace(role.Description) == "" {
+			role.Description = match.Description
+		}
+		used[key] = true
+		merged = append(merged, role)
+	}
+	for _, role := range fromCV {
+		if key := strings.ToLower(strings.TrimSpace(role.Company)); !used[key] || key == "" {
+			merged = append(merged, role)
+		}
+	}
+	return merged
+}
+
+func nonNil(list []string) []string {
+	if list == nil {
+		return []string{}
+	}
+	return list
 }
 
 func contactLines(profile models.Profile) []string {
@@ -123,14 +206,22 @@ func contactLines(profile models.Profile) []string {
 	return out
 }
 
-// orderSkills puts the posting's technologies first, then the candidate's
-// longest-held skills. Nothing is added: a technology the posting wants and the
-// candidate lacks is reported as missing, never listed as a skill.
+// orderSkills puts first the skills the posting asks for, whether the
+// technology vocabulary knows them or the posting simply names them, then the
+// longest-held, then those the candidate's own experience mentions most.
+// Nothing is added: a technology the posting wants and the candidate lacks is
+// reported as missing, never listed as a skill.
 func orderSkills(profile models.Profile, job models.Job, postingSet map[string]bool) (ordered, highlighted, missing []string) {
 	type entry struct {
-		name  string
-		years float64
-		wants bool
+		name     string
+		years    float64
+		wants    bool
+		mentions int
+	}
+	postingText := strings.ToLower(job.Title + " " + job.Description)
+	var history strings.Builder
+	for _, experience := range profile.Experiences {
+		history.WriteString(strings.ToLower(experience.Title + " " + experience.Description + " "))
 	}
 	var entries []entry
 	held := map[string]bool{}
@@ -140,12 +231,18 @@ func orderSkills(profile models.Profile, job models.Job, postingSet map[string]b
 			continue
 		}
 		normalized := answers.TechnologySignature(1, name)
-		wants := false
-		if len(normalized) == 1 && postingSet[normalized[0]] {
-			wants = true
+		inVocabulary := len(normalized) == 1 && postingSet[normalized[0]]
+		if inVocabulary {
 			held[normalized[0]] = true
 		}
-		entries = append(entries, entry{name: name, years: skill.Years, wants: wants})
+		wants := inVocabulary || countWord(postingText, strings.ToLower(name)) > 0
+		// An all-capitals name such as REST or AWS must appear as written,
+		// whichever way it matched: in lower case it is often just a word, as
+		// in "the rest of the team".
+		if name == strings.ToUpper(name) {
+			wants = countWord(job.Title+" "+job.Description, name) > 0
+		}
+		entries = append(entries, entry{name: name, years: skill.Years, wants: wants, mentions: countWord(history.String(), strings.ToLower(name))})
 	}
 	sort.SliceStable(entries, func(i, j int) bool {
 		if entries[i].wants != entries[j].wants {
@@ -153,6 +250,9 @@ func orderSkills(profile models.Profile, job models.Job, postingSet map[string]b
 		}
 		if entries[i].years != entries[j].years {
 			return entries[i].years > entries[j].years
+		}
+		if entries[i].mentions != entries[j].mentions {
+			return entries[i].mentions > entries[j].mentions
 		}
 		return strings.ToLower(entries[i].name) < strings.ToLower(entries[j].name)
 	})
@@ -191,11 +291,13 @@ func orderExperiences(experiences []models.WorkExperience, postingSet map[string
 		if index >= 6 {
 			limit = 2
 		}
+		context, bullets := splitRole(experience.Description)
 		out = append(out, TailoredRole{
 			Title:   strings.TrimSpace(experience.Title),
 			Company: strings.TrimSpace(experience.Company),
 			Period:  period(experience),
-			Bullets: selectBullets(experience.Description, postingSet, limit),
+			Context: context,
+			Bullets: selectBullets(bullets, postingSet, limit),
 		})
 	}
 	return out
@@ -218,18 +320,64 @@ func period(experience models.WorkExperience) string {
 	return start + " - " + end
 }
 
+// bulletMarkers start a bullet in a role description.
+var bulletMarkers = []string{"- ", "• ", "* ", "– "}
+
+// splitRole separates a role description into its opening context and its
+// bullets. PDF text wraps a bullet across lines, so a line that does not start
+// a bullet continues the one before; lines before the first bullet are the
+// role's context. A description without any bullet markers, as a hand-typed
+// one often is, has one bullet per line.
+func splitRole(description string) (string, []string) {
+	lines := strings.Split(description, "\n")
+	marked := false
+	for _, line := range lines {
+		if bulletMarker(strings.TrimSpace(line)) != "" {
+			marked = true
+			break
+		}
+	}
+	var context, bullets []string
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		switch marker := bulletMarker(line); {
+		case line == "":
+		case !marked:
+			bullets = append(bullets, line)
+		case marker != "":
+			bullets = append(bullets, strings.TrimSpace(strings.TrimPrefix(line, strings.TrimSpace(marker))))
+		case len(bullets) > 0:
+			bullets[len(bullets)-1] += " " + line
+		default:
+			context = append(context, line)
+		}
+	}
+	for i := range bullets {
+		bullets[i] = closeHyphens(bullets[i])
+	}
+	return closeHyphens(strings.Join(context, " ")), bullets
+}
+
+func bulletMarker(line string) string {
+	for _, marker := range bulletMarkers {
+		if strings.HasPrefix(line, marker) || line == strings.TrimSpace(marker) {
+			return marker
+		}
+	}
+	return ""
+}
+
 // selectBullets ranks a role's existing bullets by how many of the posting's
 // technologies they mention, keeping the original wording and, among equals,
 // the original order.
-func selectBullets(description string, postingSet map[string]bool, limit int) []string {
+func selectBullets(bullets []string, postingSet map[string]bool, limit int) []string {
 	type scored struct {
 		text  string
 		score int
 		order int
 	}
 	var candidates []scored
-	for index, line := range strings.Split(description, "\n") {
-		text := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "-"))
+	for index, text := range bullets {
 		text = strings.TrimSpace(text)
 		if len(text) < 12 || strings.Contains(text, "|") {
 			continue
@@ -302,36 +450,38 @@ Write the CV summary.`, factSheetFor(profile), fallbackText(job.Title, "unspecif
 			return strings.TrimSpace(result.Text), "ai"
 		}
 	}
-	return deterministicSummary(profile, highlighted), "deterministic"
+	return deterministicSummary(profile), "deterministic"
 }
 
-// deterministicSummary is what a CV carries when no provider is configured. It
-// leads with the candidate's own summary and prefixes the relevance line only
-// when this posting actually asks for skills they hold; restating the current
-// title on top of a summary that already opens with it just reads as a stutter.
-func deterministicSummary(profile models.Profile, highlighted []string) string {
-	var parts []string
-	if len(highlighted) > 0 {
-		limit := highlighted
-		if len(limit) > 6 {
-			limit = limit[:6]
-		}
-		parts = append(parts, fmt.Sprintf("Relevant to this role: %s.", strings.Join(limit, ", ")))
-	}
+// maxSummary keeps the deterministic summary to a CV-sized paragraph.
+const maxSummary = 700
+
+// deterministicSummary is what a CV carries when no provider is configured:
+// the candidate's own summary, cut at a sentence end if it runs long. The
+// posting's skills already lead the skills section, so the summary is not
+// prefixed with them. With no summary at all, it states the title and years.
+func deterministicSummary(profile models.Profile) string {
 	if summary := strings.TrimSpace(profile.Summary); summary != "" {
-		if len(summary) > 500 {
-			summary = strings.TrimSpace(summary[:500])
+		if len(summary) <= maxSummary {
+			return summary
 		}
-		parts = append(parts, summary)
-		return strings.Join(parts, " ")
+		cut := strings.LastIndex(summary[:maxSummary], ". ")
+		if cut < maxSummary/2 {
+			// No sentence end near the limit: cut on a character boundary so
+			// the result stays valid UTF-8.
+			end := maxSummary
+			for end > 0 && !utf8.RuneStart(summary[end]) {
+				end--
+			}
+			return strings.TrimSpace(summary[:end])
+		}
+		return summary[:cut+1]
 	}
 	title := fallbackText(profile.CurrentTitle, "Engineer")
 	if profile.YearsExperience > 0 {
-		parts = append(parts, fmt.Sprintf("%s with %.0f years of experience.", title, profile.YearsExperience))
-	} else {
-		parts = append(parts, title+".")
+		return fmt.Sprintf("%s with %.0f years of experience.", title, profile.YearsExperience)
 	}
-	return strings.Join(parts, " ")
+	return title + "."
 }
 
 // factSheetFor renders the facts a provider may draw on. It mirrors the answer
@@ -378,3 +528,28 @@ func listOrNoneText(items []string) string {
 	}
 	return strings.Join(items, ", ")
 }
+
+// countWord counts whole-word occurrences of term in text, compared as given.
+// A boundary is anything but a letter or digit, so "go" does not count inside
+// "going" while "node.js" counts after "(" and "kafka" before "’s".
+func countWord(text, term string) int {
+	if term == "" {
+		return 0
+	}
+	count := 0
+	for offset := 0; ; {
+		index := strings.Index(text[offset:], term)
+		if index < 0 {
+			return count
+		}
+		start, end := offset+index, offset+index+len(term)
+		before, _ := utf8.DecodeLastRuneInString(text[:start])
+		after, _ := utf8.DecodeRuneInString(text[end:])
+		if (start == 0 || !isWordRune(before)) && (end == len(text) || !isWordRune(after)) {
+			count++
+		}
+		offset = start + 1
+	}
+}
+
+func isWordRune(r rune) bool { return unicode.IsLetter(r) || unicode.IsDigit(r) }

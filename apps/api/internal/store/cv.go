@@ -133,9 +133,13 @@ func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {
 }
 
 // ApprovedBaseCV returns the CV to attach when nothing more specific applies.
-func (s *Store) ApprovedBaseCV(ctx context.Context, userID string) (models.CVDocument, error) {
+// LatestBaseCV returns the user's uploaded CV that applications draw on: the
+// most recently approved one, or else the newest. An unapproved CV can still
+// supply facts for a tailored CV, which waits for approval itself; only an
+// approved one may be sent as it is.
+func (s *Store) LatestBaseCV(ctx context.Context, userID string) (models.CVDocument, error) {
 	return scanCV(s.DB.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents
-		WHERE user_id=$1 AND kind='base' AND approved ORDER BY approved_at DESC NULLS LAST, created_at DESC LIMIT 1`, userID))
+		WHERE user_id=$1 AND kind='base' ORDER BY approved DESC, approved_at DESC NULLS LAST, created_at DESC LIMIT 1`, userID))
 }
 
 // ApprovedTailoredCVs returns approved tailored CVs for reuse, the ones written
