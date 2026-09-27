@@ -30,7 +30,9 @@ import (
 //
 //	1: a status-only PATCH on an application keeps its notes; apply_url is
 //	   withheld for rejected matches; agent tokens with read and write scopes.
-const Contract = 1
+//	2: composing an application refuses a closed posting with 409; jobs carry
+//	   closed_at and closed_reason.
+const Contract = 2
 
 type Server struct {
 	Store       *store.Store

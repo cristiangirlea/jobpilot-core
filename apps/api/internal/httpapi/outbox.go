@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"jobpilot/core/api/internal/answers"
 	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/auth"
+	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/generator"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
@@ -34,6 +36,33 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, store.ErrApplicationBlocked.Error())
 		return
 	}
+	if job.Job.ClosedAt != nil {
+		problem(w, 409, closedMessage(job.Job.ClosedReason))
+		return
+	}
+
+	// The employer's form, where it is published, read before anything costly
+	// is produced: it is also the best evidence that the posting still exists.
+	// A form that reads proves it is open; the ATS saying the posting is gone
+	// closes it. Only when there is no form to read is the link itself
+	// checked, since postings close between the background checks.
+	form, formErr := s.ATS.Fetch(ctx, job.Job.ApplyURL)
+	closedNow, reason := false, ""
+	switch {
+	case errors.Is(formErr, ats.ErrNotFound):
+		closedNow, reason = true, discovery.ReasonBoard
+		if err := s.Store.RecordLinkCheck(ctx, job.Job.ID, true, reason); err != nil {
+			internal(w, err)
+			return
+		}
+	case errors.Is(formErr, ats.ErrUnsupported) && job.Job.ApplyURL != "" && s.Discovery != nil:
+		closedNow, reason = s.Discovery.CheckJob(ctx, job.Job.ID, job.Job.ApplyURL, 8*time.Second)
+	}
+	if closedNow {
+		problem(w, 409, closedMessage(reason))
+		return
+	}
+
 	profile, err := s.Store.Profile(ctx, uid)
 	if err != nil {
 		internal(w, err)
@@ -60,8 +89,7 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 		entry.Notices = append(entry.Notices, "The cover letter fell back to the deterministic template because the AI provider did not respond.")
 	}
 
-	// The employer's form, where it is published.
-	form, formErr := s.ATS.Fetch(ctx, job.Job.ApplyURL)
+	// The form read above decides the channel and the answers.
 	entry.ATSProvider = form.Provider
 	switch {
 	case formErr == nil:
@@ -69,8 +97,6 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 		entry.Answers, entry.NeedsReview = s.answerForm(ctx, uid, form, profile, job)
 	case errors.Is(formErr, ats.ErrUnsupported):
 		entry.Blockers = append(entry.Blockers, unsupportedReason(form.Provider))
-	case errors.Is(formErr, ats.ErrNotFound):
-		entry.Blockers = append(entry.Blockers, "The employer's posting could not be found; it may have been closed.")
 	default:
 		entry.Blockers = append(entry.Blockers, "The employer's application form could not be read: "+formErr.Error())
 	}
@@ -247,4 +273,12 @@ func (s *Server) cancelOutboxEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, entry, err)
+}
+
+// closedMessage is the refusal for a posting that has closed.
+func closedMessage(reason string) string {
+	if reason == "" {
+		reason = "it is no longer available"
+	}
+	return "This posting has closed: " + reason + ". It can no longer be applied to."
 }

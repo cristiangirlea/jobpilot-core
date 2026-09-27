@@ -189,6 +189,15 @@ func (s *Store) SetOutboxStatus(ctx context.Context, userID, id, status string) 
 	if status == models.OutboxApproved && len(current.Blockers) > 0 {
 		return models.OutboxEntry{}, fmt.Errorf("this application cannot be approved yet: %s", current.Blockers[0])
 	}
+	if status == models.OutboxApproved {
+		// The posting may have closed after the entry was composed.
+		var reason string
+		if err := s.DB.QueryRow(ctx, `SELECT closed_reason FROM jobs WHERE id=$1 AND closed_at IS NOT NULL`, current.JobID).Scan(&reason); err == nil {
+			return models.OutboxEntry{}, fmt.Errorf("this posting has closed: %s. It can no longer be applied to", reason)
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return models.OutboxEntry{}, err
+		}
+	}
 	return scanOutbox(s.DB.QueryRow(ctx, `UPDATE application_outbox
 		SET status=$3, approved_at=CASE WHEN $3='approved' THEN now() ELSE approved_at END, updated_at=now()
 		WHERE user_id=$1 AND id=$2 RETURNING `+outboxColumns, userID, id, status))

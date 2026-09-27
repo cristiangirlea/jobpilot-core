@@ -121,6 +121,9 @@ type Job struct {
 	SourceProvider     string     `json:"source_provider,omitempty"`
 	// Slug is the job's readable name in URLs; empty until the job is named.
 	Slug string `json:"slug,omitempty"`
+	// ClosedAt is set once the posting is known to be gone; ClosedReason says how.
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
+	ClosedReason string     `json:"closed_reason,omitempty"`
 }
 
 type Evaluation struct {

@@ -13,6 +13,7 @@ import (
 	"jobpilot/core/api/internal/slug"
 	"regexp"
 	"sort"
+	"time"
 )
 
 type Store struct{ DB *pgxpool.Pool }
@@ -286,13 +287,13 @@ func (s *Store) InsertJob(ctx context.Context, u string, in models.JobInput, e m
 // that data; visibility itself is still governed by the user's job_matches row.
 func (s *Store) CatalogJob(ctx context.Context, id string) (models.Job, error) {
 	var j models.Job
-	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug FROM jobs WHERE id=$1`, id).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug)
+	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug,closed_at,closed_reason FROM jobs WHERE id=$1`, id).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug, &j.ClosedAt, &j.ClosedReason)
 	return j, err
 }
 
 func (s *Store) CatalogJobByFingerprint(ctx context.Context, fingerprint string) (models.Job, error) {
 	var j models.Job
-	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug FROM jobs WHERE fingerprint=$1`, fingerprint).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug)
+	err := s.DB.QueryRow(ctx, `SELECT id,title,company,company_normalized,company_domain,location,remote_type,salary_min,salary_max,currency,employment_type,industry,description,apply_url,posted_at,created_at,COALESCE(source_id::text,''),external_id,discovered_at,referral_partner,referral_disclosure,source_name,source_provider,slug,closed_at,closed_reason FROM jobs WHERE fingerprint=$1`, fingerprint).Scan(&j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &j.SourceID, &j.ExternalID, &j.DiscoveredAt, &j.ReferralPartner, &j.ReferralDisclosure, &j.SourceName, &j.SourceProvider, &j.Slug, &j.ClosedAt, &j.ClosedReason)
 	return j, err
 }
 func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, sourceProvider, sourceName, externalID, fingerprint string, in models.JobInput) (models.Job, error) {
@@ -333,6 +334,57 @@ func (s *Store) CreateDiscoveredJob(ctx context.Context, createdBy, sourceID, so
 // the catalog.
 func (s *Store) RefreshDescription(ctx context.Context, id, description string) error {
 	_, err := s.DB.Exec(ctx, `UPDATE jobs SET description=$2 WHERE id=$1 AND description<>$2`, id, description)
+	return err
+}
+
+// LinkToCheck is a job whose posting link is due a liveness check.
+type LinkToCheck struct{ ID, ApplyURL string }
+
+// LinksToCheck returns open jobs that somebody still matches, least recently
+// checked first. Jobs nobody could apply to anyway are not worth a request.
+func (s *Store) LinksToCheck(ctx context.Context, olderThan time.Duration, limit int) ([]LinkToCheck, error) {
+	rows, err := s.DB.Query(ctx, `SELECT j.id,j.apply_url FROM jobs j WHERE j.closed_at IS NULL AND j.apply_url<>''
+		AND (j.last_checked_at IS NULL OR j.last_checked_at < now()-$1::interval)
+		AND EXISTS(SELECT 1 FROM job_matches m WHERE m.job_id=j.id AND NOT m.rejected)
+		ORDER BY j.last_checked_at NULLS FIRST LIMIT $2`, fmt.Sprintf("%d seconds", int(olderThan.Seconds())), limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[LinkToCheck])
+}
+
+// RecordLinkCheck notes that a job's link was checked and, when the check was
+// definite, closes the job with the reason the user will see.
+func (s *Store) RecordLinkCheck(ctx context.Context, id string, closed bool, reason string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE jobs SET last_checked_at=now(),
+		closed_at=CASE WHEN $2 THEN COALESCE(closed_at,now()) ELSE closed_at END,
+		closed_reason=CASE WHEN $2 AND closed_at IS NULL THEN $3 ELSE closed_reason END WHERE id=$1`, id, closed, reason)
+	return err
+}
+
+// CloseUnlisted closes the jobs of an employer board that the board's full
+// feed no longer lists. It only applies to providers whose feed is the whole
+// board; any user's source for the same board counts, since the catalog is
+// shared. An empty listing closes nothing: that is more likely a glitch than
+// an employer closing every role at once.
+func (s *Store) CloseUnlisted(ctx context.Context, provider, identifier string, listed []string, reason string) (int64, error) {
+	if len(listed) == 0 {
+		return 0, nil
+	}
+	tag, err := s.DB.Exec(ctx, `UPDATE jobs SET closed_at=now(), closed_reason=$4
+		WHERE closed_at IS NULL AND source_provider=$1 AND external_id<>'' AND NOT (external_id = ANY($3))
+		AND source_id IN (SELECT id FROM discovery_sources WHERE provider=$1 AND lower(identifier)=lower($2))`,
+		provider, identifier, listed, reason)
+	return tag.RowsAffected(), err
+}
+
+// MarkSeen records that a feed listed the job just now. A job closed only
+// because its board stopped listing it is reopened; one whose link returned
+// 404 or 410 stays closed.
+func (s *Store) MarkSeen(ctx context.Context, id, unlistedReason string) error {
+	_, err := s.DB.Exec(ctx, `UPDATE jobs SET last_seen_at=now(),
+		closed_at=CASE WHEN closed_reason=$2 THEN NULL ELSE closed_at END,
+		closed_reason=CASE WHEN closed_reason=$2 THEN '' ELSE closed_reason END WHERE id=$1`, id, unlistedReason)
 	return err
 }
 
@@ -480,11 +532,13 @@ func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluati
 }
 
 func (s *Store) Jobs(ctx context.Context, u string, onlyMatches bool) ([]models.JobWithMatch, error) {
-	q := `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1`
+	q := `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1`
 	if onlyMatches {
 		q += ` AND m.rejected=false`
 	}
-	q += ` ORDER BY m.rejected ASC,m.score DESC,j.created_at DESC`
+	// Closed postings sink to the bottom: they stay visible for the record but
+	// can no longer be applied to.
+	q += ` ORDER BY (j.closed_at IS NOT NULL) ASC,m.rejected ASC,m.score DESC,j.created_at DESC`
 	rows, err := s.DB.Query(ctx, q, u)
 	if err != nil {
 		return nil, err
@@ -515,12 +569,12 @@ func jobRefColumn(ref string) string {
 
 // Job finds one of the user's jobs by id or by slug.
 func (s *Store) Job(ctx context.Context, u, ref string) (models.JobWithMatch, error) {
-	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
+	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
 	return scanJobMatch(row)
 }
 
 func (s *Store) Match(ctx context.Context, u, id string) (models.JobWithMatch, error) {
-	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND m.id=$2`, u, id)
+	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND m.id=$2`, u, id)
 	return scanJobMatch(row)
 }
 
@@ -529,7 +583,7 @@ type scanner interface{ Scan(...any) error }
 func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	var x models.JobWithMatch
 	var rejection, warnings, reasons, matched, missing, red, breakdown []byte
-	err := row.Scan(&x.Job.ID, &x.Job.Title, &x.Job.Company, &x.Job.CompanyNormalized, &x.Job.CompanyDomain, &x.Job.Location, &x.Job.RemoteType, &x.Job.SalaryMin, &x.Job.SalaryMax, &x.Job.Currency, &x.Job.EmploymentType, &x.Job.Industry, &x.Job.Description, &x.Job.ApplyURL, &x.Job.PostedAt, &x.Job.CreatedAt, &x.Job.SourceID, &x.Job.ExternalID, &x.Job.DiscoveredAt, &x.Job.ReferralPartner, &x.Job.ReferralDisclosure, &x.Job.SourceName, &x.Job.SourceProvider, &x.MatchID, &x.Match.Rejected, &x.Match.Score, &rejection, &warnings, &reasons, &matched, &missing, &red, &breakdown, &x.Job.Slug)
+	err := row.Scan(&x.Job.ID, &x.Job.Title, &x.Job.Company, &x.Job.CompanyNormalized, &x.Job.CompanyDomain, &x.Job.Location, &x.Job.RemoteType, &x.Job.SalaryMin, &x.Job.SalaryMax, &x.Job.Currency, &x.Job.EmploymentType, &x.Job.Industry, &x.Job.Description, &x.Job.ApplyURL, &x.Job.PostedAt, &x.Job.CreatedAt, &x.Job.SourceID, &x.Job.ExternalID, &x.Job.DiscoveredAt, &x.Job.ReferralPartner, &x.Job.ReferralDisclosure, &x.Job.SourceName, &x.Job.SourceProvider, &x.MatchID, &x.Match.Rejected, &x.Match.Score, &rejection, &warnings, &reasons, &matched, &missing, &red, &breakdown, &x.Job.Slug, &x.Job.ClosedAt, &x.Job.ClosedReason)
 	if err != nil {
 		return x, err
 	}
@@ -841,12 +895,16 @@ func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error)
 			profileFields++
 		}
 	}
-	jobs, err := s.Jobs(ctx, u, true)
+	matches, err := s.Jobs(ctx, u, true)
 	if err != nil {
 		return nil, err
 	}
-	if len(jobs) > 5 {
-		jobs = jobs[:5]
+	// Recommendations are for jobs that can still be applied to.
+	jobs := []models.JobWithMatch{}
+	for _, x := range matches {
+		if x.Job.ClosedAt == nil && len(jobs) < 5 {
+			jobs = append(jobs, x)
+		}
 	}
 	out["profile_completeness"] = profileFields * 100 / len(checks)
 	out["jobs_imported"] = total

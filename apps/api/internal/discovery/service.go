@@ -23,12 +23,20 @@ import (
 type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
+	Links   *LinkChecker
 	mu      sync.Mutex
 }
 
 var ErrMissingDesiredTitle = errors.New("add a desired job title to your profile first")
 
-func NewService(s *store.Store) *Service { return &Service{Store: s, Fetcher: NewFetcher()} }
+func NewService(s *store.Store) *Service {
+	return &Service{Store: s, Fetcher: NewFetcher(), Links: NewLinkChecker(false)}
+}
+
+// fullBoard lists the providers whose feed is every open job on the board, so
+// a job missing from it has been taken down. Aggregator and search feeds are
+// partial, and SmartRecruiters is fetched a page at a time.
+var fullBoard = map[string]bool{"greenhouse": true, "lever": true, "ashby": true}
 
 func (s *Service) ValidateSource(ctx context.Context, source models.DiscoverySource) (int, string, error) {
 	jobs, err := s.Fetcher.Fetch(ctx, source)
@@ -112,6 +120,17 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 		}
 		succeeded++
 		_ = s.Store.UpdateDiscoverySourceResult(ctx, userID, source.ID, "")
+		if fullBoard[source.Provider] {
+			listed := make([]string, 0, len(jobs))
+			for _, candidate := range jobs {
+				listed = append(listed, candidate.ExternalID)
+			}
+			if closed, err := s.Store.CloseUnlisted(ctx, source.Provider, source.Identifier, listed, ReasonUnlisted); err != nil {
+				return s.finish(ctx, userID, run, err)
+			} else if closed > 0 {
+				slog.Info("closed jobs no longer listed", "provider", source.Provider, "board", source.Identifier, "count", closed)
+			}
+		}
 		for _, candidate := range jobs {
 			if run.JobsSeen >= settings.MaxJobsPerRun {
 				break
@@ -138,6 +157,9 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 					run.JobsAdded++
 				}
 			}
+			if err = s.Store.MarkSeen(ctx, job.ID, ReasonUnlisted); err != nil {
+				return s.finish(ctx, userID, run, err)
+			}
 			if duplicate {
 				run.DuplicatesSkipped++
 				// Keep a known posting's text current: providers edit postings,
@@ -159,7 +181,7 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 				run.JobsRejected++
 				continue
 			}
-			if settings.AutoPrepare && evaluation.Score >= settings.MinScore {
+			if settings.AutoPrepare && evaluation.Score >= settings.MinScore && job.ClosedAt == nil {
 				prepared, prepErr := s.prepare(ctx, userID, job, evaluation)
 				if prepErr != nil {
 					return s.finish(ctx, userID, run, prepErr)
@@ -210,6 +232,9 @@ func (s *Service) finish(ctx context.Context, userID string, run models.Discover
 func (s *Service) Start(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
+	// Link checks share this loop, so they never overlap a discovery run.
+	links := time.NewTicker(linkCheckEvery)
+	defer links.Stop()
 	s.runDue(ctx)
 	for {
 		select {
@@ -217,8 +242,64 @@ func (s *Service) Start(ctx context.Context) {
 			return
 		case <-ticker.C:
 			s.runDue(ctx)
+		case <-links.C:
+			s.checkLinks(ctx)
 		}
 	}
+}
+
+// Link checking is paced to stay polite to the sites being asked: a small
+// batch every few minutes, a pause between requests, and each job at most
+// once a day. That is about 7,000 checks a day, well above what a catalog of
+// jobs people still match needs.
+const (
+	linkCheckEvery = 5 * time.Minute
+	linkCheckBatch = 25
+	linkCheckAgain = 24 * time.Hour
+	linkCheckPause = 2 * time.Second
+	// linkCheckTimeout bounds one check, so a batch of slow sites holds the
+	// discovery loop for at most about five minutes.
+	linkCheckTimeout = 10 * time.Second
+)
+
+func (s *Service) checkLinks(ctx context.Context) {
+	due, err := s.Store.LinksToCheck(ctx, linkCheckAgain, linkCheckBatch)
+	if err != nil {
+		slog.Error("list links to check", "error", err)
+		return
+	}
+	closed := 0
+	for i, link := range due {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(linkCheckPause):
+			}
+		}
+		if gone, _ := s.CheckJob(ctx, link.ID, link.ApplyURL, linkCheckTimeout); gone {
+			closed++
+		}
+	}
+	if closed > 0 {
+		slog.Info("closed jobs whose links are gone", "checked", len(due), "closed", closed)
+	}
+}
+
+// CheckJob checks one job's link now, giving the site at most timeout, and
+// records the answer. It reports whether the posting is closed and why; a
+// failed check counts as open, so an unreachable site never hides a job.
+func (s *Service) CheckJob(ctx context.Context, id, link string, timeout time.Duration) (bool, string) {
+	checkCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	closed, reason, err := s.Links.Check(checkCtx, link)
+	if err != nil {
+		closed, reason = false, ""
+	}
+	if recordErr := s.Store.RecordLinkCheck(ctx, id, closed, reason); recordErr != nil {
+		slog.Error("record link check", "job_id", id, "error", recordErr)
+	}
+	return closed, reason
 }
 func (s *Service) runDue(ctx context.Context) {
 	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10)
