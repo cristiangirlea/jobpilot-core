@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"jobpilot/core/api/internal/company"
@@ -106,7 +107,21 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 			return resolution, nil
 		}
 	}
-	if answer, ok := profileAnswer(key, subject.Profile); ok {
+	// A years question that names a technology is about that skill, not the
+	// whole career. It is answered from the skill's recorded years or not at
+	// all: the total, or a banked answer about another skill, would be a
+	// false claim.
+	skillScoped := false
+	if key == KeyYearsExperience {
+		if answer, scoped := skillYears(text, subject.Profile); scoped {
+			skillScoped = true
+			if fitted, usable := fitToQuestion(answer, question.Options, question.Kind); usable {
+				resolution.Answer, resolution.Source, resolution.Approved = fitted, SourceProfile, true
+				return resolution, nil
+			}
+		}
+	}
+	if answer, ok := profileAnswer(key, subject.Profile); ok && !skillScoped {
 		if len(question.Options) == 0 {
 			resolution.Answer, resolution.Source, resolution.Approved = answer, SourceProfile, true
 			return resolution, nil
@@ -130,7 +145,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 	}
 
 	// 3. The same kind of question, answered for a sufficiently similar stack.
-	if s.Bank != nil && key != "" {
+	if s.Bank != nil && key != "" && !skillScoped {
 		if entry, ok := s.bestSimilar(ctx, userID, key, family, signature); ok {
 			if answer, usable := fitToQuestion(entry.Answer, question.Options, question.Kind); usable {
 				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
@@ -335,6 +350,30 @@ func factSheet(p models.Profile) string {
 		return "(no candidate facts recorded)"
 	}
 	return strings.TrimRight(b.String(), "\n")
+}
+
+// skillYears answers a years question that names a technology. scoped reports
+// whether it names any; when it does, answer is that skill's recorded years,
+// or empty when the question names several technologies, or one the profile
+// has no years for.
+func skillYears(question string, p models.Profile) (answer string, scoped bool) {
+	named := TechnologySignature(4, question)
+	if len(named) == 0 {
+		return "", false
+	}
+	if len(named) > 1 {
+		return "", true
+	}
+	for _, skill := range p.Skills {
+		name := strings.ToLower(strings.TrimSpace(skill.Name))
+		if alias, ok := technologyAliases[name]; ok {
+			name = alias
+		}
+		if name == named[0] && skill.Years > 0 {
+			return strconv.FormatFloat(skill.Years, 'f', -1, 64), true
+		}
+	}
+	return "", true
 }
 
 // profileAnswer returns closed-form answers that are pure lookups. These must

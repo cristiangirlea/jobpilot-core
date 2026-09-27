@@ -611,3 +611,44 @@ func TestTemplateAnswersAreFittedToSelectOptions(t *testing.T) {
 		}
 	}
 }
+
+// Found in early use: "How many years of professional Python
+// experience do you have?" was answered with total years, approved as a
+// profile fact. A years question about one technology must answer with that
+// skill's recorded years, or not at all.
+func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
+	service := &Service{Bank: &fakeBank{}, LLM: llm.New(nil, nil, 0, 0)}
+	s := subject()
+	s.Profile.YearsExperience = 13
+	s.Profile.Skills = []models.Skill{{Name: "Python", Years: 6}, {Name: "Go", Years: 6}, {Name: "Kubernetes"}}
+	cases := []struct {
+		question string
+		want     string
+	}{
+		{"How many years of professional Python experience do you have?", "6"},
+		{"How many years of experience do you have with Golang?", "6"},
+		{"How many years of experience do you have?", "13"},
+		{"Years of professional experience", "13"},
+		// Named, but no years recorded: the total would be a false claim.
+		{"How many years of Kubernetes experience do you have?", ""},
+		// Not on the profile at all.
+		{"How many years of Rust experience do you have?", ""},
+		// Two technologies: no single honest number.
+		{"How many years of experience do you have with Python and Go?", ""},
+	}
+	for _, c := range cases {
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: c.question}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Answer != c.want {
+			t.Errorf("%q: got %q from %s, want %q", c.question, resolution.Answer, resolution.Source, c.want)
+		}
+		if c.want == "" && !resolution.NeedsReview {
+			t.Errorf("%q: an unanswered years question must be flagged for review", c.question)
+		}
+		if c.want != "" && resolution.Source != SourceProfile {
+			t.Errorf("%q: a recorded fact should come from the profile, got %s", c.question, resolution.Source)
+		}
+	}
+}
