@@ -4,7 +4,8 @@ import {useEffect,useRef,useState} from "react";
 import {api,token} from "@/lib/api";
 import {CVDocument,CVImportResult} from "@/lib/types";
 import {Shell} from "@/components/Shell";
-import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
+import {TailoredPreview} from "@/components/TailoredPreview";
+import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
 const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8080/api";
 
@@ -16,8 +17,18 @@ export default function CVPage(){
   const [busy,setBusy]=useState(false);
   const file=useRef<HTMLInputElement>(null);
 
-  const load=async()=>{try{setItems(await api<CVDocument[]>("/cv"))}catch(e){setError((e as Error).message)}};
-  useEffect(()=>{load()},[]);
+  const load=async()=>{try{const list=await api<CVDocument[]>("/cv");setItems(list);return list}catch(e){setError((e as Error).message);return []}};
+  // /cv?open=<id> opens that document, so the outbox can link to the CV an
+  // application carries.
+  // The parameter is dropped once used, so a reload stays on what the user
+  // picked since.
+  useEffect(()=>{load().then(list=>{
+    const wanted=new URLSearchParams(window.location.search).get("open");
+    if(!wanted)return;
+    const match=list.find(item=>item.id===wanted);
+    if(match)setOpen(match);else setError("That CV no longer exists.");
+    window.history.replaceState(null,"",window.location.pathname);
+  })},[]);
 
   // Upload goes through fetch directly: the shared client sends JSON, and this
   // is multipart.
@@ -76,8 +87,7 @@ export default function CVPage(){
                     <p className="truncate text-sm font-semibold">{item.label||item.filename}</p>
                     <p className="muted mt-0.5 text-xs">{item.kind==="tailored"?"Tailored":"Base"} · {item.format.toUpperCase()} · {Math.round(item.size_bytes/1024)} KB</p>
                   </div>
-                  <span className={`shrink-0 rounded-lg px-2 py-1 text-[10px] font-bold ${item.approved?"bg-sage text-moss":"bg-amber-50 text-amber-700"}`}>
-                    {item.approved?"APPROVED":"NEEDS REVIEW"}</span>
+                  <ApprovalChip approved={item.approved}/>
                 </div>
               </button>)}
           </div>
@@ -89,9 +99,22 @@ export default function CVPage(){
 function CVDetail({item,busy,onApprove,onImport,onDelete}:{item:CVDocument;busy:boolean;
   onApprove:(item:CVDocument,approved:boolean)=>void;onImport:(item:CVDocument)=>void;onDelete:(item:CVDocument)=>void}){
   const [full,setFull]=useState<CVDocument|null>(null);
-  const [tab,setTab]=useState<"parsed"|"text">("parsed");
-  useEffect(()=>{setFull(null);api<CVDocument>(`/cv/${item.id}`).then(setFull).catch(()=>{})},[item.id]);
+  // A tailored CV opens on its preview; a base CV on what was read from it.
+  const [tab,setTab]=useState<"preview"|"parsed"|"text">(item.kind==="tailored"?"preview":"parsed");
+  useEffect(()=>{
+    // A slower answer for the document open before must not land on this one.
+    let current=true;
+    setFull(null);setTab(item.kind==="tailored"?"preview":"parsed");
+    api<CVDocument>(`/cv/${item.id}`).then(doc=>{if(current)setFull(doc)}).catch(()=>{});
+    return ()=>{current=false};
+  },[item.id,item.kind]);
   const parsed=full?.parsed;
+  const tailored=parsed?.tailored;
+  // A tailored CV made before previews existed has only its text to show.
+  const legacyTailored=item.kind==="tailored"&&!!full&&!tailored;
+  const tabs:readonly ("preview"|"parsed"|"text")[]=tailored?["preview","text"]:item.kind==="tailored"?["text"]:["parsed","text"];
+  const shown=tabs.includes(tab)?tab:tabs[0];
+  const tabLabel={preview:"Preview",parsed:"What was read",text:"Extracted text"};
 
   return <div className="card">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -109,19 +132,25 @@ function CVDetail({item,busy,onApprove,onImport,onDelete}:{item:CVDocument;busy:
     </div>
 
     {!full&&<p className="muted mt-6 text-sm">Loading…</p>}
-    {parsed&&parsed.warnings?.length>0&&
+    {parsed&&!tailored&&parsed.warnings?.length>0&&
       <div className="mt-5 rounded-xl bg-amber-50 px-4 py-3">
         <p className="text-sm font-semibold text-amber-900">Check these before importing</p>
         <ul className="mt-1 space-y-0.5 text-sm text-amber-800">{parsed.warnings.map(w=><li key={w}>· {w}</li>)}</ul>
       </div>}
 
+    {legacyTailored&&<p className="mt-5 rounded-xl bg-black/[0.03] px-4 py-3 text-sm text-ink/70">
+      This CV was made before previews existed. {item.approved
+        ?"An application keeps a CV you approved, so withdraw the approval first, then prepare the application again to get a fresh one you can preview."
+        :"Prepare the application again to get a fresh one you can preview."}</p>}
     {full&&<>
       <div className="mt-5 flex gap-2">
-        {(["parsed","text"] as const).map(name=>
-          <button key={name} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${tab===name?"bg-ink text-white":"bg-black/5"}`}
-            onClick={()=>setTab(name)}>{name==="parsed"?"What was read":"Extracted text"}</button>)}
+        {tabs.map(name=>
+          <button key={name} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${shown===name?"bg-ink text-white":"bg-black/5"}`}
+            onClick={()=>setTab(name)}>{tabLabel[name]}</button>)}
       </div>
-      {tab==="text"
+      {shown==="preview"&&tailored
+        ? <TailoredPreview cv={tailored}/>
+        : shown==="text"
         ? <pre className="mt-4 max-h-[30rem] overflow-auto whitespace-pre-wrap rounded-xl bg-black/[0.03] p-4 text-xs leading-relaxed">{full.extracted_text||"(no text)"}</pre>
         : parsed&&<div className="mt-4 space-y-5">
             <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">

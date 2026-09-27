@@ -16,6 +16,8 @@ import (
 	"jobpilot/core/api/internal/generator"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // compose builds a complete application and queues it for approval.
@@ -72,14 +74,21 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	entry := models.OutboxEntry{JobID: job.Job.ID, Channel: models.ChannelManual, Blockers: []string{}, Notices: []string{}}
 
 	// The CV. A generated one arrives unapproved, which is itself a blocker.
-	decision, err := s.decideCV(ctx, uid, job, profile)
+	decision, kept, err := s.keptCV(ctx, uid, job.Job.ID)
 	if err != nil {
 		internal(w, err)
 		return
 	}
+	if !kept {
+		decision, err = s.decideCV(ctx, uid, job, profile)
+		if err != nil {
+			internal(w, err)
+			return
+		}
+	}
 	entry.CVDocumentID, entry.CVDecision = decision.CV.ID, decision.Decision
 	if !decision.Approved {
-		entry.Blockers = append(entry.Blockers, "A tailored CV was prepared for this role and needs your approval before it can be sent.")
+		entry.Blockers = append(entry.Blockers, store.CVBlocker)
 	}
 
 	// The letter.
@@ -273,6 +282,43 @@ func (s *Server) cancelOutboxEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	respond(w, entry, err)
+}
+
+// keptCV is the tailored CV an application already carries, once the user has
+// approved it. Preparing the application again keeps it: tailoring afresh can
+// produce a different draft (an AI-written summary never repeats exactly), and
+// a new draft would undo the approval the user just gave.
+//
+// It is kept only while it was built from the CV the user uploaded last, so a
+// newer upload still reaches the application. Withdrawing the approval is the
+// way to ask for a fresh one.
+func (s *Server) keptCV(ctx context.Context, uid, jobID string) (cvDecision, bool, error) {
+	previous, err := s.Store.OutboxEntryForJob(ctx, uid, jobID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cvDecision{}, false, nil
+	}
+	if err != nil || previous.CVDocumentID == "" {
+		return cvDecision{}, false, err
+	}
+	doc, err := s.Store.CV(ctx, uid, previous.CVDocumentID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return cvDecision{}, false, nil
+	}
+	if err != nil || !doc.Approved || doc.Kind != "tailored" {
+		return cvDecision{}, false, err
+	}
+	baseID := ""
+	base, err := s.Store.LatestBaseCV(ctx, uid)
+	switch {
+	case err == nil:
+		baseID = base.ID
+	case !errors.Is(err, pgx.ErrNoRows):
+		return cvDecision{}, false, err
+	}
+	if doc.ParentID != baseID {
+		return cvDecision{}, false, nil
+	}
+	return cvDecision{Decision: "reused", Reason: "Keeping the CV you approved for this application.", CV: doc, Approved: true}, true, nil
 }
 
 // closedMessage is the refusal for a posting that has closed.

@@ -49,6 +49,48 @@ var ErrOutboxSent = errors.New("this application has already been sent and canno
 // direction, but it must not happen quietly.
 const ApprovalWithdrawnNotice = "You had approved this application. Rebuilding it withdrew that approval, so it needs approving again."
 
+// CVBlocker holds back an entry whose tailored CV awaits the user's approval,
+// and BaseCVBlocker one whose uploaded CV had its approval withdrawn. They are
+// added and cleared as the CV's approval changes, wherever that happens, so
+// approving a CV frees every application carrying it without rebuilding them.
+const (
+	CVBlocker     = "A tailored CV was prepared for this role and needs your approval before it can be sent."
+	BaseCVBlocker = "Your CV is no longer approved. Approve it again, or prepare this application again to attach another."
+)
+
+// CVWithdrawnNotice explains why an approved entry went back to review when
+// its CV lost its approval.
+const CVWithdrawnNotice = "You had approved this application, but its CV is no longer approved, so the application needs approving again."
+
+func cvBlocker(kind string) string {
+	if kind == "base" {
+		return BaseCVBlocker
+	}
+	return CVBlocker
+}
+
+// syncCVBlocker carries a CV's approval into the entries that carry it. Sent
+// and cancelled entries are history and stay as they are.
+func syncCVBlocker(ctx context.Context, tx pgx.Tx, userID string, doc models.CVDocument) error {
+	blocker := cvBlocker(doc.Kind)
+	if doc.Approved {
+		_, err := tx.Exec(ctx, `UPDATE application_outbox SET
+				blockers=array_remove(blockers,$3),
+				status=CASE WHEN status='needs_review' AND cardinality(array_remove(blockers,$3))=0 THEN 'ready' ELSE status END,
+				updated_at=now()
+			WHERE user_id=$1 AND cv_document_id=$2 AND $3=ANY(blockers) AND status IN ('needs_review','ready')`,
+			userID, doc.ID, blocker)
+		return err
+	}
+	_, err := tx.Exec(ctx, `UPDATE application_outbox SET
+			blockers=array_append(blockers,$3),
+			notices=CASE WHEN approved_at IS NOT NULL THEN array_append(notices,$4) ELSE notices END,
+			status='needs_review', approved_at=NULL, updated_at=now()
+		WHERE user_id=$1 AND cv_document_id=$2 AND NOT ($3=ANY(blockers)) AND status IN ('needs_review','ready','approved')`,
+		userID, doc.ID, blocker, CVWithdrawnNotice)
+	return err
+}
+
 // SaveOutboxEntry composes or recomposes the queued application for one job.
 //
 // Recomposing an entry the user already approved resets it to await approval
@@ -170,6 +212,11 @@ func (s *Store) OutboxEntry(ctx context.Context, userID, id string) (models.Outb
 		entry.Job = &job
 	}
 	return entry, nil
+}
+
+// OutboxEntryForJob returns the entry already queued for a job, if there is one.
+func (s *Store) OutboxEntryForJob(ctx context.Context, userID, jobID string) (models.OutboxEntry, error) {
+	return scanOutbox(s.DB.QueryRow(ctx, `SELECT `+outboxColumns+` FROM application_outbox WHERE user_id=$1 AND job_id=$2`, userID, jobID))
 }
 
 // SetOutboxStatus moves an entry through the queue.
