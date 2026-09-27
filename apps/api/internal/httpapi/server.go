@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/mail"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -434,7 +436,7 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 	if filter != nil {
 		filterID = filter.ID
 	}
-	jobs, err := s.Store.Jobs(ctx, uid, false)
+	jobs, _, err := s.Store.Jobs(ctx, uid, store.JobQuery{})
 	if err != nil {
 		return err
 	}
@@ -506,16 +508,90 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 	respondCreated(w, models.JobWithMatch{Job: job, Match: evaluation, MatchID: matchID}, getErr)
 }
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
-	x, e := s.Store.Jobs(r.Context(), auth.UserID(r.Context()), false)
-	respond(w, x, e)
+	s.respondJobs(w, r, "")
+}
+
+// respondJobs serves a job list narrowed by the optional parameters jobQuery
+// reads, with the count before paging in X-Total-Count. fixedState is the
+// state the route implies, if any.
+func (s *Server) respondJobs(w http.ResponseWriter, r *http.Request, fixedState string) {
+	q, message := jobQuery(r, fixedState)
+	if message != "" {
+		problem(w, 422, message)
+		return
+	}
+	jobs, total, err := s.Store.Jobs(r.Context(), auth.UserID(r.Context()), q)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	w.Header().Set("X-Total-Count", strconv.Itoa(total))
+	write(w, 200, jobs)
+}
+
+// jobQuery reads a job list's optional parameters: state, min_score, open,
+// fields=summary, limit and offset. Without any, the list is whole, as it was
+// before they existed. A listing of every job was 14.4 MB on a full account,
+// most of it descriptions, so a client that pages should also ask for the
+// summary and fetch one job for its text.
+func jobQuery(r *http.Request, fixedState string) (store.JobQuery, string) {
+	values := r.URL.Query()
+	q := store.JobQuery{State: fixedState}
+	if state := values.Get("state"); state != "" {
+		switch {
+		case fixedState != "" && state != fixedState:
+			return q, "This list holds " + fixedState + " jobs only; use /api/jobs with state for others."
+		case state != "accepted" && state != "rejected" && state != "all":
+			return q, "state must be accepted, rejected, or all."
+		}
+		q.State = state
+	}
+	number := func(name string, min, max int) (int, string) {
+		raw := values.Get(name)
+		if raw == "" {
+			return 0, ""
+		}
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < min || n > max {
+			return 0, fmt.Sprintf("%s must be a whole number from %d to %d.", name, min, max)
+		}
+		return n, ""
+	}
+	var message string
+	if q.MinScore, message = number("min_score", 0, 100); message != "" {
+		return q, message
+	}
+	if q.Limit, message = number("limit", 1, 500); message != "" {
+		return q, message
+	}
+	if q.Offset, message = number("offset", 0, 1<<30); message != "" {
+		return q, message
+	}
+	if q.Offset > 0 && q.Limit == 0 {
+		return q, "offset needs a limit."
+	}
+	switch values.Get("fields") {
+	case "":
+	case "summary":
+		q.Summary = true
+	default:
+		return q, "fields must be summary, or left out for whole jobs."
+	}
+	switch values.Get("open") {
+	case "", "false":
+	case "true":
+		q.OpenOnly = true
+	default:
+		return q, "open must be true or false."
+	}
+	return q, ""
 }
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Job(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
 	respond(w, x, e)
 }
 func (s *Server) listMatches(w http.ResponseWriter, r *http.Request) {
-	x, e := s.Store.Jobs(r.Context(), auth.UserID(r.Context()), true)
-	respond(w, x, e)
+	s.respondJobs(w, r, "accepted")
 }
 func (s *Server) getMatch(w http.ResponseWriter, r *http.Request) {
 	x, e := s.Store.Match(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))

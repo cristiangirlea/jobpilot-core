@@ -257,6 +257,11 @@ func TestEndToEnd(t *testing.T) {
 	if isErr || !contains(ids(out, "jobs"), rejected.Job.ID) || !strings.Contains(strings.ToLower(text), "employer") {
 		t.Fatalf("list_jobs rejected: %s", text)
 	}
+	// The API pages: one job comes back, and the total still counts both.
+	out, text, isErr = call("list_jobs", map[string]any{"state": "all", "limit": 1})
+	if jobs, _ := out["jobs"].([]any); isErr || len(jobs) != 1 || out["total"] != float64(2) {
+		t.Fatalf("list_jobs should return one job of two: %s", text)
+	}
 
 	out, text, isErr = call("get_job", map[string]any{"job_id": accepted.Job.ID})
 	if isErr || !strings.Contains(text, "Build reliable backend services") {

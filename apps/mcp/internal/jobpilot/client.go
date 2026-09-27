@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -264,10 +265,24 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 	if out == nil || len(bytes.TrimSpace(data)) == 0 {
 		return nil
 	}
+	if counted, ok := out.(*withTotal); ok {
+		if n, convErr := strconv.Atoi(resp.Header.Get("X-Total-Count")); convErr == nil {
+			counted.total, counted.counted = n, true
+		}
+		out = counted.into
+	}
 	if err = json.Unmarshal(data, out); err != nil {
 		return fmt.Errorf("jobpilot api: decode %s %s: %w", method, path, err)
 	}
 	return nil
+}
+
+// withTotal decodes a list into into and keeps the X-Total-Count the API sent
+// with it; counted is false when it sent none.
+type withTotal struct {
+	into    any
+	total   int
+	counted bool
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
@@ -279,15 +294,47 @@ func (c *Client) Profile(ctx context.Context) (Profile, error) {
 	return out, c.get(ctx, "/api/profile", &out)
 }
 
-// Jobs lists every job evaluated for the user, or only accepted matches. The
-// API orders both by rejected state, then score descending.
-func (c *Client) Jobs(ctx context.Context, acceptedOnly bool) ([]JobWithMatch, error) {
+// JobQuery narrows a job list the way the API's list parameters do.
+type JobQuery struct {
+	State    string // accepted, rejected, or all
+	MinScore int
+	OpenOnly bool
+	Limit    int
+	Summary  bool
+}
+
+// Jobs lists the user's evaluated jobs, best first. An API that pages applies
+// q and reports how many jobs match before the limit, and counted is true. An
+// API from before paging ignores q and returns every job, or every accepted
+// one, which the caller must then filter itself.
+func (c *Client) Jobs(ctx context.Context, q JobQuery) (jobs []JobWithMatch, total int, counted bool, err error) {
+	values := url.Values{}
 	path := "/api/jobs"
-	if acceptedOnly {
+	if q.State == "accepted" {
+		// Accepted matches have their own list, which an older API also serves
+		// without the rejections.
 		path = "/api/matches"
+	} else if q.State != "" {
+		values.Set("state", q.State)
 	}
-	var out []JobWithMatch
-	return out, c.get(ctx, path, &out)
+	if q.MinScore > 0 {
+		values.Set("min_score", strconv.Itoa(q.MinScore))
+	}
+	if q.OpenOnly {
+		values.Set("open", "true")
+	}
+	if q.Limit > 0 {
+		values.Set("limit", strconv.Itoa(q.Limit))
+	}
+	if q.Summary {
+		values.Set("fields", "summary")
+	}
+	if encoded := values.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	list := &withTotal{into: &jobs}
+	err = c.get(ctx, path, list)
+	return jobs, list.total, list.counted, err
 }
 
 func (c *Client) Job(ctx context.Context, id string) (JobWithMatch, error) {

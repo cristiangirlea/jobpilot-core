@@ -23,7 +23,7 @@ func TestClientRejectsOversizedResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.maxBytes = 64
-	if _, err = c.Jobs(context.Background(), false); err == nil || !strings.Contains(err.Error(), "exceeded") {
+	if _, _, _, err = c.Jobs(context.Background(), JobQuery{}); err == nil || !strings.Contains(err.Error(), "exceeded") {
 		t.Fatalf("expected a size error, got %v", err)
 	}
 }
