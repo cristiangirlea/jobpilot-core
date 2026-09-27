@@ -119,8 +119,9 @@ jobs:
           FRONTEND_URL: http://localhost:3000
           TOKEN_TTL_HOURS: "1"
           LLM_PROVIDER: none
-          # The MCP end-to-end test serves a fake Greenhouse form here so the
-          # outbox approval and withdrawal paths are covered.
+          # The MCP end-to-end test serves a fake Greenhouse here: a form, so
+          # the outbox approval and withdrawal paths are covered, and board
+          # listings, so a discovery run is.
           ATS_GREENHOUSE_URL: http://localhost:18999
         run: |
           (cd apps/api && go build -o "$RUNNER_TEMP/api" ./cmd/api)

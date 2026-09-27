@@ -38,6 +38,15 @@ func NewFetcher() *Fetcher {
 	}
 }
 
+// UseGreenhouseOrigin reads board listings from another Greenhouse origin,
+// the one ATS_GREENHOUSE_URL names for the form reader, so one setting moves
+// both to a test double. An empty origin keeps the public API.
+func (f *Fetcher) UseGreenhouseOrigin(origin string) {
+	if origin = strings.TrimSuffix(strings.TrimSpace(origin), "/"); origin != "" {
+		f.GreenhouseBase = origin + "/v1/boards"
+	}
+}
+
 func (f *Fetcher) Fetch(ctx context.Context, source models.DiscoverySource) ([]models.DiscoveredJob, error) {
 	switch source.Provider {
 	case "remotive":
