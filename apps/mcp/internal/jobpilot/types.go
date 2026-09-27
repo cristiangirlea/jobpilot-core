@@ -21,6 +21,7 @@ type Job struct {
 	Industry       string     `json:"industry"`
 	Description    string     `json:"description"`
 	ApplyURL       string     `json:"apply_url"`
+	EmployerURL    string     `json:"employer_url,omitempty"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	DiscoveredAt   *time.Time `json:"discovered_at,omitempty"`
@@ -70,6 +71,7 @@ type JobSummary struct {
 	EmploymentType string     `json:"employment_type"`
 	Industry       string     `json:"industry"`
 	ApplyURL       string     `json:"apply_url"`
+	EmployerURL    string     `json:"employer_url,omitempty"`
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 	Source         string     `json:"source,omitempty"`
 }
@@ -82,7 +84,7 @@ func summarizeJob(j Job) JobSummary {
 	case source == "":
 		source = j.SourceProvider
 	}
-	return JobSummary{ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, PostedAt: j.PostedAt, Source: source}
+	return JobSummary{ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, EmployerURL: j.EmployerURL, PostedAt: j.PostedAt, Source: source}
 }
 
 type MatchSummary struct {

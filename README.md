@@ -295,7 +295,7 @@ An exact normalized name, alias, or domain match rejects. Fuzzy similarity at or
 
 Rejected jobs remain visible in `/jobs` so the user can understand the decision, but they are removed from `/matches` and all application actions are locked:
 
-- No outbound apply URL. `apply_url` is withheld from every response that carries a rejected match, so a client cannot show an apply link the backend would refuse. `scanJobMatch` and `scanApplication` do this centrally; hiding the button in the UI is not relied upon.
+- No outbound apply URL. `apply_url` (and `employer_url`) is withheld from every response that carries a rejected match, so a client cannot show an apply link the backend would refuse. `scanJobMatch` and `scanApplication` do this centrally; hiding the button in the UI is not relied upon.
 - No generated documents.
 - No new application record.
 - No transition of an existing draft to `applied` after the job becomes rejected.
@@ -570,6 +570,8 @@ Two rules earn their own note, because the failure modes are not symmetric:
 
 A background check revisits the links of jobs somebody still matches, at most once a day each, 25 every five minutes with a pause between requests. Only 404, 410 and Greenhouse's `error=true` redirect close a job; timeouts, 403 and 5xx leave it open. The checker refuses loopback, private and link-local addresses (checked after DNS), since the links come from feeds and users. A Greenhouse, Lever or Ashby job that its board's full feed stops listing is closed too, and reopened if the board lists it again.
 
+An Arbeitnow posting links to Arbeitnow's own page, whose `<posting>/apply` redirects to the employer's application page. The check reads that redirect once, without following it, and stores the target as `employer_url` when it is an http or https page off the aggregator. Composing reads the form there, so a posting Arbeitnow found on Greenhouse is answered like any Greenhouse job, and the job page's apply button opens the employer's page directly. The redirect still answers after a posting closes, so it never decides liveness itself; once the employer's page is known, the check visits both, and either one removing the posting closes the job. Remotive has no such redirect and keeps its own link.
+
 An entry records two separate things:
 
 - **Blockers** stop approval: an unapproved tailored CV, a required question with no answer, a missing profile email. Approval is refused while any stands, and that check lives in the store rather than the handler, because it is a safety rule rather than a UI concern.
@@ -780,7 +782,7 @@ Apply engine:
 | `compose_application` | write | Assemble a whole application into the outbox for review |
 | `cancel_outbox_entry` | write | Withdraw a composed application; reversible |
 
-List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
+List tools return summaries without the job description so a page of matches stays small in the agent's context; `get_job` returns the full text. The `apply_url` is blanked for rejected jobs and blocked applications, as the API itself now does, and so is `employer_url`, the employer's own page behind an aggregator's posting, which agents are told to give the user in preference to `apply_url`. Server instructions tell the host that rejected jobs are locked, that nothing here submits or records an apply click, and that generated text may only use stored facts. A `409` carrying the rejection-lock message is returned as a tool error with that hint; other conflicts, such as a duplicate discovery source, are passed through unchanged.
 
 **Deliberately absent, and worth keeping absent:**
 
@@ -848,6 +850,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are r
 | `014_job_liveness.sql` | Closed postings and the background link check |
 | `015_profile_name_parts.sql` | Given and family names for a form's first and last name fields |
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
+| `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 
 Core entities:
 

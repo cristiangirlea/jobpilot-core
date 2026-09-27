@@ -14,7 +14,7 @@ import (
 // a real tool, so a renamed tool cannot leave a prompt quietly pointing at a
 // name that no longer exists.
 var argumentNames = map[string]bool{
-	"job_id": true, "min_score": true, "apply_url": true, "needs_review": true,
+	"job_id": true, "min_score": true, "apply_url": true, "employer_url": true, "needs_review": true,
 }
 
 var snakeCase = regexp.MustCompile(`\b[a-z]+(?:_[a-z]+)+\b`)

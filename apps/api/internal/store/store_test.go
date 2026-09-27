@@ -37,7 +37,7 @@ func (f *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// jobMatchRow builds the 33 values scanJobMatch reads, in column order.
+// jobMatchRow builds the 37 values scanJobMatch reads, in column order.
 func jobMatchRow(applyURL string, rejected bool) *fakeRow {
 	empty := []byte(`[]`)
 	return &fakeRow{values: []any{
@@ -46,6 +46,7 @@ func jobMatchRow(applyURL string, rejected bool) *fakeRow {
 		"Long description.", applyURL, (*time.Time)(nil), time.Now(),
 		"", "", (*time.Time)(nil), "", "", "Remotive feed", "remotive",
 		"match-1", rejected, 82, empty, empty, empty, empty, empty, empty, []byte(`{}`),
+		"fresh-systems-backend", (*time.Time)(nil), "", "https://job-boards.greenhouse.io/fresh/jobs/1",
 	}}
 }
 
@@ -57,27 +58,31 @@ func TestScanJobMatchWithholdsApplyURLForRejectedMatches(t *testing.T) {
 	if accepted.Job.ApplyURL != "https://example.test/apply" {
 		t.Fatalf("an accepted match must keep its apply URL, got %q", accepted.Job.ApplyURL)
 	}
+	if accepted.Job.EmployerURL != "https://job-boards.greenhouse.io/fresh/jobs/1" {
+		t.Fatalf("an accepted match must keep its employer URL, got %q", accepted.Job.EmployerURL)
+	}
 
 	rejected, err := scanJobMatch(jobMatchRow("https://example.test/apply", true))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if rejected.Job.ApplyURL != "" {
-		t.Fatalf("a rejected match must not carry an apply URL, got %q", rejected.Job.ApplyURL)
+	if rejected.Job.ApplyURL != "" || rejected.Job.EmployerURL != "" {
+		t.Fatalf("a rejected match must not carry an apply link, got %q and %q", rejected.Job.ApplyURL, rejected.Job.EmployerURL)
 	}
 	if !rejected.Match.Rejected || rejected.Job.ID != "job-1" {
 		t.Fatalf("the rest of the row must survive: %+v", rejected.Job)
 	}
 }
 
-// applicationRow builds the 22 values scanApplication reads, in column order,
-// ending with the joined rejected flag.
+// applicationRow builds the 24 values scanApplication reads, in column order:
+// the joined rejected flag, then the employer URL.
 func applicationRow(applyURL string, rejected bool) *fakeRow {
 	return &fakeRow{values: []any{
 		"app-1", "job-1", "ready", "keep me", time.Now(), time.Now(),
 		"job-1", "Senior Backend Engineer", "Fresh Systems GmbH", "fresh systems", "fresh.example",
 		"Bucharest", "remote", 95000.0, 110000.0, "EUR", "full-time", "Software",
 		"Long description.", applyURL, (*time.Time)(nil), time.Now(), rejected,
+		"https://job-boards.greenhouse.io/fresh/jobs/1",
 	}}
 }
 
@@ -97,8 +102,8 @@ func TestScanApplicationWithholdsApplyURLWhenBlocked(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocked.Job == nil || blocked.Job.ApplyURL != "" {
-		t.Fatalf("a blocked application must not carry an apply URL, got %+v", blocked.Job)
+	if blocked.Job == nil || blocked.Job.ApplyURL != "" || blocked.Job.EmployerURL != "" {
+		t.Fatalf("a blocked application must not carry an apply link, got %+v", blocked.Job)
 	}
 }
 
@@ -142,7 +147,7 @@ func TestJobRefColumnTellsIdsFromSlugs(t *testing.T) {
 func TestScanJobMatchWithholdsTheSlugForRejectedMatches(t *testing.T) {
 	for rejected, want := range map[bool]string{false: "example-a-job", true: ""} {
 		row := jobMatchRow("https://example.test/a-job", rejected)
-		row.values = append(row.values, "example-a-job")
+		row.values[33] = "example-a-job"
 		got, err := scanJobMatch(row)
 		if err != nil {
 			t.Fatal(err)

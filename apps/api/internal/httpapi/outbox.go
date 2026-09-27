@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -48,17 +49,32 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	// A form that reads proves it is open; the ATS saying the posting is gone
 	// closes it. Only when there is no form to read is the link itself
 	// checked, since postings close between the background checks.
-	form, formErr := s.ATS.Fetch(ctx, job.Job.ApplyURL)
-	closedNow, reason := false, ""
-	switch {
-	case errors.Is(formErr, ats.ErrNotFound):
-		closedNow, reason = true, discovery.ReasonBoard
-		if err := s.Store.RecordLinkCheck(ctx, job.Job.ID, true, reason); err != nil {
-			internal(w, err)
-			return
+	//
+	// A posting found through an aggregator is read at the employer. While
+	// that is not known yet, the link is checked first, which also asks the
+	// aggregator where the posting applies.
+	link := store.LinkToCheck{ID: job.Job.ID, ApplyURL: job.Job.ApplyURL, SourceProvider: job.Job.SourceProvider, EmployerURL: job.Job.EmployerURL}
+	canCheck := link.ApplyURL != "" && s.Discovery != nil
+	checked, closedNow, reason := false, false, ""
+	if canCheck && link.EmployerURL == "" && discovery.RedirectsToEmployer(link.SourceProvider) {
+		result := s.Discovery.CheckJob(ctx, link, 8*time.Second)
+		checked, closedNow, reason, link.EmployerURL = true, result.Closed, result.Reason, result.EmployerURL
+	}
+	var form ats.Form
+	var formErr error
+	if !closedNow {
+		form, formErr = s.ATS.Fetch(ctx, cmp.Or(link.EmployerURL, link.ApplyURL))
+		switch {
+		case errors.Is(formErr, ats.ErrNotFound):
+			closedNow, reason = true, discovery.ReasonBoard
+			if err := s.Store.RecordLinkCheck(ctx, job.Job.ID, true, reason, ""); err != nil {
+				internal(w, err)
+				return
+			}
+		case errors.Is(formErr, ats.ErrUnsupported) && canCheck && !checked:
+			result := s.Discovery.CheckJob(ctx, link, 8*time.Second)
+			closedNow, reason = result.Closed, result.Reason
 		}
-	case errors.Is(formErr, ats.ErrUnsupported) && job.Job.ApplyURL != "" && s.Discovery != nil:
-		closedNow, reason = s.Discovery.CheckJob(ctx, job.Job.ID, job.Job.ApplyURL, 8*time.Second)
 	}
 	if closedNow {
 		problem(w, 409, closedMessage(reason))
