@@ -754,7 +754,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 23 KB for 31 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
+The catalog an agent host downloads at the start of every session is about 25 KB for 32 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
 
 ### Tools
 
@@ -763,6 +763,7 @@ The catalog an agent host downloads at the start of every session is about 23 KB
 | `get_profile` | read | Candidate facts the agent may use when writing |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
+| `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |

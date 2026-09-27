@@ -191,6 +191,7 @@ func TestEndToEnd(t *testing.T) {
 		"approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
+		"report_job_unavailable": true,
 	}
 	for _, tool := range tools.Tools {
 		if !want[tool.Name] {
@@ -570,6 +571,18 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if strings.Contains(text, "Build reliable backend services with Go and PostgreSQL.") {
 		t.Fatal("import_job must not echo the description back")
+	}
+
+	// Reported gone: its example.test link cannot confirm it, and nobody else
+	// has reported it, so it leaves this user's lists and stays open.
+	importedID, _ := job["id"].(string)
+	out, text, isErr = call("report_job_unavailable", map[string]any{"job_id": importedID})
+	if isErr || out["closed"] != false || out["hidden_for_you"] != true {
+		t.Fatalf("one unconfirmed report should hide the job from this user only: %s", text)
+	}
+	out, text, isErr = call("list_jobs", map[string]any{"state": "all", "limit": 100})
+	if isErr || contains(ids(out, "jobs"), importedID) {
+		t.Fatalf("a reported job should leave the reporter's list: %s", text)
 	}
 
 	// Importing a job at an excluded employer still succeeds, but rejected.

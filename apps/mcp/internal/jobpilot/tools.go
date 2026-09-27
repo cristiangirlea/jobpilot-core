@@ -186,6 +186,26 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	})
 
 	addTool(s, &mcp.Tool{
+		Name:  "report_job_unavailable",
+		Title: "Report a posting as no longer available",
+		Description: "Report a posting as no longer available, such as a page that says the role is filled but still loads, which JobPilot's daily link check cannot see. " +
+			"Use it only when the user tells you the posting is gone or filled, never on your own inference: a report can close the job for other users. " +
+			"JobPilot checks the link at once, and a definite answer closes the job for everyone. Otherwise the job leaves this user's lists and closes for everyone when a second person reports it. " +
+			"Show the user the message in the result. Reporting twice counts once. Taking a report back is done in the web app, on the job's page.",
+		// It can change what other users see, and it reads the posting's link.
+		Annotations: &mcp.ToolAnnotations{Title: "Report a posting as no longer available", DestructiveHint: ptr(false), IdempotentHint: true, OpenWorldHint: ptr(true)},
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, JobReport, error) {
+		if strings.TrimSpace(in.JobID) == "" {
+			return nil, JobReport{}, errors.New("job_id is required")
+		}
+		report, err := c.ReportJob(ctx, in.JobID)
+		if err != nil {
+			return nil, JobReport{}, toolError(err)
+		}
+		return nil, report, nil
+	})
+
+	addTool(s, &mcp.Tool{
 		Name:        "get_job",
 		Title:       "Get job and match detail",
 		Description: "Return one job with its full description and the user's match evaluation: score, per-component breakdown, reasons, warnings, red flags, matched and missing skills, and any rejection reasons. The breakdown gives points per component: title_match, skill_match, seniority_match, location_remote_match, salary_match, domain_industry_match, freshness. The apply_url is for the user to open themselves and is empty for rejected jobs.",

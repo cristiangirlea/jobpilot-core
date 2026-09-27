@@ -342,6 +342,13 @@ func (c *Client) Job(ctx context.Context, id string) (JobWithMatch, error) {
 	return out, c.get(ctx, "/api/jobs/"+url.PathEscape(id), &out)
 }
 
+// ReportJob reports a posting as no longer available. The API checks the
+// link at once, so this can take as long as one link check.
+func (c *Client) ReportJob(ctx context.Context, id string) (JobReport, error) {
+	var out JobReport
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(id)+"/report", nil, &out, c.timeout)
+}
+
 func (c *Client) Generate(ctx context.Context, jobID string) (Documents, error) {
 	var out Documents
 	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/generate", nil, &out, c.timeout)

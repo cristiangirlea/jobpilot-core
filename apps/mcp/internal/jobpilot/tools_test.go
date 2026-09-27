@@ -38,6 +38,8 @@ type fakeAPI struct {
 	// the query, answers with one job, and reports a total of 42.
 	pages      atomic.Bool
 	jobQueries []string
+	// reports records which jobs were reported as no longer available.
+	reports []string
 }
 
 func (f *fakeAPI) lastJobQuery() string {
@@ -95,6 +97,17 @@ func (f *fakeAPI) handler() http.Handler {
 		if !paged(w, r) {
 			send(w, 200, "["+acceptedJob+","+weakJob+","+closedJob+"]")
 		}
+	})
+	m.HandleFunc("POST /api/jobs/{id}/report", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		if id != "job-a" {
+			send(w, 404, `{"error":"Job not found."}`)
+			return
+		}
+		f.mu.Lock()
+		f.reports = append(f.reports, id)
+		f.mu.Unlock()
+		send(w, 200, `{"closed":false,"hidden_for_you":true,"message":"Hidden from your lists. Its link does not confirm it, so it stays open for others until the link does or someone else reports it too."}`)
 	})
 	m.HandleFunc("GET /api/jobs/{id}", func(w http.ResponseWriter, r *http.Request) {
 		switch r.PathValue("id") {
@@ -615,5 +628,34 @@ func TestToolErrorHintsReadAsSentences(t *testing.T) {
 		if !errors.As(err, &apiErr) || apiErr.Status != c.status {
 			t.Errorf("%d: the API error must stay reachable for callers", c.status)
 		}
+	}
+}
+
+// A posting that says the role is filled but still loads is invisible to
+// the link check, so the user can say so through the agent too. The tool
+// passes the API's answer through: whether the job closed for everyone, or
+// is hidden from this user until the link or a second person confirms it.
+func TestReportJobUnavailable(t *testing.T) {
+	cs, fake := session(t)
+	res, text := call(t, cs, "report_job_unavailable", map[string]any{"job_id": "job-a"})
+	if res.IsError {
+		t.Fatal(text)
+	}
+	got := structured[JobReport](t, res)
+	if got.Closed || !got.HiddenForYou || got.Message == "" {
+		t.Fatalf("the API's answer should come back as given: %s", text)
+	}
+	fake.mu.Lock()
+	reports := append([]string(nil), fake.reports...)
+	fake.mu.Unlock()
+	if len(reports) != 1 || reports[0] != "job-a" {
+		t.Fatalf("expected one report of job-a, got %v", reports)
+	}
+
+	if res, text = call(t, cs, "report_job_unavailable", map[string]any{"job_id": " "}); !res.IsError || !strings.Contains(text, "job_id") {
+		t.Fatalf("a blank job_id should be refused before any request: %s", text)
+	}
+	if res, text = call(t, cs, "report_job_unavailable", map[string]any{"job_id": "nope"}); !res.IsError || !strings.Contains(text, "not found") {
+		t.Fatalf("an unknown job should say so: %s", text)
 	}
 }
