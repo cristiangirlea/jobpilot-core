@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -66,22 +67,21 @@ type cvDecision struct {
 // kind of role, and only then build a new one - which waits for approval rather
 // than being sent.
 func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMatch, profile models.Profile) (cvDecision, error) {
-	base, baseErr := s.Store.ApprovedBaseCV(ctx, uid)
+	// The uploaded CV supplies the facts a tailored CV is built from, approved
+	// or not; only an approved one may also be sent as it is.
+	base, baseErr := s.Store.LatestBaseCV(ctx, uid)
 	if baseErr != nil && !errors.Is(baseErr, pgx.ErrNoRows) {
 		return cvDecision{}, baseErr
 	}
 	hasBase := baseErr == nil
-
 	baseText := ""
 	if hasBase {
-		if full, textErr := s.Store.CV(ctx, uid, base.ID); textErr == nil {
-			baseText = full.ExtractedText
-		}
+		baseText = base.ExtractedText
 	}
 	alignment := cv.Alignment(profile, baseText, job.Job)
 
-	// 1. The base CV already speaks to this posting.
-	if hasBase && alignment >= cv.AlignmentThreshold {
+	// 1. The approved base CV already speaks to this posting.
+	if hasBase && base.Approved && alignment >= cv.AlignmentThreshold {
 		return cvDecision{
 			Decision:  decisionBase,
 			Reason:    fmt.Sprintf("Your approved CV already covers %.0f%% of this posting's technologies.", alignment*100),
@@ -125,13 +125,15 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 	}
 
 	document := models.CVDocument{
-		Kind:         "tailored",
-		Label:        strings.TrimSpace(job.Job.Title + " — " + job.Job.Company),
-		Filename:     tailoredFilename(profile.Name, job.Job.Title),
-		Format:       cv.FormatPDF,
-		ContentType:  "application/pdf",
-		SizeBytes:    len(data),
-		Parsed:       toMap(cv.Parsed{}),
+		Kind:        "tailored",
+		Label:       strings.TrimSpace(job.Job.Title + " — " + job.Job.Company),
+		Filename:    tailoredFilename(profile.Name, job.Job.Title),
+		Format:      cv.FormatPDF,
+		ContentType: "application/pdf",
+		SizeBytes:   len(data),
+		// The structure is kept beside the file, so the CV can be shown as it
+		// will read, section by section, and compared with what it came from.
+		Parsed:       map[string]any{"tailored": tailoredMap(tailored)},
 		RoleFamily:   family,
 		Technologies: posting,
 		Fingerprint:  fingerprint,
@@ -149,9 +151,14 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 	if err != nil {
 		return cvDecision{}, err
 	}
-	reason := fmt.Sprintf("Your CV covers only %.0f%% of this posting's technologies, so a tailored version was prepared. Approve it to send it, and it will be reused for similar roles.", alignment*100)
-	if !hasBase {
-		reason = "No approved base CV was found, so a tailored version was prepared from your profile. Approve it to send it."
+	var reason string
+	switch {
+	case !hasBase:
+		reason = "No CV has been uploaded, so a tailored version was prepared from your profile. Approve it to send it."
+	case !base.Approved:
+		reason = "A tailored version was prepared from your uploaded CV and your profile. Approve it to send it, and it will be reused for similar roles."
+	default:
+		reason = fmt.Sprintf("Your CV covers only %.0f%% of this posting's technologies, so a tailored version was prepared. Approve it to send it, and it will be reused for similar roles.", alignment*100)
 	}
 	return cvDecision{
 		Decision: decisionGenerated, Reason: reason, Alignment: alignment,
@@ -269,4 +276,15 @@ var asciiFold = map[rune]string{
 	'Ç': "C", 'Ć': "C", 'Č': "C", 'Ñ': "N", 'Ń': "N", 'Ř': "R",
 	'Ś': "S", 'Š': "S", 'Ș': "S", 'Ş': "S", 'Ť': "T", 'Ț': "T", 'Ţ': "T",
 	'Ý': "Y", 'Ź': "Z", 'Ż': "Z", 'Ž': "Z", 'Ł': "L", 'Đ': "D",
+}
+
+// tailoredMap turns a tailored CV into the JSON shape stored with its document.
+func tailoredMap(tailored cv.Tailored) map[string]any {
+	raw, err := json.Marshal(tailored)
+	if err != nil {
+		return map[string]any{}
+	}
+	out := map[string]any{}
+	_ = json.Unmarshal(raw, &out)
+	return out
 }

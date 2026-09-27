@@ -107,11 +107,17 @@ func RenderPDF(tailored Tailored) ([]byte, error) {
 		}
 	}
 
-	if len(tailored.Education) > 0 {
-		if err := p.section("EDUCATION"); err != nil {
+	for _, list := range []struct {
+		title string
+		lines []string
+	}{{"EDUCATION", tailored.Education}, {"CERTIFICATIONS", tailored.Certifications}, {"LANGUAGES", tailored.Languages}} {
+		if len(list.lines) == 0 {
+			continue
+		}
+		if err := p.section(list.title); err != nil {
 			return nil, err
 		}
-		for _, line := range tailored.Education {
+		for _, line := range list.lines {
 			if err := p.block(fontRegularName, bodySize, rgb{0, 0, 0}, line); err != nil {
 				return nil, err
 			}
@@ -231,6 +237,11 @@ func (p *painter) role(role TailoredRole) error {
 	}
 	p.doc.SetY(y + (bodySize+0.5)*lineGap)
 
+	if context := strings.TrimSpace(role.Context); context != "" {
+		if err := p.block(fontRegularName, bodySize-0.5, rgb{70, 70, 70}, context); err != nil {
+			return err
+		}
+	}
 	for _, bullet := range role.Bullets {
 		if err := p.bullet(bullet); err != nil {
 			return err
