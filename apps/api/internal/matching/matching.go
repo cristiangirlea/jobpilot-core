@@ -12,9 +12,9 @@ import (
 )
 
 // splitWords returns the runs of [a-z0-9+#.] in s, the way the regexp of that
-// class did, without leading or trailing dots. Every evaluation tokenises the
-// whole job description, and the regexp engine made that most of what
-// re-scoring a user's matches cost.
+// class did, without trailing dots. Every evaluation tokenises the whole job
+// description, and the regexp engine made that most of what re-scoring a
+// user's matches cost.
 // Callers lowercase first; bytes of multi-byte UTF-8 runes are all 0x80 or
 // above, so they separate words exactly as the regexp's character class did.
 func splitWords(s string) []string {
@@ -39,12 +39,12 @@ func splitWords(s string) []string {
 	return out
 }
 
-// appendWord keeps dots inside a word, as in "node.js" or "asp.net", and drops
-// them at its ends, where they are punctuation: "aws." at the end of a
-// sentence is the word "aws". Both sides of every comparison are split here,
-// so a skill written ".NET" still matches ".NET" in a posting.
+// appendWord drops the dots a word ends with, which are a sentence's full stop
+// or an ellipsis: "aws." at the end of a sentence is the word "aws". Dots
+// inside a word stay, as in "node.js", and so do leading ones, because ".NET"
+// is a name and "net" is a word postings use for pay.
 func appendWord(out []string, word string) []string {
-	if word = strings.Trim(word, "."); word != "" {
+	if word = strings.TrimRight(word, "."); word != "" {
 		out = append(out, word)
 	}
 	return out

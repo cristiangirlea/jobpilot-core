@@ -76,8 +76,8 @@ func TestSeniorityUsesBestSelectedLevel(t *testing.T) {
 
 // splitWords replaced a regexp in the hot path of every evaluation, so it has
 // to tokenise as the pattern it replaced did, with one deliberate difference:
-// dots at either end of a word are punctuation and are dropped, so that a
-// word ending a sentence is still that word.
+// dots at the end of a word are punctuation and are dropped, so that a word
+// ending a sentence is still that word.
 func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
 	pattern := regexp.MustCompile(`[a-z0-9+#.]+`)
 	for _, text := range []string{
@@ -89,7 +89,7 @@ func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
 		lower := strings.ToLower(text)
 		var want []string
 		for _, word := range pattern.FindAllString(lower, -1) {
-			if word = strings.Trim(word, "."); word != "" {
+			if word = strings.TrimRight(word, "."); word != "" {
 				want = append(want, word)
 			}
 		}
@@ -166,7 +166,7 @@ func TestScoreSkillsOnlyCountSkillsTheJobMentions(t *testing.T) {
 // The word pattern keeps dots so that "node.js" survives, which also glued a
 // sentence's full stop onto its last word: "Build on AWS." never matched the
 // skill AWS, and "Maintain a PHP app." dodged an excluded-technology rule only
-// when PHP ended the sentence. Dots now count only inside a word.
+// when PHP ended the sentence. Dots that end a word are now dropped.
 func TestSentenceEndingWordsAreStillWords(t *testing.T) {
 	got := strings.Join(splitWords(strings.ToLower("Build on AWS. We use Node.js, Next.js and ASP.NET... Ship it.")), " ")
 	want := "build on aws we use node.js next.js and asp.net ship it"
@@ -177,5 +177,15 @@ func TestSentenceEndingWordsAreStillWords(t *testing.T) {
 	e := Evaluate(sampleProfile(), nil, &f, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "You will maintain our legacy PHP."}, time.Now())
 	if !e.Rejected {
 		t.Fatal("an excluded technology at the end of a sentence must still reject")
+	}
+
+	// A leading dot is part of the name: ".NET" is not the word "net", which
+	// postings use for pay ("net salary").
+	dotnet := models.FilterPreset{ExcludedTechnologies: []string{".NET"}}
+	if e := Evaluate(sampleProfile(), nil, &dotnet, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Go services. Competitive net salary."}, time.Now()); e.Rejected {
+		t.Fatalf("excluding .NET must not reject a job that only mentions net pay, got %v", e.RejectionReasons)
+	}
+	if e := Evaluate(sampleProfile(), nil, &dotnet, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Our services run on .NET."}, time.Now()); !e.Rejected {
+		t.Fatal("excluding .NET must reject a job built on .NET, even at the end of a sentence")
 	}
 }
