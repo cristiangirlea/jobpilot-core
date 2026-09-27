@@ -683,7 +683,8 @@ func normalizeDiscoverySource(x *models.DiscoverySource) string {
 	x.Identifier = strings.TrimSpace(x.Identifier)
 	x.SearchQuery = strings.TrimSpace(x.SearchQuery)
 	x.ExcludedSearchQuery = strings.TrimSpace(x.ExcludedSearchQuery)
-	if x.Provider != "arbeitnow" {
+	// Remotive searches on its own side and has nothing to exclude with.
+	if x.Provider == "remotive" {
 		x.ExcludedSearchQuery = ""
 	}
 	allowed := map[string]bool{"remotive": true, "greenhouse": true, "lever": true, "ashby": true, "smartrecruiters": true, "arbeitnow": true}

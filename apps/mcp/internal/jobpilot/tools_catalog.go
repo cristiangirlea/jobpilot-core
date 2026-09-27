@@ -31,8 +31,8 @@ type sourceInput struct {
 	Provider            string `json:"provider" jsonschema:"remotive, greenhouse, lever, ashby, smartrecruiters, or arbeitnow"`
 	Name                string `json:"name" jsonschema:"A label for this source"`
 	Identifier          string `json:"identifier,omitempty" jsonschema:"Board token or company slug; required for greenhouse, lever, ashby and smartrecruiters"`
-	SearchQuery         string `json:"search_query,omitempty" jsonschema:"Positive OR terms; required for remotive"`
-	ExcludedSearchQuery string `json:"excluded_search_query,omitempty" jsonschema:"Negative NOT terms; arbeitnow only, ignored elsewhere"`
+	SearchQuery         string `json:"search_query,omitempty" jsonschema:"Positive OR terms; required for remotive. On an employer board, only titles containing one are kept"`
+	ExcludedSearchQuery string `json:"excluded_search_query,omitempty" jsonschema:"Negative NOT terms: arbeitnow checks whole postings, employer boards check titles; ignored for remotive"`
 	Active              *bool  `json:"active,omitempty" jsonschema:"Whether the scheduler runs this source; defaults to true"`
 }
 
@@ -186,9 +186,9 @@ func normalizeSource(in sourceInput) (DiscoverySource, error) {
 	if out.Provider != "remotive" && out.Provider != "arbeitnow" && out.Identifier == "" {
 		return out, errors.New("employer-direct sources require a board or company identifier")
 	}
-	// The API clears this for every other provider; do the same so the
-	// stored source matches what was asked for.
-	if out.Provider != "arbeitnow" {
+	// The API clears this for remotive, which searches on its own side; do
+	// the same so the stored source matches what was asked for.
+	if out.Provider == "remotive" {
 		out.ExcludedSearchQuery = ""
 	}
 	return out, nil

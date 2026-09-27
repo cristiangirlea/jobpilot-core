@@ -227,7 +227,9 @@ func unsupportedReason(provider string) string {
 	if provider != "" {
 		return fmt.Sprintf("This employer uses %s, whose application form is not published, so this one has to be submitted by hand for now.", provider)
 	}
-	return "This apply link is not an application form this software can read, so it has to be submitted by hand."
+	// Aggregator pages end here, and their feeds do not say where the
+	// employer's own form is. The fix is a source whose links are forms.
+	return "This apply link is not an application form this software can read, so it has to be submitted by hand. If the employer has a Greenhouse, Lever or Ashby board, add it as a discovery source: its postings link straight to forms this software can read."
 }
 
 func formToMap(form ats.Form) map[string]any {

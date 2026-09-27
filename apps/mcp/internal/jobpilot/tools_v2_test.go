@@ -330,7 +330,15 @@ func TestSourceNormalizationKeepsNotTermsOnlyForArbeitnow(t *testing.T) {
 		t.Fatal(err)
 	}
 	if remotive.ExcludedSearchQuery != "" {
-		t.Fatalf("every other provider ignores NOT terms, so they must not be sent, got %q", remotive.ExcludedSearchQuery)
+		t.Fatalf("remotive searches on its own side and ignores NOT terms, so they must not be sent, got %q", remotive.ExcludedSearchQuery)
+	}
+	// An employer board lists every open role; its NOT terms leave titles out.
+	board, err := normalizeSource(sourceInput{Provider: "greenhouse", Name: "Grafana Labs", Identifier: "grafanalabs", SearchQuery: "engineer", ExcludedSearchQuery: "Sales"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if board.ExcludedSearchQuery != "Sales" {
+		t.Fatalf("an employer board must keep its NOT terms, got %q", board.ExcludedSearchQuery)
 	}
 	if !remotive.Active {
 		t.Fatal("active must default to true when the caller omits it")

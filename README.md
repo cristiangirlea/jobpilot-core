@@ -337,12 +337,12 @@ Discovery is the primary ingestion method. Manual import exists for sources not 
 |---|---|---|
 | Remotive | Optional focused search query | Public remote-jobs API; up to 100 jobs per request |
 | Arbeitnow | Optional OR query and NOT query | Public Europe-focused feed; currently processes the first page and filters title, description, and tags locally |
-| Greenhouse | Employer board token | Public board API; token is the part after `job-boards.greenhouse.io/` or `boards.greenhouse.io/` |
-| Lever | Employer site slug | Public postings API for one employer |
-| Ashby | Employer board name | Public posting API for one employer |
-| SmartRecruiters | Employer/company identifier | Public company postings API; currently capped at 25 plus detail requests |
+| Greenhouse | Employer board token; optional title OR and NOT terms | Public board API; token is the part after `job-boards.greenhouse.io/` or `boards.greenhouse.io/` |
+| Lever | Employer site slug; optional title OR and NOT terms | Public postings API for one employer |
+| Ashby | Employer board name; optional title OR and NOT terms | Public posting API for one employer |
+| SmartRecruiters | Employer/company identifier; optional title OR and NOT terms | Public company postings API; currently capped at 25 plus detail requests |
 
-Employer-direct sources tend to have cleaner provenance and less aggregation churn. Source validation fetches a small sample before saving so a board token or company identifier can be checked. The Discovery page also exposes curated starter boards and can extract a supported board identifier from a pasted careers or posting URL.
+Employer-direct sources tend to have cleaner provenance and less aggregation churn, and their postings link straight to application forms JobPilot can read, which aggregator pages do not. A board lists every open role, so an employer-direct source can also carry title terms: only titles containing one of its OR terms are taken, and none containing one of its NOT terms. Unlisted jobs are still judged against the whole board. Source validation fetches a small sample before saving so a board token or company identifier can be checked, and counts only the titles the terms keep. The Discovery page also exposes curated starter boards and can extract a supported board identifier from a pasted careers or posting URL.
 
 There is no generic HTML crawler. New providers should be implemented as explicit adapters in `apps/api/internal/discovery/fetcher.go`, use documented/public endpoints, have bounded timeouts and result counts, and include tests.
 

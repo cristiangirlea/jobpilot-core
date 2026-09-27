@@ -72,3 +72,12 @@ func TestHealthReportsTheContract(t *testing.T) {
 		t.Fatalf("unexpected health body: %s", w.Body.String())
 	}
 }
+
+// Found in early use: every match linked to an aggregator page, so
+// no form could be read, and the blocker only said to apply by hand. It now
+// says what makes forms readable: the employer's own board as a source.
+func TestUnreadableLinkPointsToTheEmployerBoard(t *testing.T) {
+	if reason := unsupportedReason(""); !strings.Contains(reason, "discovery source") || !strings.Contains(reason, "Greenhouse") {
+		t.Fatalf("the blocker should say how to get readable forms: %s", reason)
+	}
+}
