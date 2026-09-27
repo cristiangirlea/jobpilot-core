@@ -69,10 +69,40 @@ type Client struct {
 	timeout  time.Duration
 	maxBytes int64
 
+	// configErr is set when the server started without usable settings.
+	// Every request then fails with it instead of reaching the network.
+	configErr *ConfigError
+
 	mu       sync.Mutex
 	token    string
 	contract int
 }
+
+// ConfigError explains why the server cannot call the API and what the user
+// can do about it. It travels back as an ordinary tool error, which is the
+// only channel a stdio server has that the model and the user both see.
+type ConfigError struct{ Reason error }
+
+func (e *ConfigError) Error() string {
+	return fmt.Sprintf("the JobPilot MCP server is not configured (%v). "+
+		"To fix it, mint an agent token in the JobPilot checkout with `pwsh -File scripts/agent-token.ps1 -Write`, "+
+		"register it with the claude mcp add command the script prints (or set JOBPILOT_TOKEN, and JOBPILOT_API_URL if the API is not on localhost:8080), "+
+		"then restart the session so the server starts with it", e.Reason)
+}
+
+func (e *ConfigError) Unwrap() error { return e.Reason }
+
+// Unconfigured returns a client that answers every call with the reason it
+// cannot work. The server starts with it rather than exiting, because a stdio
+// server that exits before the handshake shows the host nothing but a closed
+// connection, and its stderr is somewhere the user rarely looks.
+func Unconfigured(reason error) *Client {
+	return &Client{http: &http.Client{}, timeout: defaultTimeout, maxBytes: maxResponseBytes,
+		contract: contractUnknown, configErr: &ConfigError{Reason: reason}}
+}
+
+// Configured reports whether the client can reach the API at all.
+func (c *Client) Configured() bool { return c.configErr == nil }
 
 // APIError is a non-2xx response with the API's own error message.
 type APIError struct {
@@ -178,6 +208,9 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any, tim
 }
 
 func (c *Client) send(ctx context.Context, method, path string, body, out any, token string, timeout time.Duration) error {
+	if c.configErr != nil {
+		return c.configErr
+	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var reader io.Reader

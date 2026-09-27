@@ -715,6 +715,8 @@ claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/
 
 The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Claude Code asks once per project before trusting a checked-in server.
 
+Prefer the built binary registered with `claude mcp add` for day-to-day use. The project config runs from whichever checkout the session is in, so a worktree on an older branch, or a session with no `JOBPILOT_TOKEN` in its environment, cannot start it. Either way the server now starts without credentials rather than exiting, and every tool answers with what is missing and how to fix it, instead of the host reporting only a closed connection.
+
 To mint an agent token without the web app, run the script below. It asks for your email and password in the terminal, never echoes or stores them, and prints the token once with the ready-made `claude mcp add` command:
 
 ```bash

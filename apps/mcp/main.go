@@ -48,19 +48,25 @@ func main() {
 		Password: os.Getenv("JOBPILOT_PASSWORD"),
 	})
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		usage()
-		os.Exit(2)
+		// Start anyway. Exiting here would show the host only a closed
+		// connection; starting lets every tool say what is wrong and how to
+		// fix it, where the user will actually see it.
+		logger.Warn("not configured; every tool will explain how to fix it", "error", err)
+		client = jobpilot.Unconfigured(err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	// A failed check is a warning, not an exit: the API may simply not be up
-	// yet, and every tool reports a clear error until it is.
-	checkCtx, cancelCheck := context.WithTimeout(ctx, 5*time.Second)
-	health, err := client.CheckContract(checkCtx)
-	cancelCheck()
 	contract := "unknown"
+	var health jobpilot.Health
+	if client.Configured() {
+		// A failed check is a warning, not an exit: the API may simply not
+		// be up yet, and every tool reports a clear error until it is.
+		checkCtx, cancelCheck := context.WithTimeout(ctx, 5*time.Second)
+		health, err = client.CheckContract(checkCtx)
+		cancelCheck()
+	}
 	switch {
+	case !client.Configured():
 	case err != nil:
 		logger.Warn("API not reachable at startup; tools will fail until it is", "api", client.BaseURL(), "error", err)
 	case client.PredatesContract():
