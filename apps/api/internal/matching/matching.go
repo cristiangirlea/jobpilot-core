@@ -9,6 +9,7 @@ import (
 
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
+	"jobpilot/core/api/internal/technology"
 )
 
 // splitWords returns the runs of [a-z0-9+#.] in s, the way the regexp of that
@@ -59,7 +60,7 @@ func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter 
 
 	title := scoreTitle(profile.DesiredTitles, job.Title)
 	e.Breakdown["title_match"] = title
-	skill, matched, missing := scoreSkills(profile.Skills, requiredSkills(filter), job.Description)
+	skill, matched, missing := scoreSkills(profile.Skills, requiredSkills(filter), job.Title, job.Description)
 	e.Breakdown["skill_match"], e.MatchedSkills, e.MissingSkills = skill, matched, missing
 	wantedSeniorities := profile.Seniorities
 	if len(wantedSeniorities) == 0 && profile.Seniority != "" {
@@ -92,7 +93,9 @@ func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter 
 		e.Reasons = append(e.Reasons, "The role has limited explicit overlap with the profile.")
 	}
 	if len(e.MissingSkills) > 0 {
-		e.RedFlags = append(e.RedFlags, "Required or emphasized skills are missing from the profile: "+strings.Join(e.MissingSkills, ", "))
+		// Missing skills are whatever the job mentions that the profile lacks,
+		// which a job may only mention in passing, so this says no more.
+		e.RedFlags = append(e.RedFlags, "The job mentions skills your profile does not list: "+strings.Join(e.MissingSkills, ", "))
 	}
 	if job.SalaryMin == 0 && job.SalaryMax == 0 {
 		e.RedFlags = append(e.RedFlags, "No salary or rate was provided.")
@@ -228,45 +231,66 @@ func scoreTitle(desired []string, title string) int {
 	return int(math.Round(25 * best))
 }
 
-func scoreSkills(profile []models.Skill, required []string, description string) (int, []string, []string) {
-	descWords := words(strings.ToLower(description))
-	known := map[string]string{}
+// scoreSkills scores, out of 30, how much of what a job asks for the profile
+// holds. What it asks for is the vocabulary technologies it mentions, each
+// weighted by how often, with any skill the filter lists or the profile holds
+// that it names; ways of working such as agile are not counted. Only skills
+// the profile or filter named used to count, so a technology the candidate
+// lacks was never seen and nearly every job scored the full 30. A job that
+// names nothing to go on scores a neutral 15. Matched skills keep the
+// profile's own spelling, since generated text quotes them.
+func scoreSkills(profile []models.Skill, required []string, title, description string) (int, []string, []string) {
+	jobWords := words(strings.ToLower(title + " " + description))
+	held := map[string]string{}
 	for _, s := range profile {
-		known[strings.ToLower(strings.TrimSpace(s.Name))] = s.Name
-	}
-	// The filter's skills focus the score, but only where the job mentions
-	// them. Counting a listed skill the job never asks for gave every job the
-	// same skill score and let generated text call it relevant. When the job
-	// mentions none of the listed skills, score on the profile's skills it
-	// does mention, as if there were no list.
-	var relevant []string
-	for _, r := range required {
-		if phraseInWords(strings.ToLower(strings.TrimSpace(r)), descWords) {
-			relevant = append(relevant, r)
+		if name := strings.TrimSpace(s.Name); name != "" {
+			held[technology.Canonical(name)] = name
 		}
 	}
-	if len(relevant) == 0 {
-		for key, original := range known {
-			if phraseInWords(key, descWords) {
-				relevant = append(relevant, original)
-			}
+	type ask struct {
+		name   string
+		weight int
+	}
+	asked := map[string]ask{}
+	for term, mentions := range technology.Mentions(title, description) {
+		if !technology.IsPractice(term) {
+			asked[term] = ask{technology.Name(term), mentions}
 		}
 	}
-	if len(relevant) == 0 {
+	// Skills outside the vocabulary count where the job names them: the
+	// filter's, which say what matters to the user, and the profile's own.
+	named := append([]string(nil), required...)
+	for _, name := range held {
+		named = append(named, name)
+	}
+	for _, name := range named {
+		name = strings.TrimSpace(name)
+		key := technology.Canonical(name)
+		if _, ok := asked[key]; ok || name == "" || technology.IsPractice(key) || !phraseInWords(strings.ToLower(name), jobWords) {
+			continue
+		}
+		asked[key] = ask{name, 1}
+	}
+	if len(asked) == 0 {
 		return 15, []string{}, []string{}
 	}
 	// Empty rather than nil: a nil slice is stored and served as JSON null.
 	matched, missing := []string{}, []string{}
-	for _, r := range relevant {
-		if _, ok := known[strings.ToLower(strings.TrimSpace(r))]; ok {
-			matched = append(matched, r)
+	heldWeight, totalWeight := 0, 0
+	for key, a := range asked {
+		totalWeight += a.weight
+		if own, ok := held[key]; ok {
+			heldWeight += a.weight
+			matched = append(matched, own)
+		} else if a.name != "" {
+			missing = append(missing, a.name)
 		} else {
-			missing = append(missing, r)
+			missing = append(missing, key)
 		}
 	}
 	sort.Strings(matched)
 	sort.Strings(missing)
-	return int(math.Round(30 * float64(len(matched)) / float64(len(relevant)))), matched, missing
+	return int(math.Round(30 * float64(heldWeight) / float64(totalWeight))), matched, missing
 }
 
 var seniority = map[string]int{"intern": 0, "junior": 1, "entry": 1, "mid": 2, "middle": 2, "senior": 3, "lead": 4, "staff": 4, "principal": 5, "manager": 4, "director": 5}

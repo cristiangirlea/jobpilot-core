@@ -8,8 +8,9 @@ package answers
 
 import (
 	"regexp"
-	"sort"
 	"strings"
+
+	"jobpilot/core/api/internal/technology"
 )
 
 // Canonical question keys. A key groups differently-worded questions that want
@@ -179,94 +180,14 @@ func RoleFamily(title string) string {
 	return "general"
 }
 
-// knownTechnologies is the vocabulary used to build a comparable technology
-// signature. It is deliberately a closed list: free-text extraction would make
-// signatures unstable and break reuse.
-var knownTechnologies = []string{
-	"go", "golang", "java", "kotlin", "scala", "python", "ruby", "php", "rust", "c#", "c++", "elixir", "erlang", "clojure", "swift", "dart",
-	"javascript", "typescript", "node.js", "node", "deno", "bun",
-	"react", "next.js", "angular", "vue", "svelte", "remix", "redux", "tailwind",
-	"spring", "spring boot", "quarkus", "micronaut", ".net", "asp.net", "django", "flask", "fastapi", "rails", "laravel", "symfony", "express", "nestjs", "gin", "echo", "fiber",
-	"postgresql", "postgres", "mysql", "mariadb", "mongodb", "redis", "cassandra", "dynamodb", "elasticsearch", "opensearch", "clickhouse", "snowflake", "bigquery", "sqlite", "oracle", "sql server",
-	"kafka", "rabbitmq", "nats", "sqs", "pubsub", "grpc", "graphql", "rest", "openapi", "protobuf", "websocket",
-	"docker", "kubernetes", "helm", "terraform", "pulumi", "ansible", "argocd", "jenkins", "github actions", "gitlab ci", "circleci",
-	"aws", "azure", "gcp", "google cloud", "digitalocean", "cloudflare", "vercel", "heroku",
-	"prometheus", "grafana", "datadog", "opentelemetry", "sentry", "splunk",
-	"spark", "airflow", "dbt", "hadoop", "flink", "pandas", "pytorch", "tensorflow", "langchain",
-	"linux", "bash", "git", "microservices", "serverless", "ci/cd", "tdd", "agile", "scrum",
-}
-
-// technologyAliases collapse spellings that mean the same stack, so a signature
-// built from one posting matches a signature built from another.
-var technologyAliases = map[string]string{
-	"golang": "go", "node": "node.js", "postgres": "postgresql", "google cloud": "gcp",
-}
-
 // TechnologySignature extracts a sorted, de-duplicated technology list from job
 // text, capped at limit. Sorting is what makes it comparable across postings.
 func TechnologySignature(limit int, texts ...string) []string {
-	if limit <= 0 {
-		limit = 12
-	}
-	haystack := " " + spaces.ReplaceAllString(strings.ToLower(tagStripper.ReplaceAllString(strings.Join(texts, " "), " ")), " ") + " "
-	counts := map[string]int{}
-	for _, tech := range knownTechnologies {
-		mentions := countTerm(haystack, tech)
-		if mentions == 0 {
-			continue
-		}
-		if alias, ok := technologyAliases[tech]; ok {
-			tech = alias
-		}
-		counts[tech] += mentions
-	}
-	out := make([]string, 0, len(counts))
-	for tech := range counts {
-		out = append(out, tech)
-	}
-	// Rank by how often a technology is mentioned before truncating. Cutting an
-	// alphabetically sorted list instead would keep "angular" and drop
-	// "typescript" purely because of the letter it starts with.
-	sort.SliceStable(out, func(i, j int) bool {
-		if counts[out[i]] != counts[out[j]] {
-			return counts[out[i]] > counts[out[j]]
-		}
-		return out[i] < out[j]
-	})
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	// Sorted output keeps the stored signature stable regardless of how the
-	// source text happened to be ordered.
-	sort.Strings(out)
-	return out
+	return technology.Signature(limit, texts...)
 }
 
 // containsTerm reports whether a term appears as a whole word.
-func containsTerm(haystack, term string) bool { return countTerm(haystack, term) > 0 }
-
-// countTerm counts whole-word occurrences. The boundary check is what stops
-// "go" matching "going" and "rust" matching "trusted".
-func countTerm(haystack, term string) int {
-	count, offset := 0, 0
-	for offset < len(haystack) {
-		index := strings.Index(haystack[offset:], term)
-		if index < 0 {
-			return count
-		}
-		start := offset + index
-		end := start + len(term)
-		if start > 0 && !isWordByte(haystack[start-1]) && (end >= len(haystack) || !isWordByte(haystack[end])) {
-			count++
-		}
-		offset = start + 1
-	}
-	return count
-}
-
-func isWordByte(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '+' || b == '#'
-}
+func containsTerm(haystack, term string) bool { return technology.Count(haystack, term) > 0 }
 
 // Overlap scores how similar two technology signatures are, from 0 to 1. It is
 // the ranking signal for reusing an answer written for a "similar" role.

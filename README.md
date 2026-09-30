@@ -175,6 +175,7 @@ apps/
     internal/matching/matching.go      hard filters and weighted score
     internal/models/models.go          shared domain models
     internal/store/store.go            SQL persistence and isolation
+    internal/technology/               the technology vocabulary shared by scoring, answers and CVs
   web/
     app/                               Next.js App Router pages
     components/                        navigation, forms, chips, UI helpers
@@ -412,6 +413,8 @@ Each user receives an independent evaluation for a shared job.
 | **Total** | **100** |
 
 Multiple desired seniorities use the best matching seniority; the score is not diluted by averaging several choices.
+
+The skill match is the share of what a job asks for that the profile holds. What it asks for is every technology from JobPilot's vocabulary (`apps/api/internal/technology`) that the title or description mentions, weighted by how often it is mentioned, plus any skill the active filter lists or the profile holds that the job names. Ways of working such as agile, REST or TDD are not counted. A framework a posting names three times and the profile lacks costs more than a tool it names once. Matched skills keep the profile's own spelling; missing skills are what the job asks for that the profile lacks. A job that names nothing to go on scores a neutral 15.
 
 ### Evaluation output
 

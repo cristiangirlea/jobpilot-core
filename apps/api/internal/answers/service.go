@@ -11,6 +11,7 @@ import (
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
+	"jobpilot/core/api/internal/technology"
 )
 
 // Source values describe where a resolved answer came from. They are part of
@@ -386,10 +387,7 @@ func skillYears(question string, p models.Profile) (answer string, scoped bool) 
 		return "", true
 	}
 	for _, skill := range p.Skills {
-		name := strings.ToLower(strings.TrimSpace(skill.Name))
-		if alias, ok := technologyAliases[name]; ok {
-			name = alias
-		}
+		name := technology.Canonical(skill.Name)
 		if name == named[0] && skill.Years > 0 {
 			return strconv.FormatFloat(skill.Years, 'f', -1, 64), true
 		}
