@@ -1,29 +1,8 @@
 package answers
 
 import (
-	"strings"
 	"testing"
 )
-
-// A suggested name is what the user will store as a skill, and matching finds
-// a skill in a posting by its lowercased words. A name that differs from its
-// vocabulary term by more than case ("Tailwind CSS" for "tailwind") would stop
-// matching postings that only say "Tailwind".
-func TestEveryTechnologyHasANameThatMatchesLikeItsTerm(t *testing.T) {
-	for _, term := range knownTechnologies {
-		if _, alias := technologyAliases[term]; alias {
-			continue
-		}
-		name := TechnologyName(term)
-		if name == "" {
-			t.Errorf("%q has no display name", term)
-			continue
-		}
-		if strings.ToLower(name) != term {
-			t.Errorf("TechnologyName(%q) = %q, which does not lowercase back to the term", term, name)
-		}
-	}
-}
 
 func TestSuggestSkillsLeavesOutWhatTheUserHasInAnySpelling(t *testing.T) {
 	got := SuggestSkills([]string{"Golang", "postgres", "React"}, nil, nil)

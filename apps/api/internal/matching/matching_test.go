@@ -131,11 +131,11 @@ func TestScoreSkillsOnlyCountSkillsTheJobMentions(t *testing.T) {
 	filter := &models.FilterPreset{RequiredSkills: []string{"Go", "Docker", "AWS"}}
 
 	pythonRole := Evaluate(profile, nil, filter, models.JobInput{Title: "Python Backend Engineer", Description: "Build Python services on AWS."}, time.Now())
-	if strings.Join(pythonRole.MatchedSkills, ",") != "AWS" {
-		t.Fatalf("only listed skills the job mentions may match, got %v", pythonRole.MatchedSkills)
+	if strings.Join(pythonRole.MatchedSkills, ",") != "AWS,Python" {
+		t.Fatalf("only skills the job asks for may match, got %v", pythonRole.MatchedSkills)
 	}
 	if pythonRole.Breakdown["skill_match"] != 30 {
-		t.Fatalf("the one listed skill the job mentions is held, so the skill score is full, got %d", pythonRole.Breakdown["skill_match"])
+		t.Fatalf("everything the job asks for is held, so the skill score is full, got %d", pythonRole.Breakdown["skill_match"])
 	}
 
 	// None of the listed skills appear: score on the profile's skills the job
@@ -187,5 +187,34 @@ func TestSentenceEndingWordsAreStillWords(t *testing.T) {
 	}
 	if e := Evaluate(sampleProfile(), nil, &dotnet, models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Our services run on .NET."}, time.Now()); !e.Rejected {
 		t.Fatal("excluding .NET must reject a job built on .NET, even at the end of a sentence")
+	}
+}
+
+// Found in early use: the skill score only counted skills the
+// profile or the filter named, so a technology the candidate lacks was never
+// seen, and 2,159 of 2,189 jobs scored the full 30. The job's own
+// technologies now count, each weighted by how often the job mentions it, so
+// a framework it keeps naming matters and a tool it names once barely does.
+// Ways of working such as agile are not technologies.
+func TestSkillScoreWeighsWhatTheJobAsksFor(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Golang"}, {Name: "PostgreSQL"}, {Name: "Temporal"}}}
+
+	django := Evaluate(profile, nil, nil, models.JobInput{Title: "Backend Engineer", Description: "Build Go services with Django and PostgreSQL. Django experience is key. Agile team."}, time.Now())
+	if got := django.Breakdown["skill_match"]; got != 15 {
+		t.Fatalf("go and postgresql held, django named twice and not: 2 of 4 mentions is 15, got %d", got)
+	}
+	if strings.Join(django.MatchedSkills, ",") != "Golang,PostgreSQL" || strings.Join(django.MissingSkills, ",") != "Django" {
+		t.Fatalf("matched skills keep the profile's spelling and agile is not missing: got %v and %v", django.MatchedSkills, django.MissingSkills)
+	}
+
+	tool := Evaluate(profile, nil, nil, models.JobInput{Title: "Go Engineer", Description: "Write Go on PostgreSQL, in Go, deployed with CircleCI."}, time.Now())
+	if got := tool.Breakdown["skill_match"]; got != 24 {
+		t.Fatalf("go named three times and postgresql once, held; circleci once, not: 4 of 5 mentions is 24, got %d", got)
+	}
+
+	// A skill outside the vocabulary still counts where the job names it.
+	workflow := Evaluate(profile, nil, nil, models.JobInput{Title: "Backend Engineer", Description: "Orchestrate workflows with Temporal."}, time.Now())
+	if strings.Join(workflow.MatchedSkills, ",") != "Temporal" || workflow.Breakdown["skill_match"] != 30 {
+		t.Fatalf("a profile skill the job names should count, got %v and %d", workflow.MatchedSkills, workflow.Breakdown["skill_match"])
 	}
 }
