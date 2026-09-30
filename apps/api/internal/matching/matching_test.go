@@ -206,6 +206,11 @@ func TestSkillScoreWeighsWhatTheJobAsksFor(t *testing.T) {
 	if strings.Join(django.MatchedSkills, ",") != "Golang,PostgreSQL" || strings.Join(django.MissingSkills, ",") != "Django" {
 		t.Fatalf("matched skills keep the profile's spelling and agile is not missing: got %v and %v", django.MatchedSkills, django.MissingSkills)
 	}
+	// A skill the job mentions is not one it requires, so the flag says what
+	// is known and no more.
+	if strings.Join(django.RedFlags, " ") == "" || !strings.Contains(strings.Join(django.RedFlags, " "), "mentions skills your profile does not list: Django") {
+		t.Fatalf("the red flag should name the skill without calling it required: %v", django.RedFlags)
+	}
 
 	tool := Evaluate(profile, nil, nil, models.JobInput{Title: "Go Engineer", Description: "Write Go on PostgreSQL, in Go, deployed with CircleCI."}, time.Now())
 	if got := tool.Breakdown["skill_match"]; got != 24 {

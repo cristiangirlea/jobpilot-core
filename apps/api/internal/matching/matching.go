@@ -93,7 +93,9 @@ func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter 
 		e.Reasons = append(e.Reasons, "The role has limited explicit overlap with the profile.")
 	}
 	if len(e.MissingSkills) > 0 {
-		e.RedFlags = append(e.RedFlags, "Required or emphasized skills are missing from the profile: "+strings.Join(e.MissingSkills, ", "))
+		// Missing skills are whatever the job mentions that the profile lacks,
+		// which a job may only mention in passing, so this says no more.
+		e.RedFlags = append(e.RedFlags, "The job mentions skills your profile does not list: "+strings.Join(e.MissingSkills, ", "))
 	}
 	if job.SalaryMin == 0 && job.SalaryMax == 0 {
 		e.RedFlags = append(e.RedFlags, "No salary or rate was provided.")
