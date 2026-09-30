@@ -68,18 +68,34 @@ func TestStartsAndExplainsWhenCredentialsAreMissing(t *testing.T) {
 	}
 }
 
-// Found in early use: once the binary was registered with its own
-// token, the checked-in .mcp.json still made every session warn that
-// JOBPILOT_TOKEN was missing. Each variable it names has a default, so the
-// file works without one, and the server explains a missing token itself.
-func TestCheckedInConfigNeedsNoEnvironment(t *testing.T) {
-	raw, err := os.ReadFile(filepath.Join("..", "..", ".mcp.json"))
+// Found in early use: a project's .mcp.json overrides a server of
+// the same name registered for the user, so the checked-in one, which runs
+// from source with whatever token the session's environment holds, replaced
+// the registered binary and its token in every session opened in this
+// repository, and every tool answered "not configured". The from-source
+// config is now an example to copy, and a copy is never committed.
+func TestProjectConfigNeverShadowsTheRegisteredServer(t *testing.T) {
+	root := filepath.Join("..", "..")
+	raw, err := os.ReadFile(filepath.Join(root, ".mcp.json.example"))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("the from-source config should ship as an example: %v", err)
 	}
 	for _, ref := range regexp.MustCompile(`\$\{[^}]*\}`).FindAllString(string(raw), -1) {
 		if !strings.Contains(ref, ":-") {
 			t.Errorf("%s has no default, so a session without it warns", ref)
 		}
+	}
+	ignore, err := os.ReadFile(filepath.Join(root, ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ignored := false
+	for _, line := range strings.Split(string(ignore), "\n") {
+		if strings.TrimSpace(line) == ".mcp.json" || strings.TrimSpace(line) == "/.mcp.json" {
+			ignored = true
+		}
+	}
+	if !ignored {
+		t.Error(".gitignore should list .mcp.json, so a local copy of the example is never committed")
 	}
 }
