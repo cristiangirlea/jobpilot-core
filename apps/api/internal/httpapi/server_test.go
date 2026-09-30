@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -108,6 +109,9 @@ func TestJobQueryReadsListParameters(t *testing.T) {
 		{url: "/api/jobs?offset=10", problem: "offset"},
 		{url: "/api/jobs?fields=everything", problem: "fields"},
 		{url: "/api/jobs?open=yes", problem: "open"},
+		{url: "/api/jobs?q=%20Node.js%20", want: store.JobQuery{Search: "Node.js"}},
+		{url: "/api/jobs?q=", want: store.JobQuery{}},
+		{url: "/api/jobs?q=" + strings.Repeat("x", 61), problem: "q"},
 	} {
 		got, problem := jobQuery(httptest.NewRequest("GET", c.url, nil), c.fixed)
 		if c.problem != "" {
@@ -133,5 +137,16 @@ func TestDetectBoardDoesNotCallEveryLinkAnAggregator(t *testing.T) {
 	}
 	if body := rec.Body.String(); strings.Contains(body, "an aggregator link") || !strings.Contains(body, "careers page") {
 		t.Fatalf("the refusal should not call a careers page an aggregator: %s", body)
+	}
+}
+
+// The web job list pages on the server, so it has to read how many jobs match
+// from X-Total-Count, and a browser only lets a page read a cross-origin
+// response header the API exposes.
+func TestCorsExposesTheTotalCount(t *testing.T) {
+	rec := httptest.NewRecorder()
+	(&Server{FrontendURL: "http://localhost:3000"}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})).ServeHTTP(rec, httptest.NewRequest("GET", "/api/jobs", nil))
+	if !strings.Contains(rec.Header().Get("Access-Control-Expose-Headers"), "X-Total-Count") {
+		t.Fatalf("X-Total-Count should be exposed to the web app, got %q", rec.Header().Get("Access-Control-Expose-Headers"))
 	}
 }

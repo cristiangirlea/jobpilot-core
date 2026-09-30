@@ -36,7 +36,7 @@ func TestJobsQueryAgainstPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	add := func(name string, score int, rejected, closed bool) {
-		in := models.JobInput{Title: name, Company: "Query Test " + run, Description: "The description of " + name + "."}
+		in := models.JobInput{Title: name, Company: "Query Test " + run, Description: "The description of " + name + ", built in Go."}
 		job, err := st.CreateDiscoveredJob(ctx, user.ID, "", "", "", "", "query-"+run+"-"+name, in)
 		if err != nil {
 			t.Fatal(err)
@@ -93,6 +93,31 @@ func TestJobsQueryAgainstPostgres(t *testing.T) {
 	}
 	if len(jobs) != 1 || jobs[0].Job.Description != "" || jobs[0].Job.Title == "" {
 		t.Fatalf("summary should keep the job but leave its description out, got %s", fmt.Sprint(jobs))
+	}
+
+	// The web list searches on the server: whole words, in the title,
+	// description or skills, ignoring case. Plus and hash belong to a word, so
+	// "c" is not "c#"; a word's final dot is a full stop, so "go" is found at
+	// the end of a sentence.
+	for _, c := range []struct {
+		search, want string
+	}{
+		{"OPEN90", "open90"},
+		{"go", "open90 open60 rejected95 closed80"},
+		{"descript", ""},
+		{"g", ""},
+	} {
+		jobs, total, err := st.Jobs(ctx, user.ID, JobQuery{Search: c.search})
+		if err != nil {
+			t.Fatalf("search %q: %v", c.search, err)
+		}
+		var names []string
+		for _, job := range jobs {
+			names = append(names, job.Job.Title)
+		}
+		if got := strings.Join(names, " "); got != c.want || total != len(jobs) {
+			t.Errorf("search %q: got %q of %d, want %q", c.search, got, total, c.want)
+		}
 	}
 
 	// A closed posting cannot be applied to, so it is not a good match to act
