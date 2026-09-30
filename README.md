@@ -732,9 +732,7 @@ make mcp
 claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- /absolute/path/to/apps/mcp/jobpilot-mcp
 ```
 
-The repository also ships a project-scoped `.mcp.json` that runs the server straight from source with `go run`, so a clone needs no build step and no absolute path, only Go 1.25 on `PATH`. It carries no secret: set `JOBPILOT_TOKEN` in your environment and the host expands it. Every variable it names has a default, so a session without the token starts without a warning, and the server's tools say what is missing. Claude Code asks once per project before trusting a checked-in server.
-
-Prefer the built binary registered with `claude mcp add` for day-to-day use. The project config runs from whichever checkout the session is in, so a worktree on an older branch, or a session with no `JOBPILOT_TOKEN` in its environment, cannot start it. Either way the server now starts without credentials rather than exiting, and every tool answers with what is missing and how to fix it, instead of the host reporting only a closed connection.
+Register the built binary with `claude mcp add`, as above, for day-to-day use. The repository does not ship a project-scoped `.mcp.json`, because a project server overrides a user's server of the same name: a checked-in `jobpilot` entry replaced the registered binary, and its token, in every session opened in the repository, and every tool answered "not configured". To run the server straight from source instead, with `go run` and no build step, copy `.mcp.json.example` to `.mcp.json`, which git ignores, and set `JOBPILOT_TOKEN` in your environment; the host expands it. It runs from whichever checkout the session is in, so a worktree on an older branch runs older code. Either way the server starts without credentials rather than exiting, and every tool answers with what is missing and how to fix it, instead of the host reporting only a closed connection.
 
 To mint an agent token without the web app, run the script below. It asks for your email and password in the terminal, never echoes or stores them, and prints the token once with the ready-made `claude mcp add` command:
 
