@@ -38,7 +38,7 @@ export function JobList({matchesOnly=false}:{matchesOnly?:boolean}){
   async function loadMore(){
     const request=latest.current;setMore(true);
     try{const page=await apiPage<JobMatch>(listPath(matchesOnly,search,relatedOnly,items.length));if(request===latest.current){setItems(current=>[...current,...page.items]);setTotal(page.total)}}
-    catch(e){setError(e instanceof Error?e.message:"Unable to load more jobs")}
+    catch(e){if(request===latest.current)setError(e instanceof Error?e.message:"Unable to load more jobs")}
     finally{setMore(false)}
   }
   const filtered=search!==""||relatedOnly;
