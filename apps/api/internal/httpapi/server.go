@@ -138,6 +138,8 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", s.FrontendURL)
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS")
+		// The web job list reads how many jobs match from this header.
+		w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
 		w.Header().Set("Vary", "Origin")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
@@ -531,7 +533,7 @@ func (s *Server) respondJobs(w http.ResponseWriter, r *http.Request, fixedState 
 	write(w, 200, jobs)
 }
 
-// jobQuery reads a job list's optional parameters: state, min_score, open,
+// jobQuery reads a job list's optional parameters: state, min_score, open, q,
 // fields=summary, limit and offset. Without any, the list is whole, as it was
 // before they existed. A listing of every job was 14.4 MB on a full account,
 // most of it descriptions, so a client that pages should also ask for the
@@ -578,6 +580,9 @@ func jobQuery(r *http.Request, fixedState string) (store.JobQuery, string) {
 		q.Summary = true
 	default:
 		return q, "fields must be summary, or left out for whole jobs."
+	}
+	if q.Search = strings.TrimSpace(values.Get("q")); len([]rune(q.Search)) > 60 {
+		return q, "q must be at most 60 characters."
 	}
 	switch values.Get("open") {
 	case "", "false":

@@ -721,6 +721,17 @@ type JobQuery struct {
 	Limit    int  // 0 for no limit
 	Offset   int
 	Summary  bool // leave descriptions out, which are most of a job's size
+	// Search keeps jobs whose title, description or skills contain it as a
+	// whole word, ignoring case.
+	Search string
+}
+
+// searchPattern is a whole-word, lower-case POSIX pattern for term. Plus and
+// hash belong to a word, so "c" is not "c#", and so does a leading dot, so
+// "net" is not ".net"; a final dot is a full stop, so "go" is found at the end
+// of a sentence.
+func searchPattern(term string) string {
+	return `(^|[^a-z0-9+#.])` + regexp.QuoteMeta(strings.ToLower(term)) + `([^a-z0-9+#]|$)`
 }
 
 const (
@@ -741,6 +752,11 @@ func (s *Store) Jobs(ctx context.Context, u string, q JobQuery) ([]models.JobWit
 	if q.MinScore > 0 {
 		args = append(args, q.MinScore)
 		where += fmt.Sprintf(` AND m.score>=$%d`, len(args))
+	}
+	if q.Search != "" {
+		args = append(args, searchPattern(q.Search))
+		n := len(args)
+		where += fmt.Sprintf(` AND (lower(j.title) ~ $%d OR lower(j.description) ~ $%d OR lower(m.matched_skills::text) ~ $%d OR lower(m.missing_skills::text) ~ $%d)`, n, n, n, n)
 	}
 	if q.OpenOnly {
 		// Open for this user: not closed, and not reported gone by them.
