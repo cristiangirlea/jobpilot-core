@@ -31,6 +31,7 @@ const (
 	ProviderLever           = "lever"
 	ProviderAshby           = "ashby"
 	ProviderSmartRecruiters = "smartrecruiters"
+	ProviderRecruitee       = "recruitee"
 
 	// Aggregators. Discovery can crawl these for jobs, but their links stay on
 	// the aggregator rather than reaching an employer's application form, so
@@ -101,9 +102,21 @@ const greenhouseAPI = "https://boards-api.greenhouse.io"
 type Reader struct {
 	client         *http.Client
 	greenhouseBase string
-	// ashbyBase and greenhouseLegacyBase replace those origins in tests.
+	// ashbyBase, greenhouseLegacyBase and recruiteeBase replace those origins
+	// in tests, and public replaces the guarded client for employer domains.
 	ashbyBase            string
 	greenhouseLegacyBase string
+	recruiteeBase        string
+	public               *http.Client
+}
+
+// publicClient is the client for hosts named only by a job link, which
+// refuses private addresses.
+func (r *Reader) publicClient() *http.Client {
+	if r.public != nil {
+		return r.public
+	}
+	return publicClient
 }
 
 func NewReader() *Reader {
@@ -181,6 +194,10 @@ func Detect(applyURL string) (provider, board, jobID string, ok bool) {
 		if parts := splitPath(path); len(parts) >= 2 {
 			return ProviderSmartRecruiters, parts[0], parts[1], true
 		}
+	case recruiteePattern.MatchString(host):
+		if match := recruiteeOfferPath.FindStringSubmatch(path); match != nil {
+			return ProviderRecruitee, recruiteePattern.FindStringSubmatch(host)[1], match[1], true
+		}
 	}
 	return "", "", "", false
 }
@@ -208,6 +225,11 @@ func (r *Reader) Fetch(ctx context.Context, applyURL string) (Form, error) {
 			}
 			return r.greenhouse(ctx, board, id, applyURL)
 		}
+		// Recruitee also serves careers sites on employers' own domains, at
+		// the same /o/<slug> paths; its API there has to confirm it.
+		if _, _, isOffer := recruiteeOfferAt(applyURL); isOffer {
+			return r.recruitee(ctx, applyURL, false)
+		}
 		return Form{}, ErrUnsupported
 	}
 	switch provider {
@@ -215,6 +237,8 @@ func (r *Reader) Fetch(ctx context.Context, applyURL string) (Form, error) {
 		return r.greenhouse(ctx, board, jobID, applyURL)
 	case ProviderAshby:
 		return r.ashby(ctx, board, jobID, applyURL)
+	case ProviderRecruitee:
+		return r.recruitee(ctx, applyURL, true)
 	default:
 		// The other providers are detected so the composer can report which ATS
 		// a job uses, but their forms are not read yet.
@@ -377,11 +401,15 @@ func stringify(value any) string {
 }
 
 func (r *Reader) get(ctx context.Context, endpoint string, out any) error {
+	return r.getWith(ctx, r.client, endpoint, out)
+}
+
+func (r *Reader) getWith(ctx context.Context, client *http.Client, endpoint string, out any) error {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return err
 	}
-	return r.do(request, out)
+	return r.doWith(client, request, out)
 }
 
 // post sends body as JSON, for the boards whose form is read through a query.
@@ -399,8 +427,12 @@ func (r *Reader) post(ctx context.Context, endpoint string, body, out any) error
 }
 
 func (r *Reader) do(request *http.Request, out any) error {
+	return r.doWith(r.client, request, out)
+}
+
+func (r *Reader) doWith(client *http.Client, request *http.Request, out any) error {
 	request.Header.Set("Accept", "application/json")
-	response, err := r.client.Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		return fmt.Errorf("could not reach the employer's job board: %w", err)
 	}

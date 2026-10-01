@@ -2,14 +2,14 @@ package discovery
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
-	"syscall"
 	"time"
+
+	"jobpilot/core/api/internal/ats"
 )
 
 // Why a job was closed, in words the job page shows as they are.
@@ -43,7 +43,7 @@ type LinkChecker struct {
 func NewLinkChecker(allowPrivate bool) *LinkChecker {
 	dialer := &net.Dialer{Timeout: 10 * time.Second}
 	if !allowPrivate {
-		dialer.Control = refusePrivate
+		dialer.Control = ats.RefusePrivate
 	}
 	transport := &http.Transport{Proxy: nil, DialContext: dialer.DialContext, TLSHandshakeTimeout: 10 * time.Second, ResponseHeaderTimeout: 15 * time.Second}
 	return &LinkChecker{
@@ -51,18 +51,6 @@ func NewLinkChecker(allowPrivate bool) *LinkChecker {
 		once: &http.Client{Transport: transport, Timeout: 20 * time.Second,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }},
 	}
-}
-
-func refusePrivate(_, address string, _ syscall.RawConn) error {
-	host, _, err := net.SplitHostPort(address)
-	if err != nil {
-		return err
-	}
-	ip := net.ParseIP(host)
-	if ip == nil || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
-		return fmt.Errorf("refusing to check a link on the private address %s", host)
-	}
-	return nil
 }
 
 // Check fetches link and reports whether the posting has closed. Only a
