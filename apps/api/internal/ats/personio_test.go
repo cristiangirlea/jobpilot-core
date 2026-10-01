@@ -173,6 +173,67 @@ func TestPersonioPageWithoutTheFormIsUnreadable(t *testing.T) {
 	}
 }
 
+// realPersonioChunks is written the way a real /apply page streams its data:
+// JSON string literals with \" and \n escapes and literal UTF-8, a talent-pool
+// form ahead of the application form, and undefined values as "$undefined".
+const realPersonioChunks = `<script>self.__next_f.push([1,"0:{\"P\":null}\n"])</script>` +
+	`<script>self.__next_f.push([1,"12:[\"$\",\"$L9\",null,{\"form\":{\"fields\":[{\"name\":\"email\",\"label\":\"Email\",\"required\":true,\"type\":\"text\",\"options\":null,\"sortOrder\":0}]}}]\n"])</script>` +
+	`<script>self.__next_f.push([1,"1a:[\"$\",\"div\",null,{\"children\":[\"$\",\"$L1c\",null,{\"form\":{\"fields\":[{\"name\":\"first_name\",\"label\":\"First\",\"required\":true,\"type\":\"text\",\"options\":null,\"sortOrder\":0},` +
+	`{\"name\":\"custom_attribute_1\",\"label\":\"Hast du einen Wohnsitz in Deutschland?\",\"required\":\"$undefined\",\"type\":\"option\",\"options\":{\"custom_option_2\":\"Ja\",\"custom_option_1\":\"Noch nicht, aber in Kürze\",\"custom_option_3\":\"$undefined\"},\"sortOrder\":1},"])</script>` +
+	`<script>self.__next_f.push([1,"{\"name\":\"custom_attribute_2\",\"label\":\"$undefined\",\"required\":false,\"type\":\"text\",\"options\":null,\"sortOrder\":2}],` +
+	`\"documentCategories\":[{\"name\":\"cv\",\"label\":\"CV\",\"required\":true,\"sortOrder\":0}]},\"jobId\":2798369}]}]\n"])</script>`
+
+func TestPersonioReadsARealPagesEscapingAndPicksTheApplicationForm(t *testing.T) {
+	form, ok := personioFormIn([]byte("<html><body>" + realPersonioChunks + "</body></html>"))
+	if !ok {
+		t.Fatal("the application form should be found")
+	}
+	if len(form.DocumentCategories) != 1 || len(form.Fields) != 3 {
+		t.Fatalf("the talent-pool form was read instead of the application form: %+v", form)
+	}
+	converted := convertPersonio(form, Form{Provider: ProviderPersonio})
+	var names []string
+	for _, field := range converted.Fields {
+		names = append(names, field.Name)
+	}
+	// The field whose label is undefined is left out; the others read.
+	if got := strings.Join(names, " "); got != "first_name custom_attribute_1 document:cv" {
+		t.Errorf("fields = %s", got)
+	}
+	residence := converted.Fields[1]
+	if residence.Required || strings.Join(residence.Options, "|") != "Ja|Noch nicht, aber in Kürze" {
+		t.Errorf("an undefined required flag reads as optional and undefined options are dropped, got %+v", residence)
+	}
+}
+
+func TestPersonioUndecodableChunkLeavesTheFormUnread(t *testing.T) {
+	broken := strings.Replace(realPersonioChunks, `{\"P\":null}`, `{\"P\":\x3c}`, 1)
+	if _, ok := personioFormIn([]byte(broken)); ok {
+		t.Fatal("a chunk that does not decode must not leave a silent hole in the form")
+	}
+}
+
+func TestPersonioSiteGoneOnlyForCareerSiteLinks(t *testing.T) {
+	home, _ := url.Parse("https://www.personio.com/")
+	elsewhere, _ := url.Parse("https://acme.jobs.personio.de/job/42")
+	cases := []struct {
+		link  string
+		final *url.URL
+		want  bool
+	}{
+		{"https://acme.jobs.personio.de/job/42", home, true},
+		{"https://acme.jobs.personio.de/job/42", elsewhere, false},
+		// Someone linking to Personio's own site is not a career site gone.
+		{"https://www.personio.com/", home, false},
+		{"https://example.com/careers", home, false},
+	}
+	for _, c := range cases {
+		if got := PersonioSiteGone(c.link, c.final); got != c.want {
+			t.Errorf("PersonioSiteGone(%s, %s) = %v, want %v", c.link, c.final, got, c.want)
+		}
+	}
+}
+
 // Only Personio's own home page means the company is gone; any other page
 // a request ends on leaves the job alone.
 func TestPersonioHomepageMeansTheCompanyIsGone(t *testing.T) {

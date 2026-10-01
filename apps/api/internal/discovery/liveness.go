@@ -68,6 +68,11 @@ func (c *LinkChecker) Check(ctx context.Context, link string) (closed bool, reas
 	defer res.Body.Close()
 	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 64<<10))
 	closed, reason = closedBy(res.StatusCode, res.Request.URL)
+	// Personio sends a company it no longer hosts to its own home page, which
+	// answers 200 like any live page would.
+	if !closed && ats.PersonioSiteGone(link, res.Request.URL) {
+		closed, reason = true, ReasonBoard
+	}
 	return closed, reason, nil
 }
 

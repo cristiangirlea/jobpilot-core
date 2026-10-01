@@ -470,6 +470,15 @@ func (r *Reader) doWith(client *http.Client, request *http.Request, out any) err
 	return nil
 }
 
+// origin is where a reader sends requests for a careers host: always https,
+// or a test's stand-in when one is set.
+func origin(base, host string) string {
+	if base != "" {
+		return base
+	}
+	return "https://" + host
+}
+
 // hostOf is a link's host, port included.
 func hostOf(link string) string {
 	parsed, err := url.Parse(strings.TrimSpace(link))

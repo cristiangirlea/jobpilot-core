@@ -72,10 +72,7 @@ func recruiteeOfferAt(applyURL string) (host, slug string, ok bool) {
 // recruiteeAPI is an API address on a careers host. It is always asked over
 // https, whatever scheme the link used.
 func (r *Reader) recruiteeAPI(host, path string) string {
-	if r.recruiteeBase != "" {
-		return r.recruiteeBase + path
-	}
-	return "https://" + host + path
+	return origin(r.recruiteeBase, host) + path
 }
 
 // recruiteeBoard names a careers site the way Detect does: the company on

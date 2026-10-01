@@ -38,25 +38,47 @@ var personioLabels = map[string]string{
 type personioForm struct {
 	Fields []struct {
 		Name      string          `json:"name"`
-		Label     string          `json:"label"`
-		Required  bool            `json:"required"`
-		Type      string          `json:"type"`
+		Label     flightString    `json:"label"`
+		Required  flightBool      `json:"required"`
+		Type      flightString    `json:"type"`
 		Options   json.RawMessage `json:"options"`
 		SortOrder int             `json:"sortOrder"`
 	} `json:"fields"`
 	DocumentCategories []struct {
-		Name      string `json:"name"`
-		Label     string `json:"label"`
-		Required  bool   `json:"required"`
-		SortOrder int    `json:"sortOrder"`
+		Name      string       `json:"name"`
+		Label     flightString `json:"label"`
+		Required  flightBool   `json:"required"`
+		SortOrder int          `json:"sortOrder"`
 	} `json:"documentCategories"`
 }
 
-func (r *Reader) personioURL(host, jobID string) string {
-	if r.personioBase != "" {
-		return r.personioBase + "/job/" + url.PathEscape(jobID) + "/apply?language=en"
+// The streamed data writes a missing value as the string "$undefined" rather
+// than leaving it out. flightString reads that as empty, and flightBool reads
+// anything but true as false, so one undefined flag cannot spoil the form.
+type flightString string
+
+func (s *flightString) UnmarshalJSON(raw []byte) error {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return err
 	}
-	return "https://" + host + "/job/" + url.PathEscape(jobID) + "/apply?language=en"
+	if text, ok := value.(string); ok && text != "$undefined" {
+		*s = flightString(text)
+	} else {
+		*s = ""
+	}
+	return nil
+}
+
+type flightBool bool
+
+func (b *flightBool) UnmarshalJSON(raw []byte) error {
+	*b = flightBool(bytes.Equal(bytes.TrimSpace(raw), []byte("true")))
+	return nil
+}
+
+func (r *Reader) personioURL(host, jobID string) string {
+	return origin(r.personioBase, host) + "/job/" + url.PathEscape(jobID) + "/apply?language=en"
 }
 
 func (r *Reader) personio(ctx context.Context, host, company, jobID, applyURL string) (Form, error) {
@@ -112,42 +134,68 @@ func personioHomepage(page *url.URL) bool {
 	return false
 }
 
-// personioFormIn finds the form in the page's streamed data: string chunks
-// pushed to self.__next_f that together hold `"form":{"fields":[...]}`.
+// PersonioSiteGone tells whether a link to a Personio career site ended on
+// Personio's own home page, which is where Personio sends a company it no
+// longer hosts. The link check uses it, since that page answers 200.
+func PersonioSiteGone(link string, final *url.URL) bool {
+	parsed, err := url.Parse(strings.TrimSpace(link))
+	return err == nil && final != nil && personioPattern.MatchString(strings.ToLower(parsed.Hostname())) && personioHomepage(final)
+}
+
+// personioFormIn finds the application form in the page's streamed data:
+// string chunks pushed to self.__next_f that together hold
+// `"form":{"fields":[...]}`. A chunk that does not decode fails the whole
+// read, since a hole in the data could cut the form short. When the page holds
+// more than one form, the application form is the one with document slots,
+// and otherwise the one with the most fields.
 func personioFormIn(page []byte) (personioForm, bool) {
 	var payload strings.Builder
 	for _, match := range personioFlightChunk.FindAllSubmatch(page, -1) {
 		var chunk string
-		if json.Unmarshal(append(append([]byte(`"`), match[1]...), '"'), &chunk) == nil {
-			payload.WriteString(chunk)
+		if err := json.Unmarshal(append(append([]byte(`"`), match[1]...), '"'), &chunk); err != nil {
+			return personioForm{}, false
 		}
+		payload.WriteString(chunk)
 	}
 	data := payload.String()
-	at := strings.Index(data, `"form":{"fields":`)
-	if at < 0 {
-		return personioForm{}, false
+	const marker = `"form":{"fields":`
+	var best personioForm
+	found := false
+	for offset := 0; ; {
+		at := strings.Index(data[offset:], marker)
+		if at < 0 {
+			break
+		}
+		start := offset + at + len(`"form":`)
+		offset = start
+		var form personioForm
+		// The decoder reads the one object and ignores what follows it.
+		if json.NewDecoder(strings.NewReader(data[start:])).Decode(&form) != nil || len(form.Fields) == 0 {
+			continue
+		}
+		better := !found ||
+			(len(form.DocumentCategories) > 0) != (len(best.DocumentCategories) > 0) && len(form.DocumentCategories) > 0 ||
+			(len(form.DocumentCategories) > 0) == (len(best.DocumentCategories) > 0) && len(form.Fields) > len(best.Fields)
+		if better {
+			best, found = form, true
+		}
 	}
-	var form personioForm
-	// The decoder reads the one object and ignores what follows it.
-	if err := json.NewDecoder(strings.NewReader(data[at+len(`"form":`):])).Decode(&form); err != nil || len(form.Fields) == 0 {
-		return personioForm{}, false
-	}
-	return form, true
+	return best, found
 }
 
 func convertPersonio(source personioForm, form Form) Form {
 	fields := source.Fields
 	sort.SliceStable(fields, func(i, j int) bool { return fields[i].SortOrder < fields[j].SortOrder })
 	for _, item := range fields {
-		label := strings.TrimSpace(item.Label)
+		label := strings.TrimSpace(string(item.Label))
 		if standard, ok := personioLabels[item.Name]; ok {
 			label = standard
 		}
 		if item.Name == "" || label == "" {
 			continue
 		}
-		field := Field{Name: item.Name, Label: label, Type: TypeText, Role: RoleQuestion, Required: item.Required}
-		switch item.Type {
+		field := Field{Name: item.Name, Label: label, Type: TypeText, Role: RoleQuestion, Required: bool(item.Required)}
+		switch string(item.Type) {
 		case "option":
 			field.Type = TypeSelect
 		case "multi_option", "multiple_option":
@@ -161,11 +209,11 @@ func convertPersonio(source personioForm, form Form) Form {
 	documents := source.DocumentCategories
 	sort.SliceStable(documents, func(i, j int) bool { return documents[i].SortOrder < documents[j].SortOrder })
 	for _, document := range documents {
-		label := strings.TrimSpace(document.Label)
+		label := strings.TrimSpace(string(document.Label))
 		if label == "" {
 			label = document.Name
 		}
-		field := Field{Name: "document:" + document.Name, Label: label, Type: TypeFile, Role: RoleQuestion, Required: document.Required}
+		field := Field{Name: "document:" + document.Name, Label: label, Type: TypeFile, Role: RoleQuestion, Required: bool(document.Required)}
 		switch {
 		case document.Name == "cv" || resumePattern.MatchString(label):
 			field.Role = RoleResume
@@ -190,7 +238,7 @@ func personioOptions(raw json.RawMessage) []string {
 		var list []any
 		if json.Unmarshal(raw, &list) == nil {
 			for _, item := range list {
-				if text := stringify(item); text != "" {
+				if text := stringify(item); text != "" && text != "$undefined" {
 					out = append(out, text)
 				}
 			}
@@ -209,7 +257,7 @@ func personioOptions(raw json.RawMessage) []string {
 		if err := decoder.Decode(&label); err != nil {
 			return out
 		}
-		if text := stringify(label); text != "" {
+		if text := stringify(label); text != "" && text != "$undefined" {
 			out = append(out, text)
 		}
 	}
