@@ -32,6 +32,7 @@ const (
 	ProviderAshby           = "ashby"
 	ProviderSmartRecruiters = "smartrecruiters"
 	ProviderRecruitee       = "recruitee"
+	ProviderPersonio        = "personio"
 
 	// Aggregators. Discovery can crawl these for jobs, but their links stay on
 	// the aggregator rather than reaching an employer's application form, so
@@ -114,6 +115,7 @@ type Reader struct {
 	ashbyBase            string
 	greenhouseLegacyBase string
 	recruiteeBase        string
+	personioBase         string
 	public               *http.Client
 }
 
@@ -201,6 +203,10 @@ func Detect(applyURL string) (provider, board, jobID string, ok bool) {
 		if parts := splitPath(path); len(parts) >= 2 {
 			return ProviderSmartRecruiters, parts[0], parts[1], true
 		}
+	case personioPattern.MatchString(host):
+		if match := personioJobPath.FindStringSubmatch(path); match != nil {
+			return ProviderPersonio, personioPattern.FindStringSubmatch(host)[1], match[1], true
+		}
 	case recruiteePattern.MatchString(host):
 		if match := recruiteeOfferPath.FindStringSubmatch(path); match != nil {
 			return ProviderRecruitee, recruiteePattern.FindStringSubmatch(host)[1], match[1], true
@@ -246,6 +252,8 @@ func (r *Reader) Fetch(ctx context.Context, applyURL string) (Form, error) {
 		return r.ashby(ctx, board, jobID, applyURL)
 	case ProviderRecruitee:
 		return r.recruitee(ctx, applyURL, true)
+	case ProviderPersonio:
+		return r.personio(ctx, hostOf(applyURL), board, jobID, applyURL)
 	default:
 		// The other providers are detected so the composer can report which ATS
 		// a job uses, but their forms are not read yet.
@@ -460,4 +468,22 @@ func (r *Reader) doWith(client *http.Client, request *http.Request, out any) err
 		return fmt.Errorf("%w: %w", errUnreadable, err)
 	}
 	return nil
+}
+
+// origin is where a reader sends requests for a careers host: always https,
+// or a test's stand-in when one is set.
+func origin(base, host string) string {
+	if base != "" {
+		return base
+	}
+	return "https://" + host
+}
+
+// hostOf is a link's host, port included.
+func hostOf(link string) string {
+	parsed, err := url.Parse(strings.TrimSpace(link))
+	if err != nil {
+		return ""
+	}
+	return parsed.Host
 }
