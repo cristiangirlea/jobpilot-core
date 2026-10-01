@@ -1022,7 +1022,7 @@ make smoke-mcp
 
 ### Continuous integration
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI.
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI. Jobs run on the self-hosted runners of the lab Kubernetes cluster (the `infra` repo) when the repository variable `CI_RUNNER` names its scale set, `lab-jobpilot`, and on GitHub-hosted runners when it is unset; the workflow installs PowerShell itself where the runner image lacks it.
 
 The test suites cover:
 
