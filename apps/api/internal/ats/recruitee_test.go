@@ -39,6 +39,7 @@ func TestDetectRecognisesRecruiteeOffers(t *testing.T) {
 		{"https://payflows.recruitee.com/o/backend-engineer?utm_source=arbeitnow.fr", "payflows", "backend-engineer", true},
 		{"https://payflows.recruitee.com/o/backend-engineer/c/new", "payflows", "backend-engineer", true},
 		{"https://payflows.recruitee.com/de/o/backend-engineer", "payflows", "backend-engineer", true},
+		{"https://payflows.recruitee.com/pt-br/o/backend-engineer", "payflows", "backend-engineer", true},
 		{"https://payflows.recruitee.com/", "", "", false},
 		{"https://payflows.recruitee.com/o/", "", "", false},
 	}
@@ -63,7 +64,7 @@ func TestRecruiteeFormIsNormalised(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if form.Provider != ProviderRecruitee || form.Board != "acme.recruitee.com" || form.JobID != "backend-engineer" ||
+	if form.Provider != ProviderRecruitee || form.Board != "acme" || form.JobID != "backend-engineer" ||
 		form.Title != "Senior Backend Engineer" || form.Company != "Acme GmbH" {
 		t.Fatalf("form = %+v", form)
 	}
@@ -89,7 +90,7 @@ func TestRecruiteeFormIsNormalised(t *testing.T) {
 		// A photo is an upload only the applicant has.
 		{"photo", TypeFile, RoleQuestion, false},
 		// A salutation states gender: the applicant's to answer, never ours.
-		{"salutation", TypeText, RoleDeclaration, true},
+		{"salutation", TypeText, RolePersonal, true},
 		{"locations", TypeMultiSelect, RoleQuestion, true},
 		{"question_1", TypeSelect, RoleQuestion, true},
 		{"question_2", TypeSelect, RoleQuestion, true},
@@ -128,9 +129,20 @@ func TestRecruiteeOfferGoneIsNotFound(t *testing.T) {
 	}
 }
 
+// A server error on recruitee.com is a passing failure, not the offer gone.
+func TestRecruiteeServerErrorIsNotAClosure(t *testing.T) {
+	reader, server := testReader(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) })
+	reader.recruiteeBase = server.URL
+	form, err := reader.Fetch(context.Background(), "https://acme.recruitee.com/o/backend-engineer")
+	if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnsupported) || form.Provider != ProviderRecruitee {
+		t.Fatalf("a 503 should leave the form unread for now, got %v (%+v)", err, form)
+	}
+}
+
 // On an employer's own domain the API has to confirm the site is Recruitee
-// before anything is read or closed.
+// before anything is read or closed, and a passing failure is neither.
 func TestRecruiteeOnAnEmployersDomain(t *testing.T) {
+	unreadable := errors.New("unread for now")
 	cases := []struct {
 		name    string
 		handler http.HandlerFunc
@@ -155,15 +167,31 @@ func TestRecruiteeOnAnEmployersDomain(t *testing.T) {
 		{"an HTML page", func(w http.ResponseWriter, r *http.Request) {
 			w.Write([]byte("<html>careers</html>"))
 		}, ErrUnsupported, false},
+		{"a passing server error", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusServiceUnavailable)
+		}, unreadable, false},
 	}
 	for _, c := range cases {
-		server := httptest.NewServer(c.handler)
+		// The API is asked over https whatever the link said.
+		server := httptest.NewTLSServer(c.handler)
 		reader := NewReader()
 		reader.public = server.Client()
-		form, err := reader.Fetch(context.Background(), server.URL+"/o/backend-engineer")
+		link := "http" + strings.TrimPrefix(server.URL, "https") + "/o/backend-engineer"
+		form, err := reader.Fetch(context.Background(), link)
 		server.Close()
-		if !errors.Is(err, c.want) && !(c.want == nil && err == nil) {
-			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+		switch c.want {
+		case nil:
+			if err != nil {
+				t.Errorf("%s: err = %v, want the form", c.name, err)
+			}
+		case unreadable:
+			if err == nil || errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnsupported) {
+				t.Errorf("%s: err = %v, want the form unread for now", c.name, err)
+			}
+		default:
+			if !errors.Is(err, c.want) {
+				t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
+			}
 		}
 		if c.fields && (form.Provider != ProviderRecruitee || len(form.Fields) == 0) {
 			t.Errorf("%s: form = %+v", c.name, form)
@@ -181,7 +209,7 @@ func TestRecruiteeProbeRefusesPrivateAddresses(t *testing.T) {
 	}))
 	defer server.Close()
 	_, err := NewReader().Fetch(context.Background(), server.URL+"/o/backend-engineer")
-	if !errors.Is(err, ErrUnsupported) || hits.Load() != 0 {
+	if err == nil || errors.Is(err, ErrNotFound) || hits.Load() != 0 {
 		t.Fatalf("a loopback careers site must not be fetched: err = %v, requests = %d", err, hits.Load())
 	}
 }

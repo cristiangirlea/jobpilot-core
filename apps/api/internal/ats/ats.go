@@ -58,6 +58,9 @@ const (
 	// RoleDeclaration marks an undertaking the applicant makes personally, such
 	// as confirming the writing is their own. Never answered automatically.
 	RoleDeclaration = "declaration"
+	// RolePersonal marks a choice only the applicant makes, such as a
+	// salutation that states their gender. Never answered automatically.
+	RolePersonal = "personal"
 )
 
 var (
@@ -66,6 +69,10 @@ var (
 	// hand, and the composer says so.
 	ErrUnsupported = errors.New("this employer's application form cannot be read automatically")
 	ErrNotFound    = errors.New("the employer's job posting could not be found")
+
+	// errUnreadable marks an answer that is not the JSON a board API sends,
+	// which from an unknown host means it is not that board at all.
+	errUnreadable = errors.New("the employer's job board returned an unreadable response")
 )
 
 // Field is one input on an application form.
@@ -450,7 +457,7 @@ func (r *Reader) doWith(client *http.Client, request *http.Request, out any) err
 		return err
 	}
 	if err = json.Unmarshal(body, out); err != nil {
-		return fmt.Errorf("the employer's job board returned an unreadable response: %w", err)
+		return fmt.Errorf("%w: %w", errUnreadable, err)
 	}
 	return nil
 }

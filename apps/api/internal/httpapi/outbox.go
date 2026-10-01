@@ -144,6 +144,12 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 				}
 				continue
 			}
+			if answer.Source == "personal" {
+				if answer.Required {
+					entry.Blockers = append(entry.Blockers, fmt.Sprintf("Only you can choose this, on the employer's form: %q", answer.Label))
+				}
+				continue
+			}
 			if answer.Required && strings.TrimSpace(answer.Answer) == "" {
 				entry.Blockers = append(entry.Blockers, fmt.Sprintf("A required question has no answer yet: %q", answer.Label))
 			}
@@ -226,6 +232,10 @@ func (s *Server) answerForm(ctx context.Context, uid string, form ats.Form, prof
 			// An undertaking the applicant makes personally. Ticking it for them
 			// would be making a statement on their behalf.
 			answer.Source, answer.NeedsReview = "declaration", true
+		case field.Role == ats.RolePersonal:
+			// A choice that states something about the applicant, such as a
+			// salutation stating gender, is never inferred for them.
+			answer.Source, answer.NeedsReview = "personal", true
 		case field.Type == ats.TypeFile:
 			// Any other upload, such as a transcript, is a document only the
 			// applicant has. A drafted sentence is not a file, and answering it

@@ -18,7 +18,7 @@ import (
 // /o/<slug>, sometimes behind a language prefix or with /c/new for the form.
 var (
 	recruiteePattern     = regexp.MustCompile(`(?i)^([a-z0-9-]+)\.recruitee\.com$`)
-	recruiteeOfferPath   = regexp.MustCompile(`^(?:/[a-z]{2})?/o/([^/]+?)(?:/c/new)?/?$`)
+	recruiteeOfferPath   = regexp.MustCompile(`(?i)^(?:/[a-z]{2}(?:-[a-z]{2})?)?/o/([^/]+?)(?:/c/new)?/?$`)
 	errRecruiteeUnusable = errors.New("Recruitee did not return this form, so it has to be completed on the employer's page")
 )
 
@@ -69,11 +69,26 @@ func recruiteeOfferAt(applyURL string) (host, slug string, ok bool) {
 	return parsed.Host, match[1], true
 }
 
-func (r *Reader) recruiteeEndpoint(scheme, host, slug string) string {
+// recruiteeAPI is an API address on a careers host. It is always asked over
+// https, whatever scheme the link used.
+func (r *Reader) recruiteeAPI(host, path string) string {
 	if r.recruiteeBase != "" {
-		return r.recruiteeBase + "/api/offers/" + url.PathEscape(slug)
+		return r.recruiteeBase + path
 	}
-	return scheme + "://" + host + "/api/offers/" + url.PathEscape(slug)
+	return "https://" + host + path
+}
+
+// recruiteeBoard names a careers site the way Detect does: the company on
+// recruitee.com, the whole host on an employer's own domain.
+func recruiteeBoard(host string) string {
+	hostname := host
+	if parsed, err := url.Parse("https://" + host); err == nil {
+		hostname = parsed.Hostname()
+	}
+	if match := recruiteePattern.FindStringSubmatch(strings.ToLower(hostname)); match != nil {
+		return match[1]
+	}
+	return host
 }
 
 // recruitee reads an offer's form. onRecruitee says the host is recruitee.com
@@ -81,8 +96,9 @@ func (r *Reader) recruiteeEndpoint(scheme, host, slug string) string {
 // 404 may only mean the site is not Recruitee at all, so it is believed only
 // when the same host's offer list shows the site is Recruitee.
 func (r *Reader) recruitee(ctx context.Context, applyURL string, onRecruitee bool) (Form, error) {
-	parsed, _ := url.Parse(strings.TrimSpace(applyURL))
 	host, slug, _ := recruiteeOfferAt(applyURL)
+	board := recruiteeBoard(host)
+	known := Form{Provider: ProviderRecruitee, Board: board, JobID: slug, ApplyURL: applyURL}
 	client := r.client
 	if !onRecruitee {
 		client = r.publicClient()
@@ -90,35 +106,37 @@ func (r *Reader) recruitee(ctx context.Context, applyURL string, onRecruitee boo
 	var payload struct {
 		Offer recruiteeOffer `json:"offer"`
 	}
-	err := r.getWith(ctx, client, r.recruiteeEndpoint(parsed.Scheme, host, slug), &payload)
+	err := r.getWith(ctx, client, r.recruiteeAPI(host, "/api/offers/"+url.PathEscape(slug)), &payload)
 	switch {
-	case errors.Is(err, ErrNotFound) && !onRecruitee:
-		if r.isRecruiteeSite(ctx, client, parsed.Scheme, host) {
-			return Form{Provider: ProviderRecruitee, Board: host, JobID: slug, ApplyURL: applyURL}, ErrNotFound
+	case err == nil:
+	case onRecruitee:
+		return known, err
+	case errors.Is(err, ErrNotFound):
+		if r.isRecruiteeSite(ctx, client, host) {
+			return known, ErrNotFound
 		}
 		return Form{}, ErrUnsupported
-	case err != nil && !onRecruitee:
-		// Not JSON, refused, unreachable: nothing says this host is Recruitee.
+	case errors.Is(err, errUnreadable):
+		// An answer that is not Recruitee's JSON: this site is something else.
 		return Form{}, ErrUnsupported
-	case err != nil:
-		return Form{Provider: ProviderRecruitee, Board: host, JobID: slug, ApplyURL: applyURL}, err
+	default:
+		// Unreachable, refused, or an error status: nothing is known either
+		// way, so the form is unread for now rather than written off.
+		return Form{}, err
 	}
 	offer := payload.Offer
 	if offer.ID == 0 || offer.Slug == "" {
 		if !onRecruitee {
 			return Form{}, ErrUnsupported
 		}
-		return Form{Provider: ProviderRecruitee, Board: host, JobID: slug, ApplyURL: applyURL}, errRecruiteeUnusable
+		return known, errRecruiteeUnusable
 	}
-	return convertRecruitee(offer, host, applyURL), nil
+	return convertRecruitee(offer, board, applyURL), nil
 }
 
 // isRecruiteeSite tells whether a host serves Recruitee's offer list.
-func (r *Reader) isRecruiteeSite(ctx context.Context, client *http.Client, scheme, host string) bool {
-	endpoint := scheme + "://" + host + "/api/offers/"
-	if r.recruiteeBase != "" {
-		endpoint = r.recruiteeBase + "/api/offers/"
-	}
+func (r *Reader) isRecruiteeSite(ctx context.Context, client *http.Client, host string) bool {
+	endpoint := r.recruiteeAPI(host, "/api/offers/")
 	var list struct {
 		Offers *[]struct {
 			ID int64 `json:"id"`
@@ -130,8 +148,8 @@ func (r *Reader) isRecruiteeSite(ctx context.Context, client *http.Client, schem
 // convertRecruitee lays the offer out as the form an applicant sees: the
 // standard fields the employer switched on, the location question when it is
 // shown, then the employer's own questions in their order.
-func convertRecruitee(offer recruiteeOffer, host, applyURL string) Form {
-	form := Form{Provider: ProviderRecruitee, Board: host, JobID: offer.Slug,
+func convertRecruitee(offer recruiteeOffer, board, applyURL string) Form {
+	form := Form{Provider: ProviderRecruitee, Board: board, JobID: offer.Slug,
 		Title: offer.Title, Company: offer.CompanyName, ApplyURL: applyURL}
 	form.admit(Field{Name: "name", Label: "Full name", Type: TypeText, Role: RoleQuestion, Required: true})
 	form.admit(Field{Name: "email", Label: "Email", Type: TypeText, Role: RoleQuestion, Required: true})
@@ -153,12 +171,12 @@ func convertRecruitee(offer recruiteeOffer, host, applyURL string) Form {
 	}
 	// A salutation (Mr, Ms) states the applicant's gender. An optional one is
 	// skipped like any protected question; a required one stays on the form
-	// for the applicant to answer themselves, never answered for them.
+	// for the applicant to choose themselves, never answered for them.
 	switch offer.OptionsSalutation {
 	case "optional":
 		form.Skipped = append(form.Skipped, "Salutation")
 	case "required":
-		form.Fields = append(form.Fields, Field{Name: "salutation", Label: "Salutation", Type: TypeText, Role: RoleDeclaration, Required: true})
+		form.Fields = append(form.Fields, Field{Name: "salutation", Label: "Salutation", Type: TypeText, Role: RolePersonal, Required: true})
 	}
 	if offer.LocationQuestionVisible && len(offer.Locations) > 0 {
 		field := Field{Name: "locations", Label: strings.TrimSpace(html.UnescapeString(offer.LocationsQuestion)),

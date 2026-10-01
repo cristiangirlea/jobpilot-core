@@ -16,7 +16,7 @@ const statusTone:Record<string,string>={
 const sourceLabel:Record<string,string>={
   profile:"from your profile",bank:"reused answer",bank_similar:"reused from a similar role",
   ai:"drafted by AI",template:"deterministic template",unanswered:"needs you",
-  cv:"CV attached",cover_letter:"letter attached",declaration:"you declare this",upload:"you upload this",
+  cv:"CV attached",cover_letter:"letter attached",declaration:"you declare this",upload:"you upload this",personal:"only you choose this",
 };
 
 export default function OutboxPage(){
