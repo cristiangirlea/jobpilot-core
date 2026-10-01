@@ -2,6 +2,11 @@ name: ci
 
 # Mirrors `make test` (split into parallel jobs) plus image builds and an
 # integration pass against a real API. Keep this file and the Makefile in step.
+#
+# Jobs run on the lab cluster's self-hosted runners when the repository
+# variable CI_RUNNER names its scale set (set by the infra repo's tofu), and
+# on GitHub-hosted runners when it is unset. The cluster's runner image is
+# GitHub's runner plus build tools, so the steps install what else they need.
 
 on:
   push:
@@ -20,7 +25,7 @@ concurrency:
 jobs:
   go:
     name: ${{ matrix.module }} (Go)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -46,7 +51,7 @@ jobs:
 
   web:
     name: web (typecheck)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 15
     defaults:
       run:
@@ -65,7 +70,7 @@ jobs:
 
   images:
     name: docker images
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -76,7 +81,7 @@ jobs:
 
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
     timeout-minutes: 20
     needs: [go]
     services:
@@ -138,6 +143,20 @@ jobs:
             sleep 1
           done
           curl -fsS http://localhost:8080/api/health
+      # GitHub-hosted runners ship PowerShell and the cluster's do not, so a
+      # pinned release is installed when it is missing, checked against the
+      # SHA-256 that release publishes.
+      - name: PowerShell
+        run: |
+          command -v pwsh >/dev/null && exit 0
+          version=7.6.6
+          sha=ddbc4a2d113bbd46d283cfedcbcd117a70caefd7673f41f2b4e0000badf103bc
+          curl -fsSL -o "$RUNNER_TEMP/pwsh.tar.gz" "https://github.com/PowerShell/PowerShell/releases/download/v$version/powershell-$version-linux-x64.tar.gz"
+          echo "$sha  $RUNNER_TEMP/pwsh.tar.gz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/pwsh"
+          tar -xzf "$RUNNER_TEMP/pwsh.tar.gz" -C "$RUNNER_TEMP/pwsh"
+          chmod +x "$RUNNER_TEMP/pwsh/pwsh"
+          echo "$RUNNER_TEMP/pwsh" >> "$GITHUB_PATH"
       - name: Smoke flow
         run: pwsh -File scripts/smoke.ps1
       - name: Regression smoke flow
