@@ -14,8 +14,13 @@ func TestGreenhouseJobIDOnAnEmployersDomain(t *testing.T) {
 	}{
 		{"https://careers.nebius.com/?gh_jid=4967927101&utm_source=arbeitnow.com", "4967927101", true},
 		{"https://example.com/jobs/backend?gh_jid=123", "123", true},
-		// Greenhouse's own hosts are Detect's to read.
+		// Greenhouse's own hosts are Detect's to read when they name the board,
+		// with or without a port.
 		{"https://job-boards.greenhouse.io/acme/jobs/123?gh_jid=123", "", false},
+		{"https://job-boards.greenhouse.io:443/acme/jobs/123?gh_jid=123", "", false},
+		{"https://boards.greenhouse.io/embed/job_app?for=acme&token=123", "", false},
+		// Greenhouse's own embed link with only the job's token names no board.
+		{"https://boards.greenhouse.io/embed/job_app?token=123", "123", true},
 		{"https://example.com/jobs?gh_jid=abc", "", false},
 		{"https://example.com/jobs/123", "", false},
 		{"not a url", "", false},
@@ -25,6 +30,15 @@ func TestGreenhouseJobIDOnAnEmployersDomain(t *testing.T) {
 		if ok != c.ok || (ok && id != c.id) {
 			t.Errorf("greenhouseJobID(%q) = %q, %v; want %q, %v", c.link, id, ok, c.id, c.ok)
 		}
+	}
+}
+
+func TestGreenhouseLookupAsksGreenhouseNotTheCareersPage(t *testing.T) {
+	if got, ok := GreenhouseLookup("https://careers.example.com/?gh_jid=123&utm_source=x"); !ok || got != "https://boards.greenhouse.io/embed/job_app?token=123" {
+		t.Errorf("lookup = %q, %v", got, ok)
+	}
+	if _, ok := GreenhouseLookup("https://job-boards.greenhouse.io/acme/jobs/123"); ok {
+		t.Error("a link that names its board needs no lookup")
 	}
 }
 
@@ -66,6 +80,16 @@ func TestCustomDomainGreenhouseFormIsReadFromItsBoard(t *testing.T) {
 	}
 	if form.ApplyURL != "https://careers.example.com/?gh_jid=123&utm_source=arbeitnow.com" {
 		t.Errorf("the form should keep the link the user applies at, got %q", form.ApplyURL)
+	}
+}
+
+func TestBareGreenhouseEmbedLinkIsReadFromItsBoard(t *testing.T) {
+	reader := customDomainReader(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "https://job-boards.greenhouse.io/embed/job_app?for=acme&token=123", http.StatusMovedPermanently)
+	})
+	form, err := reader.Fetch(context.Background(), "https://boards.greenhouse.io/embed/job_app?token=123")
+	if err != nil || form.Board != "acme" || len(form.Fields) == 0 {
+		t.Fatalf("form = %+v, err = %v", form, err)
 	}
 }
 

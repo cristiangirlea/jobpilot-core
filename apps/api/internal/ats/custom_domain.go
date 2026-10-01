@@ -18,16 +18,37 @@ const greenhouseLegacy = "https://boards.greenhouse.io"
 
 var digitsOnly = regexp.MustCompile(`^\d+$`)
 
-// greenhouseJobID reports the Greenhouse job behind a link on an employer's own
-// domain. Greenhouse's embed puts the job id in the gh_jid parameter; links on
-// Greenhouse's own hosts are left to Detect.
+// greenhouseJobID reports a Greenhouse job whose link names no board: one on
+// an employer's own domain, where Greenhouse's embed puts the job id in the
+// gh_jid parameter, or Greenhouse's own embed link carrying only the job's
+// token. Links that do name the board are left to Detect.
 func greenhouseJobID(applyURL string) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(applyURL))
-	if err != nil || parsed.Host == "" || greenhousePattern.MatchString(strings.ToLower(parsed.Host)) {
+	if err != nil || parsed.Hostname() == "" {
 		return "", false
 	}
-	id := parsed.Query().Get("gh_jid")
+	query := parsed.Query()
+	if greenhousePattern.MatchString(strings.ToLower(parsed.Hostname())) {
+		id := query.Get("token")
+		if strings.Contains(parsed.Path, "/embed/job_app") && query.Get("for") == "" && digitsOnly.MatchString(id) {
+			return id, true
+		}
+		return "", false
+	}
+	id := query.Get("gh_jid")
 	return id, digitsOnly.MatchString(id)
+}
+
+// GreenhouseLookup is the address at Greenhouse that answers for a job whose
+// link names no board: a redirect while the job is open, 404 once it is gone.
+// The link check asks it instead of an employer's careers page, which answers
+// the same whatever the job's state.
+func GreenhouseLookup(link string) (string, bool) {
+	id, ok := greenhouseJobID(link)
+	if !ok {
+		return "", false
+	}
+	return greenhouseLegacy + "/embed/job_app?token=" + id, true
 }
 
 func (r *Reader) greenhouseLegacyOrigin() string {
@@ -58,15 +79,15 @@ func (r *Reader) greenhouseBoard(ctx context.Context, jobID string) (string, err
 	case response.StatusCode == http.StatusNotFound:
 		return "", ErrNotFound
 	case response.StatusCode < 300 || response.StatusCode > 399:
-		return "", fmt.Errorf("the employer's job board returned %d", response.StatusCode)
+		return "", fmt.Errorf("Greenhouse did not say which board this job is on (it answered %d)", response.StatusCode)
 	}
 	location, err := response.Location()
 	if err != nil {
-		return "", fmt.Errorf("the employer's job board gave no board for this job")
+		return "", fmt.Errorf("Greenhouse did not say which board this job is on")
 	}
 	provider, board, id, ok := Detect(location.String())
 	if !ok || provider != ProviderGreenhouse || id != jobID {
-		return "", fmt.Errorf("the employer's job board gave no board for this job")
+		return "", fmt.Errorf("Greenhouse did not say which board this job is on")
 	}
 	return board, nil
 }
