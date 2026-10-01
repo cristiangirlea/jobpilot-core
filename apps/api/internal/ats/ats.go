@@ -101,8 +101,9 @@ const greenhouseAPI = "https://boards-api.greenhouse.io"
 type Reader struct {
 	client         *http.Client
 	greenhouseBase string
-	// ashbyBase replaces the Ashby origin in tests.
-	ashbyBase string
+	// ashbyBase and greenhouseLegacyBase replace those origins in tests.
+	ashbyBase            string
+	greenhouseLegacyBase string
 }
 
 func NewReader() *Reader {
@@ -198,6 +199,15 @@ func splitPath(path string) []string {
 func (r *Reader) Fetch(ctx context.Context, applyURL string) (Form, error) {
 	provider, board, jobID, ok := Detect(applyURL)
 	if !ok {
+		// A Greenhouse posting on the employer's own domain carries only its
+		// job id; Greenhouse names the board, and the form is read from there.
+		if id, isGreenhouse := greenhouseJobID(applyURL); isGreenhouse {
+			board, err := r.greenhouseBoard(ctx, id)
+			if err != nil {
+				return Form{Provider: ProviderGreenhouse, JobID: id, ApplyURL: applyURL}, err
+			}
+			return r.greenhouse(ctx, board, id, applyURL)
+		}
 		return Form{}, ErrUnsupported
 	}
 	switch provider {

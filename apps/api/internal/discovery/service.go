@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/generator"
 	"jobpilot/core/api/internal/matching"
@@ -424,6 +425,11 @@ func (s *Service) CheckJob(ctx context.Context, job store.LinkToCheck, timeout t
 	for _, link := range []string{job.ApplyURL, job.EmployerURL} {
 		if link == "" || result.Closed {
 			continue
+		}
+		// A Greenhouse board on the employer's own site shows the same page
+		// whether or not the job is open; Greenhouse itself can say.
+		if lookup, ok := ats.GreenhouseLookup(link); ok {
+			link = lookup
 		}
 		checkCtx, cancel := context.WithTimeout(ctx, timeout)
 		closed, reason, err := s.Links.Check(checkCtx, link)
