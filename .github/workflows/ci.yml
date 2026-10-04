@@ -119,7 +119,7 @@ jobs:
           command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
           sh migrations/migrate.sh
       # migrate.sh's promises: a second run applies nothing; two runs at once on a fresh database
-      # both succeed and apply each file once; a database the old loop migrated is accepted.
+      # both succeed and apply each file once; a database the old loop migrated is accepted (by the image).
       - name: Migrations run once, also when started together
         run: |
           url=postgres://jobpilot:jobpilot@localhost:5432
@@ -128,7 +128,7 @@ jobs:
           test "$(grep -c '^skip ' "$RUNNER_TEMP/again.log")" -eq "$n"
           if grep '^apply ' "$RUNNER_TEMP/again.log"; then echo "a second run applied files again"; exit 1; fi
 
-          psql -h localhost -U jobpilot -d jobpilot -c 'CREATE DATABASE migrate_concurrent' -c 'CREATE DATABASE migrate_legacy'
+          psql -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d jobpilot -c 'CREATE DATABASE migrate_concurrent' -c 'CREATE DATABASE migrate_legacy'
           DATABASE_URL="$url/migrate_concurrent?sslmode=disable" sh migrations/migrate.sh > "$RUNNER_TEMP/a.log" & a=$!
           DATABASE_URL="$url/migrate_concurrent?sslmode=disable" sh migrations/migrate.sh > "$RUNNER_TEMP/b.log" & b=$!
           wait "$a"; wait "$b"
@@ -136,7 +136,9 @@ jobs:
           test "$(psql -h localhost -U jobpilot -d migrate_concurrent -tAc 'SELECT count(*) FROM schema_migrations')" -eq "$n"
 
           for f in migrations/*.sql; do psql -q -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d migrate_legacy -f "$f" > /dev/null; done
-          DATABASE_URL="$url/migrate_legacy?sslmode=disable" sh migrations/migrate.sh > /dev/null
+          # Through the image, as compose and Kubernetes run it (entrypoint, uid 70, MIGRATIONS_DIR).
+          docker build -q -t jobpilot-migrate:ci migrations > /dev/null
+          docker run --rm --network host -e DATABASE_URL="$url/migrate_legacy?sslmode=disable" jobpilot-migrate:ci > /dev/null
           test "$(psql -h localhost -U jobpilot -d migrate_legacy -tAc 'SELECT count(*) FROM schema_migrations')" -eq "$n"
       # Tests whose subject is SQL run against the migrated database, before
       # the API starts; without the variable they skip.

@@ -9,6 +9,10 @@
 # A database migrated before schema_migrations existed gets every file once more on its first
 # run, which is what each start did until then; from then on only new files run.
 #
+# Connect directly (CloudNativePG: the <cluster>-rw service), never through a transaction-mode
+# pooler: the advisory lock belongs to one server connection, which a pooler hands to others.
+# A file must not BEGIN or COMMIT itself (its COMMIT would end the transaction that records it).
+#
 #   DATABASE_URL=postgres://... sh migrations/migrate.sh
 #
 # MIGRATIONS_DIR defaults to this script's directory; MIGRATE_LOCK_WAIT (default 10min) bounds the
@@ -17,6 +21,7 @@ set -eu
 
 : "${DATABASE_URL:?DATABASE_URL must name the database to migrate}"
 dir=${MIGRATIONS_DIR:-$(dirname "$0")}
+cd "$dir"
 lock_wait=${MIGRATE_LOCK_WAIT:-10min}
 lock_timeout=${MIGRATE_LOCK_TIMEOUT:-30s}
 
@@ -24,11 +29,14 @@ for t in "$lock_wait" "$lock_timeout"; do
   printf '%s\n' "$t" | grep -Eq '^[0-9]+(ms|s|min)$' || { echo "migrate: '$t' is not a duration like 30s or 10min" >&2; exit 2; }
 done
 
-# Checked before psql starts, so a bad name cannot leave it running half a script.
-files=$(find "$dir" -maxdepth 1 -name '*.sql' | sort)
+# Checked before psql starts, so a bad file cannot leave it running half a script. Names are
+# plain (no spaces or quotes), so the lists below split safely and \i needs no quoting.
+files=$(find . -maxdepth 1 -name '*.sql' | sed 's|^\./||' | LC_ALL=C sort)
 test -n "$files" || { echo "migrate: no .sql files in $dir" >&2; exit 2; }
 for f in $files; do
-  basename "$f" | grep -Eq '^[0-9]{3}_[a-z0-9_]+\.sql$' || { echo "migrate: $f is not named NNN_name.sql" >&2; exit 2; }
+  printf '%s\n' "$f" | grep -Eq '^[0-9]{3}_[a-z0-9_]+\.sql$' || { echo "migrate: $f is not named NNN_name.sql" >&2; exit 2; }
+  # A statement on its own line; PL/pgSQL's BEGIN (no semicolon) and END; inside $$ bodies pass.
+  ! grep -Eiq '^[[:space:]]*(BEGIN|COMMIT|ROLLBACK|START[[:space:]]+TRANSACTION)[[:space:]]*;' "$f" || { echo "migrate: $f has its own BEGIN/COMMIT; each file already runs in a transaction" >&2; exit 2; }
 done
 
 {
@@ -44,16 +52,15 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 );
 EOF
   for f in $files; do
-    name=$(basename "$f")
     cat <<EOF
-SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '$name') AS applied \gset
+SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE filename = '$f') AS applied \gset
 \if :applied
-\echo skip $name
+\echo skip $f
 \else
-\echo apply $name
+\echo apply $f
 BEGIN;
-\i '$f'
-INSERT INTO schema_migrations (filename) VALUES ('$name');
+\i $f
+INSERT INTO schema_migrations (filename) VALUES ('$f');
 COMMIT;
 \endif
 EOF

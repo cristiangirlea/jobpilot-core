@@ -81,7 +81,7 @@ Open:
 - API health: [http://localhost:8080/api/health](http://localhost:8080/api/health)
 - PostgreSQL: `localhost:5432`
 
-On first startup, Compose builds the API and web images, waits for PostgreSQL, runs every migration, and starts the services. PostgreSQL data persists in the `jobpilot_postgres` Docker volume.
+On first startup, Compose builds the API and web images, waits for PostgreSQL, applies the migrations not applied yet, and starts the services. PostgreSQL data persists in the `jobpilot_postgres` Docker volume.
 
 ### First-use workflow
 
@@ -851,7 +851,7 @@ A browser session holds both scopes and no token id, which is exactly what those
 
 ## Database and migrations
 
-PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrations/migrate.sh` (the `migrate` service, and the `jobpilot-migrate` image built from `migrations/`) applies each file once, in order. It runs in one psql session behind an advisory lock, so runners started together take turns, and it records applied files in `schema_migrations` in the same transaction as the file. A file that fails is rolled back and retried on the next run. `MIGRATE_LOCK_TIMEOUT` (default 30s) makes a migration that waits on a busy table fail instead of blocking queries behind it. A database migrated before `schema_migrations` existed gets every file once more on its first run, then only new files.
+PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrations/migrate.sh` (the `migrate` service, and the `jobpilot-migrate` image built from `migrations/`) applies each file once, in order. It runs in one psql session behind an advisory lock, so runners started together take turns, and it records applied files in `schema_migrations` in the same transaction as the file. A file that fails is rolled back and retried on the next run. `MIGRATE_LOCK_TIMEOUT` (default 30s) bounds how long a migration waits on a busy table, and so how long queries queue behind it, before it fails and is retried. It connects directly to PostgreSQL, never through a transaction-mode pooler, which would hand the advisory lock's connection to other clients. A migration file must not `BEGIN` or `COMMIT` itself; the script rejects one that does. A database migrated before `schema_migrations` existed gets every file once more on its first run, then only new files.
 
 | Migration | Purpose |
 |---|---|

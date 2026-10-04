@@ -24,7 +24,7 @@ test:
 	$(TEST_WEB)
 
 migrate:
-	docker compose run --rm migrate
+	docker compose run --rm --build migrate
 
 seed:
 	docker compose run --rm --entrypoint /app/seed api
