@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"syscall"
 	"time"
 )
 
 func main() {
 	cfg := config.Load()
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	// SIGTERM is how Kubernetes and docker stop a container; both end in a graceful shutdown.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {

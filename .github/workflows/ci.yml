@@ -81,6 +81,27 @@ jobs:
       - name: Build the migrate image
         run: docker build migrations
 
+  manifests:
+    name: deploy manifests
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      # kustomize renders deploy/base and kubeconform checks it against Kubernetes' schemas, both
+      # pinned releases checked against the SHA-256 each publishes.
+      - name: Render and validate deploy/base
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSL -o "$RUNNER_TEMP/kustomize.tar.gz" https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv5.8.2/kustomize_v5.8.2_linux_amd64.tar.gz
+          echo "06af0a202c2b831207d0173f9c9cdb1b30abceca0747cb3fbb72792d26055c95  $RUNNER_TEMP/kustomize.tar.gz" | sha256sum -c -
+          curl -fsSL -o "$RUNNER_TEMP/kubeconform.tar.gz" https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz
+          echo "9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883  $RUNNER_TEMP/kubeconform.tar.gz" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/kustomize.tar.gz" -C "$bin" kustomize
+          tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$bin" kubeconform
+          "$bin/kustomize" build deploy/base > "$RUNNER_TEMP/base.yaml"
+          "$bin/kubeconform" -strict -summary "$RUNNER_TEMP/base.yaml"
+
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)
     runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}

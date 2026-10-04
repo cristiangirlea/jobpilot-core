@@ -1,0 +1,76 @@
+# The web app: Next's standalone server. Its API address is baked in at build time; for one origin
+# behind an Ingress (/api to the API, the rest here) the image is built with NEXT_PUBLIC_API_URL=/api.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jobpilot-web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jobpilot-web
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jobpilot-web
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: web
+          image: jobpilot-web
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            # Kubernetes sets HOSTNAME to the pod's name, and Next's server binds to HOSTNAME.
+            - name: HOSTNAME
+              value: 0.0.0.0
+            - name: PORT
+              value: "3000"
+          readinessProbe:
+            httpGet:
+              path: /login
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            runAsUser: 1001
+            runAsGroup: 1001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Next writes its fetch and image caches here at run time.
+            - name: next-cache
+              mountPath: /app/.next/cache
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: next-cache
+          emptyDir:
+            sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jobpilot-web
+spec:
+  selector:
+    app.kubernetes.io/name: jobpilot-web
+  ports:
+    - name: http
+      port: 3000
+      targetPort: http

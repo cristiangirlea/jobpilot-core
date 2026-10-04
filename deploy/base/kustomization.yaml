@@ -1,0 +1,17 @@
+# JobPilot on Kubernetes, the part that belongs with the code. An overlay (the infra repo's
+# apps/jobpilot) adds the namespace, the CloudNativePG Cluster named jobpilot-db, the jobpilot-jwt
+# secret, the Ingress (/api to jobpilot-api without stripping the prefix, the rest to jobpilot-web)
+# and the images, pinned by digest (kustomize then drops any tag; the commit they were built from
+# is the overlay's source ref):
+#   images:
+#     - name: jobpilot-api
+#       newName: registry.localhost:5000/jobpilot-api
+#       digest: sha256:...
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: jobpilot
+resources:
+  - api.yaml
+  - web.yaml
