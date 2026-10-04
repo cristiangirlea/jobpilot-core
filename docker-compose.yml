@@ -16,16 +16,15 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Applies each migration once (migrations/migrate.sh); the same image is the API's init
+  # container in Kubernetes.
   migrate:
-    image: postgres:16-alpine
+    build: ./migrations
     depends_on:
       postgres:
         condition: service_healthy
     environment:
-      PGPASSWORD: jobpilot
-    volumes:
-      - ./migrations:/migrations:ro
-    command: ["sh", "-c", "for f in /migrations/*.sql; do psql -v ON_ERROR_STOP=1 -h postgres -U jobpilot -d jobpilot -f $$f; done"]
+      DATABASE_URL: postgres://jobpilot:jobpilot@postgres:5432/jobpilot?sslmode=disable
     restart: "no"
 
   api:
