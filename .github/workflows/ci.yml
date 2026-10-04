@@ -219,13 +219,14 @@ jobs:
           path: ${{ runner.temp }}/api.log
 
   # On master, on the lab runners only, once every check has passed: the images the infra overlay
-  # deploys, pushed to the cluster's registry (plain HTTP, reachable only from inside the cluster)
-  # under the commit SHA. The summary carries the overlay's `images:` block, pinned by digest.
-  # A newer master push can cancel an older run still waiting to start (the concurrency group);
-  # the newer commit's images supersede it.
+  # deploys, pushed to the cluster's registry (plain HTTP; the nodes and runner pods use it as
+  # registry.localhost:5000) under the commit SHA. The summary carries the overlay's `images:`
+  # block, pinned by digest. A newer master run can cancel an older one still waiting to start (the
+  # concurrency group); the newer commit's images supersede it. A manual run on master publishes
+  # too, which is also how to republish a commit (Run workflow, branch master).
   publish:
     name: publish images (lab registry)
-    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.CI_RUNNER != ''
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && vars.CI_RUNNER != ''
     needs: [go, web, images, manifests, integration]
     runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 20
@@ -251,8 +252,9 @@ jobs:
             ref="$REGISTRY/$name:$GITHUB_SHA"
             docker build --pull "$@" -t "$ref" "$ctx"
             docker push "$ref"
-            digest=$(curl -fsSI --resolve "registry.localhost:5000:$ip" -H "Accept: $accept" "http://$REGISTRY/v2/$name/manifests/$GITHUB_SHA" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
-            test -n "$digest" || { echo "the registry has no $ref"; exit 1; }
+            digest=$(curl -fsSI --resolve "registry.localhost:5000:$ip" -H "Accept: $accept" "http://$REGISTRY/v2/$name/manifests/$GITHUB_SHA" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p') \
+              || { echo "the registry did not answer for $ref"; exit 1; }
+            test -n "$digest" || { echo "the registry answered for $ref without a digest"; exit 1; }
             printf '  - name: %s\n    newName: %s/%s\n    digest: %s\n' "$name" "$REGISTRY" "$name" "$digest" >> "$out"
           }
           publish jobpilot-api apps/api
