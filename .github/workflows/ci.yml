@@ -217,3 +217,50 @@ jobs:
         with:
           name: api-log
           path: ${{ runner.temp }}/api.log
+
+  # On master, on the lab runners only, once every check has passed: the images the infra overlay
+  # deploys, pushed to the cluster's registry (plain HTTP, reachable only from inside the cluster)
+  # under the commit SHA. The summary carries the overlay's `images:` block, pinned by digest.
+  # A newer master push can cancel an older run still waiting to start (the concurrency group);
+  # the newer commit's images supersede it.
+  publish:
+    name: publish images (lab registry)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master' && vars.CI_RUNNER != ''
+    needs: [go, web, images, manifests, integration]
+    runs-on: ${{ vars.CI_RUNNER }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      REGISTRY: registry.localhost:5000
+    steps:
+      - uses: actions/checkout@v7
+      - name: Build and push
+        run: |
+          # curl answers any *.localhost name with loopback itself, while Docker asks DNS: give curl
+          # the address the cluster's resolver returns.
+          ip=$(getent ahostsv4 registry.localhost | awk 'NR==1 {print $1}')
+          test -n "$ip" || { echo "registry.localhost does not resolve on this runner"; exit 1; }
+          accept='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
+          out="$RUNNER_TEMP/images.yaml"
+          printf '# jobpilot %s\nimages:\n' "$GITHUB_SHA" > "$out"
+          publish() { # name, build context, extra docker build arguments
+            name=$1 ctx=$2
+            shift 2
+            ref="$REGISTRY/$name:$GITHUB_SHA"
+            docker build --pull "$@" -t "$ref" "$ctx"
+            docker push "$ref"
+            digest=$(curl -fsSI --resolve "registry.localhost:5000:$ip" -H "Accept: $accept" "http://$REGISTRY/v2/$name/manifests/$GITHUB_SHA" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
+            test -n "$digest" || { echo "the registry has no $ref"; exit 1; }
+            printf '  - name: %s\n    newName: %s/%s\n    digest: %s\n' "$name" "$REGISTRY" "$name" "$digest" >> "$out"
+          }
+          publish jobpilot-api apps/api
+          # One origin behind the Ingress: the browser calls /api on the page's own host.
+          publish jobpilot-web apps/web --build-arg NEXT_PUBLIC_API_URL=/api
+          publish jobpilot-migrate migrations
+          { echo '### Images for the infra overlay'; echo; echo '```yaml'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: images
+          path: ${{ runner.temp }}/images.yaml
