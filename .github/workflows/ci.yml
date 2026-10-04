@@ -100,7 +100,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/kustomize.tar.gz" -C "$bin" kustomize
           tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$bin" kubeconform
           "$bin/kustomize" build deploy/base > "$RUNNER_TEMP/base.yaml"
-          "$bin/kubeconform" -strict -summary "$RUNNER_TEMP/base.yaml"
+          "$bin/kubeconform" -strict -summary -kubernetes-version 1.35.0 "$RUNNER_TEMP/base.yaml"
 
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)

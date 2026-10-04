@@ -87,12 +87,20 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          volumeMounts:
+            # Multipart uploads larger than ParseMultipartForm's 12 MiB in memory spill here.
+            - name: tmp
+              mountPath: /tmp
           resources:
             requests:
               cpu: 50m
               memory: 64Mi
             limits:
               memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
 ---
 apiVersion: v1
 kind: Service

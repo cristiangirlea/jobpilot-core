@@ -3,9 +3,16 @@
 # secret, the Ingress (/api to jobpilot-api without stripping the prefix, the rest to jobpilot-web)
 # and the images, pinned by digest (kustomize then drops any tag; the commit they were built from
 # is the overlay's source ref):
+# All three, or the unpinned one is pulled from Docker Hub by its bare name:
 #   images:
 #     - name: jobpilot-api
 #       newName: registry.localhost:5000/jobpilot-api
+#       digest: sha256:...
+#     - name: jobpilot-web
+#       newName: registry.localhost:5000/jobpilot-web
+#       digest: sha256:...
+#     - name: jobpilot-migrate
+#       newName: registry.localhost:5000/jobpilot-migrate
 #       digest: sha256:...
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization

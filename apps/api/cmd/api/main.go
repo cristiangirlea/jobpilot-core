@@ -19,7 +19,7 @@ import (
 
 func main() {
 	cfg := config.Load()
-	// SIGTERM is how Kubernetes and docker stop a container; both end in a graceful shutdown.
+	// SIGTERM is how Kubernetes and docker stop a container; it starts the same drain as Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	pool, err := database.Open(ctx, cfg.DatabaseURL)
@@ -77,15 +77,22 @@ func main() {
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
 	go discoveryService.Start(ctx)
 	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: ats.NewReader().WithGreenhouseBase(cfg.ATSGreenhouseURL), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
+	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
+	drained := make(chan struct{})
 	go func() {
+		defer close(drained)
 		<-ctx.Done()
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			slog.Error("shutdown did not finish draining", "error", err)
+		}
 	}()
 	slog.Info("JobPilot API listening", "addr", cfg.Addr)
 	if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
+	<-drained
 }
