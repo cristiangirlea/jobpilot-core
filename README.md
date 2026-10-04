@@ -190,6 +190,7 @@ apps/
 migrations/                            idempotent PostgreSQL migrations, migrate.sh and its image
 scripts/                               PowerShell smoke and regression tests
 docker-compose.yml                     local PostgreSQL, migrations, API, web
+deploy/base/                           Kubernetes manifests for the API and web (an overlay adds the rest)
 Makefile                               common developer commands
 .env.example                           required local secret template
 ```
@@ -941,6 +942,21 @@ The `cli` provider bills against an existing subscription instead of per token, 
 | `NEXT_PUBLIC_API_URL` | API base URL; Compose uses `http://localhost:8080` |
 
 No LLM, Redis, Kafka, Elasticsearch, or Kubernetes configuration is required.
+
+## Kubernetes
+
+`deploy/base/` holds the manifests that belong with the code:
+- the API Deployment and Service. One replica, replaced with `Recreate`, because discovery's scheduler runs in-process. `jobpilot-migrate` is its init container.
+- the web Deployment and Service.
+
+Both run as non-root numeric users with read-only root filesystems. An overlay supplies the rest:
+- the namespace;
+- a CloudNativePG `Cluster` named `jobpilot-db`, whose `jobpilot-db-app` secret's `uri` becomes `DATABASE_URL`, directly to the primary, never through a pooler;
+- a `jobpilot-jwt` secret with key `secret` (required);
+- an Ingress sending `/api` to `jobpilot-api` without stripping the prefix, and the rest to `jobpilot-web`;
+- the images, pinned by digest.
+
+The lab cluster's overlay lives in the infra repository (`apps/jobpilot`). For that single origin, the web image is built with `NEXT_PUBLIC_API_URL=/api`. CI renders `deploy/base` and validates it with kubeconform.
 
 ## Development commands
 

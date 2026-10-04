@@ -10,7 +10,8 @@ FROM alpine:3.21
 RUN adduser -D -H -u 10001 jobpilot
 WORKDIR /app
 COPY --from=build /out/api /out/seed /app/
-USER jobpilot
+# Numeric, so Kubernetes can check runAsNonRoot.
+USER 10001:10001
 EXPOSE 8080
 ENTRYPOINT ["/app/api"]
 

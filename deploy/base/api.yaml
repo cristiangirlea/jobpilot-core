@@ -1,0 +1,115 @@
+# The API, with the migrations as its init container (migrations/migrate.sh: each file once, behind
+# an advisory lock). One replica, replaced with Recreate: discovery's scheduler runs in-process, so
+# two pods side by side would both schedule runs.
+#
+# Expects in the namespace (the overlay provides them):
+#   jobpilot-db-app  CloudNativePG's app secret for a Cluster named jobpilot-db; its `uri` points at
+#                    jobpilot-db-rw, the primary, directly (never a pooler: #63)
+#   jobpilot-jwt     key `secret`, the token signing key; required, since the API would otherwise
+#                    fall back to a development secret
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jobpilot-api
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: jobpilot-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: jobpilot-api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: migrate
+          image: jobpilot-migrate
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: jobpilot-db-app
+                  key: uri
+          securityContext:
+            runAsUser: 70
+            runAsGroup: 70
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      containers:
+        - name: api
+          image: jobpilot-api
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: API_ADDR
+              value: ":8080"
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: jobpilot-db-app
+                  key: uri
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: jobpilot-jwt
+                  key: secret
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 3
+          securityContext:
+            runAsUser: 10001
+            runAsGroup: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Multipart uploads larger than ParseMultipartForm's 12 MiB in memory spill here.
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 512Mi
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jobpilot-api
+spec:
+  selector:
+    app.kubernetes.io/name: jobpilot-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
