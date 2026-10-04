@@ -187,7 +187,7 @@ apps/
     internal/jobpilot/tools.go         tool set and host instructions
     internal/jobpilot/types.go         wire mirrors and agent-facing summaries
     e2e_test.go                        stdio test against a running API
-migrations/                            idempotent PostgreSQL migrations
+migrations/                            idempotent PostgreSQL migrations, migrate.sh and its image
 scripts/                               PowerShell smoke and regression tests
 docker-compose.yml                     local PostgreSQL, migrations, API, web
 Makefile                               common developer commands
@@ -851,7 +851,7 @@ A browser session holds both scopes and no token id, which is exactly what those
 
 ## Database and migrations
 
-PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL and are rerun safely by the `migrate` service.
+PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrations/migrate.sh` (the `migrate` service, and the `jobpilot-migrate` image built from `migrations/`) applies each file once, in order. It runs in one psql session behind an advisory lock, so runners started together take turns, and it records applied files in `schema_migrations` in the same transaction as the file. A file that fails is rolled back and retried on the next run. `MIGRATE_LOCK_TIMEOUT` (default 30s) makes a migration that waits on a busy table fail instead of blocking queries behind it. A database migrated before `schema_migrations` existed gets every file once more on its first run, then only new files.
 
 | Migration | Purpose |
 |---|---|
@@ -947,7 +947,7 @@ No LLM, Redis, Kafka, Elasticsearch, or Kubernetes configuration is required.
 ```bash
 make dev              # build and run PostgreSQL, migrations, API, and web
 make test             # Go tests (API and MCP) and frontend TypeScript typecheck
-make migrate          # rerun SQL migrations
+make migrate          # apply SQL migrations not applied yet
 make seed             # add sample data to the first registered user
 make smoke            # full local API workflow
 make smoke-live       # capped live Remotive discovery and auto-prepare flow
@@ -1138,7 +1138,7 @@ make logs
 make migrate
 ```
 
-Migrations are idempotent. A normal restart should not require deleting data.
+Only files not yet recorded in `schema_migrations` run. A normal restart should not require deleting data. To run a file again, delete its row from `schema_migrations` first.
 
 ### Make says `No rule to make target`
 

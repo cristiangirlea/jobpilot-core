@@ -78,6 +78,8 @@ jobs:
         run: docker build apps/api
       - name: Build the web image
         run: docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web
+      - name: Build the migrate image
+        run: docker build migrations
 
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)
@@ -111,11 +113,31 @@ jobs:
             apps/api/go.sum
             apps/mcp/go.sum
       - name: Apply migrations
+        env:
+          DATABASE_URL: postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable
         run: |
           command -v psql >/dev/null || { sudo apt-get update && sudo apt-get install -y postgresql-client; }
-          for f in migrations/*.sql; do
-            psql -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d jobpilot -f "$f"
-          done
+          sh migrations/migrate.sh
+      # migrate.sh's promises: a second run applies nothing; two runs at once on a fresh database
+      # both succeed and apply each file once; a database the old loop migrated is accepted.
+      - name: Migrations run once, also when started together
+        run: |
+          url=postgres://jobpilot:jobpilot@localhost:5432
+          n=$(ls migrations/*.sql | wc -l)
+          DATABASE_URL="$url/jobpilot?sslmode=disable" sh migrations/migrate.sh > "$RUNNER_TEMP/again.log"
+          test "$(grep -c '^skip ' "$RUNNER_TEMP/again.log")" -eq "$n"
+          if grep '^apply ' "$RUNNER_TEMP/again.log"; then echo "a second run applied files again"; exit 1; fi
+
+          psql -h localhost -U jobpilot -d jobpilot -c 'CREATE DATABASE migrate_concurrent' -c 'CREATE DATABASE migrate_legacy'
+          DATABASE_URL="$url/migrate_concurrent?sslmode=disable" sh migrations/migrate.sh > "$RUNNER_TEMP/a.log" & a=$!
+          DATABASE_URL="$url/migrate_concurrent?sslmode=disable" sh migrations/migrate.sh > "$RUNNER_TEMP/b.log" & b=$!
+          wait "$a"; wait "$b"
+          test "$(cat "$RUNNER_TEMP/a.log" "$RUNNER_TEMP/b.log" | grep -c '^apply ')" -eq "$n"
+          test "$(psql -h localhost -U jobpilot -d migrate_concurrent -tAc 'SELECT count(*) FROM schema_migrations')" -eq "$n"
+
+          for f in migrations/*.sql; do psql -q -v ON_ERROR_STOP=1 -h localhost -U jobpilot -d migrate_legacy -f "$f" > /dev/null; done
+          DATABASE_URL="$url/migrate_legacy?sslmode=disable" sh migrations/migrate.sh > /dev/null
+          test "$(psql -h localhost -U jobpilot -d migrate_legacy -tAc 'SELECT count(*) FROM schema_migrations')" -eq "$n"
       # Tests whose subject is SQL run against the migrated database, before
       # the API starts; without the variable they skip.
       - name: Postgres-backed API tests
