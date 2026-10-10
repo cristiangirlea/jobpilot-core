@@ -3,3 +3,6 @@
 *.ttf binary
 *.png binary
 *.ico binary
+
+# Hook scripts run under sh, which breaks on CRLF line endings.
+.claude/hooks/* text eol=lf
