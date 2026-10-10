@@ -40,3 +40,5 @@ step's result in one line; on a failure, show the error text and fix it before r
    Stop the API by its PID and remove the container afterwards.
 
 While iterating, run only the touched module's tests; run the whole list once before the PR.
+
+This skill does not merge: merging is through the PR, under AGENTS.md's conditions.

@@ -72,9 +72,15 @@ real profile, CV, applications and tokens.
 
 ## Working rules
 
-- One branch per change, one PR against `master`; **the owner merges**. Never `gh pr merge`, never
-  push to `master`, never tag or deploy. A push or manual workflow run on `master` publishes images
-  to the lab registry, so that is the owner's step too.
+- One branch per change, one PR against `master`. **Everything is tested before a merge**: the
+  full local checks (`/check`), tests for every behaviour the change adds or alters, and CI green
+  on the owner's runner. Only then may an agent merge its PR, and only through the PR (`gh pr
+  merge <n> --merge --delete-branch --match-head-commit <sha>`), when an independent review ran
+  and its findings are fixed, a security read of the diff has nothing open, and the head being
+  merged is the commit all of that ran on. What could not be tested is said in the PR and waits
+  for the owner. Never auto-merge (`--auto`) or `--admin`, never push to `master`, never tag or
+  deploy. A merge, push or manual workflow run on `master` publishes images to the lab registry,
+  so each merge also needs the owner's yes in chat first, and a manual run stays the owner's step.
 - Commit messages and PR text: plain sentences, optionally an area first (`Migrations: ...`,
   `CI: ...`). No conventional-commit prefixes, no emoji, no AI attribution lines. Commit as
   `maintainer@example.com` (check `git config user.email`).
@@ -82,7 +88,7 @@ real profile, CV, applications and tokens.
   GitHub-hosted minutes: never add a hosted-runner job or fallback beyond what the workflow has.
 - Keep the Makefile and `ci.yml` in step (the workflow's header says so).
 - Other sessions merge concurrently: migration and PR numbers can be taken between branch and merge.
-  Check `ls migrations` and merge `master` before handing over.
+  Check `ls migrations` and merge `master` into the branch before the checks that precede a merge.
 - Secrets (`JWT_SECRET`, tokens, database passwords beyond Compose's dev ones) are never read,
   printed or committed.
 - Small diffs: don't restyle what you didn't change. Not sure? Ask, with one proposal.

@@ -128,10 +128,11 @@
       "PowerShell(docker compose logs *)",
       "PowerShell(psql *)",
       "PowerShell(pwsh -File scripts/agent-token.ps1 *)",
-      "PowerShell(powershell -File scripts/agent-token.ps1 *)"
+      "PowerShell(powershell -File scripts/agent-token.ps1 *)",
+      "Bash(gh pr merge *)",
+      "PowerShell(gh pr merge *)"
     ],
     "deny": [
-      "Bash(gh pr merge *)",
       "Bash(gh release *)",
       "Bash(gh workflow run *)",
       "Bash(gh run rerun *)",
@@ -155,7 +156,6 @@
       "Read(**/*.key)",
       "Read(**/*.p12)",
       "Read(**/*.pfx)",
-      "Bash(gh pr merge)",
       "Bash(gh api *-X PUT*)",
       "Bash(gh api *--method PUT*)",
       "Bash(gh api *-XPUT*)",
@@ -169,7 +169,6 @@
       "Bash(git push *refs/tags/*)",
       "Bash(git push *--mirror*)",
       "Bash(git push *--delete*)",
-      "PowerShell(gh pr merge *)",
       "PowerShell(gh release *)",
       "PowerShell(gh workflow run *)",
       "PowerShell(gh run rerun *)",
@@ -185,7 +184,6 @@
       "PowerShell(kubectl patch *)",
       "PowerShell(kubectl set *)",
       "PowerShell(tofu apply *)",
-      "PowerShell(gh pr merge)",
       "PowerShell(gh api *-X PUT*)",
       "PowerShell(gh api *--method PUT*)",
       "PowerShell(gh api *-XPUT*)",
@@ -204,7 +202,11 @@
       "Bash(docker build *--push*)",
       "PowerShell(go env -w*)",
       "PowerShell(go env -u*)",
-      "PowerShell(docker build *--push*)"
+      "PowerShell(docker build *--push*)",
+      "Bash(gh pr merge *--auto*)",
+      "Bash(gh pr merge *--admin*)",
+      "PowerShell(gh pr merge *--auto*)",
+      "PowerShell(gh pr merge *--admin*)"
     ]
   },
   "hooks": {
