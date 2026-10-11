@@ -214,7 +214,15 @@
       "Bash(docker buildx *)",
       "PowerShell(docker buildx *)",
       "Bash(docker build *push=true*)",
-      "PowerShell(docker build *push=true*)"
+      "PowerShell(docker build *push=true*)",
+      "Bash(docker build -o*)",
+      "PowerShell(docker build -o*)",
+      "Bash(docker build * -o*)",
+      "PowerShell(docker build * -o*)",
+      "Bash(docker build *type=registry*)",
+      "PowerShell(docker build *type=registry*)",
+      "Bash(docker image push *)",
+      "PowerShell(docker image push *)"
     ]
   },
   "hooks": {
