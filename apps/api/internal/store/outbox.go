@@ -241,7 +241,13 @@ func (r OutboxRefusal) Error() string { return string(r) }
 //
 // The checks live here rather than in the handler because they are a safety
 // rule, whatever the caller believes. The entry stays locked from the checks to
-// the approval, so a recompose cannot slip in between them.
+// the approval, so a recompose cannot slip in between them. The answers it
+// reads stay locked too (FOR SHARE): a revocation waits for the approval, so
+// the answers approved were approved together, and their writers lock only
+// their own row, so this order cannot deadlock with them. The CV is not
+// locked: SetCVApproval locks the CV before the entries, the other way round,
+// and it already carries a withdrawal into the entry (syncCVBlocker waits for
+// this lock, then moves an approved entry back to needs_review).
 func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -254,6 +260,12 @@ func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (mode
 	}
 	switch entry.Status {
 	case models.OutboxApproved:
+		// Done with the transaction before withJob takes another connection
+		// from the pool: holding this one while waiting for that could
+		// exhaust a small pool.
+		if err := tx.Rollback(ctx); err != nil {
+			return models.OutboxEntry{}, err
+		}
 		return s.withJob(ctx, entry), nil
 	case models.OutboxReady, models.OutboxNeedsReview:
 	case models.OutboxSent:
@@ -318,7 +330,7 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 			var bankApproved bool
 			err := pgx.ErrNoRows // a draft the bank never stored has nothing to approve
 			if answer.EntryID != "" {
-				err = tx.QueryRow(ctx, `SELECT answer, approved FROM answer_bank WHERE user_id=$1 AND id=$2`, userID, answer.EntryID).Scan(&banked, &bankApproved)
+				err = tx.QueryRow(ctx, `SELECT answer, approved FROM answer_bank WHERE user_id=$1 AND id=$2 FOR SHARE`, userID, answer.EntryID).Scan(&banked, &bankApproved)
 			}
 			if errors.Is(err, pgx.ErrNoRows) || (err == nil && !bankApproved) {
 				return OutboxRefusal(fmt.Sprintf("A required question carries a drafted answer you have not approved: %q. Approve it in the answer bank first.", answer.Label)), nil

@@ -91,6 +91,9 @@ func TestApprovingNeedsABrowserSessionAgainstPostgres(t *testing.T) {
 	if w = post("/api/outbox/"+entry.ID+"/approve", session); w.Code != http.StatusOK || status(w) != models.OutboxApproved {
 		t.Fatalf("the user's session must approve, got %d %s", w.Code, w.Body.String())
 	}
+	if w = post("/api/outbox/00000000-0000-0000-0000-000000000000/approve", session); w.Code != http.StatusNotFound {
+		t.Fatalf("a missing entry is a 404, got %d %s", w.Code, w.Body.String())
+	}
 
 	if w = post("/api/outbox/"+entry.ID+"/cancel", agent); w.Code != http.StatusOK || status(w) != models.OutboxCancelled {
 		t.Fatalf("a write-scoped agent token may still cancel, got %d %s", w.Code, w.Body.String())

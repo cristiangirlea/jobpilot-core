@@ -122,6 +122,22 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	if !again.ApprovedAt.Equal(*first.ApprovedAt) {
 		t.Fatalf("approving twice must keep the first approval, got %v then %v", first.ApprovedAt, again.ApprovedAt)
 	}
+	// Even on a one-connection pool: the transaction ends before the job is
+	// read through the pool.
+	sep := "?"
+	if strings.Contains(url, "?") {
+		sep = "&"
+	}
+	single, err := database.Open(ctx, url+sep+"pool_max_conns=1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer single.Close()
+	quick, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if again, err := New(single).ApproveOutboxEntry(quick, ana.ID, first.ID); err != nil || again.Status != models.OutboxApproved || again.Job == nil {
+		t.Fatalf("approving again on a one-connection pool: %+v, %v", again, err)
+	}
 
 	// Blockers still stop it.
 	refuses("a blocked entry", compose(job, cv.ID, nil, "Your profile has no email address."), "Your profile has no email address.")
@@ -166,6 +182,89 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	optionalDraft.Required = false
 	confirm := required("First name", "profile", "Ana", "")
 	approves("an optional AI draft and a profile answer to confirm", compose(job, cv.ID, []models.OutboxAnswer{optionalDraft, confirm}))
+
+	// Approving the CV clears its blocker, but not a required draft beside it.
+	pendingCV := newCV("pending", false)
+	pendingDraft := newDraft("Why us?", false)
+	both := compose(job, pendingCV.ID, []models.OutboxAnswer{required("Why us?", "ai", pendingDraft.Answer, pendingDraft.ID)}, CVBlocker)
+	if _, err := st.SetCVApproval(ctx, ana.ID, pendingCV.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if cleared, err := st.OutboxEntry(ctx, ana.ID, both.ID); err != nil || len(cleared.Blockers) != 0 || cleared.Status != models.OutboxReady {
+		t.Fatalf("approving the CV should clear its blocker, got %+v, %v", cleared, err)
+	}
+	refuses("a cleared CV blocker beside a required draft still pending", both, "not approved")
+
+	// The bank entry is compared as stored: wording up to surrounding space,
+	// and only the user's own entry.
+	spaced := newDraft("When can you start?", true)
+	approves("a draft differing only in surrounding space", compose(job, cv.ID, []models.OutboxAnswer{required("Start?", "ai", spaced.Answer+"\n", spaced.ID)}))
+	bobs, err := st.SaveAnswer(ctx, bob.ID, models.AnswerEntry{
+		QuestionKey: "motivation", QuestionText: "Why this team?", QuestionNormalized: "why this team " + run,
+		Answer: "Because of the team.", RoleFamily: "backend", Source: "ai", Approved: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refuses("a draft pointing at another user's answer", compose(job, cv.ID, []models.OutboxAnswer{required("Team?", "ai", bobs.Answer, bobs.ID)}), "not approved")
+
+	// needs_review with its blockers cleared waits for approval; failed does not.
+	reviewed := compose(job, cv.ID, nil)
+	if _, err := pool.Exec(ctx, `UPDATE application_outbox SET status='needs_review', blockers='{}' WHERE id=$1`, reviewed.ID); err != nil {
+		t.Fatal(err)
+	}
+	approves("needs_review with no blockers left", reviewed)
+	failed := compose(job, cv.ID, nil)
+	if _, err := pool.Exec(ctx, `UPDATE application_outbox SET status='failed' WHERE id=$1`, failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	refuses("a failed entry", failed, "Prepare it again")
+
+	// An approval reads each answer under a share lock, so it waits for a
+	// revocation in flight and then sees it, rather than approving on the
+	// committed value the revocation is about to replace.
+	revoked := newDraft("Where are you based?", true)
+	inFlight := compose(job, cv.ID, []models.OutboxAnswer{required("Based?", "ai", revoked.Answer, revoked.ID)})
+	revoking, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := revoking.Exec(ctx, `UPDATE answer_bank SET approved=false WHERE id=$1`, revoked.ID); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := st.ApproveOutboxEntry(ctx, ana.ID, inFlight.ID)
+		done <- err
+	}()
+	waiting := false
+	for i := 0; i < 250 && !waiting; i++ {
+		select {
+		case err := <-done:
+			_ = revoking.Rollback(ctx)
+			t.Fatalf("the approval must wait for the revocation in flight, but it finished: %v", err)
+		default:
+		}
+		var n int
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
+			WHERE datname=current_database() AND pid <> pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%FROM answer_bank%'`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if waiting = n > 0; !waiting {
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
+	if !waiting {
+		_ = revoking.Rollback(ctx)
+		t.Fatal("the approval never waited for the answer being revoked")
+	}
+	if err := revoking.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var waited OutboxRefusal
+	if err := <-done; !errors.As(err, &waited) || !strings.Contains(waited.Error(), "not approved") {
+		t.Fatalf("after the revocation the approval must be refused, got %v", err)
+	}
 
 	// Only the owner reaches an entry, and a missing one is a missing row.
 	if _, err := st.ApproveOutboxEntry(ctx, bob.ID, first.ID); !errors.Is(err, pgx.ErrNoRows) {
