@@ -18,12 +18,15 @@ var readOnlyPosts = map[string]bool{
 	"POST /api/discovery/detect":   true,
 }
 
-// sessionOnly routes refuse agent tokens outright, so that a leaked token
-// cannot mint siblings or revoke itself to cover its tracks.
-var sessionOnly = map[string]bool{
-	"GET /api/tokens":         true,
-	"POST /api/tokens":        true,
-	"DELETE /api/tokens/{id}": true,
+// sessionOnly routes refuse agent tokens outright, each through the wrapper
+// named here: token management, so that a leaked token cannot mint siblings or
+// revoke itself to cover its tracks, and approving an application, which is
+// the user's consent to send it.
+var sessionOnly = map[string]string{
+	"GET /api/tokens":               "session",
+	"POST /api/tokens":              "session",
+	"DELETE /api/tokens/{id}":       "session",
+	"POST /api/outbox/{id}/approve": "consent",
 }
 
 var routePattern = regexp.MustCompile(`m\.Handle\("([^"]+)",\s*(\w+)\(`)
@@ -46,10 +49,10 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 	seenWrite, seenSession := 0, 0
 	for _, m := range matches {
 		route, wrapper := m[1], m[2]
-		switch {
-		case sessionOnly[route]:
-			if wrapper != "session" {
-				t.Errorf("%s manages agent tokens, so it must use the session wrapper, not %s(", route, wrapper)
+		switch want, sessionRoute := sessionOnly[route]; {
+		case sessionRoute:
+			if wrapper != want {
+				t.Errorf("%s must refuse agent tokens through the %s( wrapper, not %s(", route, want, wrapper)
 			}
 			seenSession++
 		case strings.HasPrefix(route, "GET ") || readOnlyPosts[route]:

@@ -99,12 +99,14 @@ func RequireScope(scope string, next http.Handler) http.Handler {
 	})
 }
 
-// RequireSession refuses agent tokens outright. Token management uses it so
-// that a leaked token cannot mint siblings or revoke itself to cover tracks.
-func RequireSession(next http.Handler) http.Handler {
+// RequireSession refuses agent tokens outright, whatever their scopes, with a
+// message saying why. Token management uses it so that a leaked token cannot
+// mint siblings or revoke itself to cover tracks, and approving an application
+// so that the consent to send it only ever comes from the user.
+func RequireSession(message string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !IsSession(r.Context()) {
-			deny(w, "Use the web app to manage agent tokens.")
+			deny(w, message)
 			return
 		}
 		next.ServeHTTP(w, r)

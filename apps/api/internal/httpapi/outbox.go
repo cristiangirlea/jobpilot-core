@@ -304,20 +304,23 @@ func (s *Server) getOutboxEntry(w http.ResponseWriter, r *http.Request) {
 
 // approveOutboxEntry releases an application for sending. It does not send it:
 // no sender exists yet, and when one does it will pick up approved entries.
+// Only a browser session reaches it (the consent wrapper).
 func (s *Server) approveOutboxEntry(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.Store.SetOutboxStatus(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), models.OutboxApproved)
-	if err != nil && !isNotFound(err) {
-		// A refused approval is the user's problem to fix, not a server fault.
-		problem(w, 409, err.Error())
-		return
-	}
-	respond(w, entry, err)
+	entry, err := s.Store.ApproveOutboxEntry(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
+	respondOutbox(w, entry, err)
 }
 
 func (s *Server) cancelOutboxEntry(w http.ResponseWriter, r *http.Request) {
-	entry, err := s.Store.SetOutboxStatus(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), models.OutboxCancelled)
-	if err != nil && !isNotFound(err) {
-		problem(w, 409, err.Error())
+	entry, err := s.Store.CancelOutboxEntry(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
+	respondOutbox(w, entry, err)
+}
+
+// respondOutbox answers a refused approval or cancellation with 409: the
+// user's problem to fix, not a server fault.
+func respondOutbox(w http.ResponseWriter, entry models.OutboxEntry, err error) {
+	var refusal store.OutboxRefusal
+	if errors.As(err, &refusal) {
+		problem(w, 409, refusal.Error())
 		return
 	}
 	respond(w, entry, err)
