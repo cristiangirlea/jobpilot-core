@@ -213,3 +213,43 @@ func TestRecruiteeProbeRefusesPrivateAddresses(t *testing.T) {
 		t.Fatalf("a loopback careers site must not be fetched: err = %v, requests = %d", err, hits.Load())
 	}
 }
+
+// A loopback ATS_RECRUITEE_URL serves links on recruitee.com itself, but an
+// employer-domain link still goes through the guarded client, so neither the
+// configured fake nor a local server named by the link is reached.
+func TestConfiguredRecruiteeBaseKeepsEmployerDomainsGuarded(t *testing.T) {
+	var fakeHits, employerHits atomic.Int32
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fakeHits.Add(1)
+		if r.URL.Path != "/api/offers/backend-engineer" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write([]byte(recruiteeOfferJSON))
+	}))
+	defer fake.Close()
+	employer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		employerHits.Add(1)
+		w.Write([]byte(recruiteeOfferJSON))
+	}))
+	defer employer.Close()
+
+	reader := NewReader().WithRecruiteeBase(fake.URL)
+	form, err := reader.Fetch(context.Background(), "https://acme.recruitee.com/o/backend-engineer")
+	if err != nil || form.Provider != ProviderRecruitee || form.Board != "acme" || len(form.Fields) == 0 {
+		t.Fatalf("a recruitee.com link should be read from the configured fake: %+v, %v", form, err)
+	}
+	if fakeHits.Load() != 1 {
+		t.Fatalf("expected one request to the configured fake, got %d", fakeHits.Load())
+	}
+
+	fakeHits.Store(0)
+	for _, link := range []string{"https://careers.example.test/o/backend-engineer", employer.URL + "/o/backend-engineer"} {
+		if _, err := reader.Fetch(context.Background(), link); err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("%s must be refused, not read or closed: %v", link, err)
+		}
+	}
+	if fakeHits.Load() != 0 || employerHits.Load() != 0 {
+		t.Fatalf("an employer-domain link reached a local server: fake %d, employer %d", fakeHits.Load(), employerHits.Load())
+	}
+}

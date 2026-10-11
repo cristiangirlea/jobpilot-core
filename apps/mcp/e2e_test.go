@@ -497,7 +497,7 @@ func TestEndToEnd(t *testing.T) {
 			t.Fatalf("a rebuilt entry should be approvable again, got %+v", approval)
 		}
 
-		composeOtherBoards(t, call, fake, atsPort)
+		composeOtherBoards(t, call, fake, atsPort, email)
 	}
 
 	// The employer-form section imports five more jobs when it runs: the
@@ -725,13 +725,31 @@ func discoveryShareAndCounters(t *testing.T, r *rest, call func(string, map[stri
 // each, the form is read from the fake and answered from the profile, a
 // required question nothing stored answers is reported as a blocker in the
 // API's words, and a posting the board reports gone is refused as closed.
-func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool), fake *fakeATS, atsPort string) {
+// Every posting's path carries a per-run token: the job fingerprint ignores
+// the query string, so a fixed path would reuse an earlier run's job, already
+// closed, against the same database without the fake ever being asked.
+func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool), fake *fakeATS, atsPort, email string) {
 	t.Helper()
+	run := fmt.Sprint(time.Now().UnixNano())
 	boards := []struct {
-		provider, setting, open, gone, requested string
+		provider, setting, open, gone, openRequest, goneRequest string
+		// profile maps each field the profile answers to the value the test
+		// seeded; unanswered names the question nothing stored answers.
+		profile    map[string]string
+		unanswered string
 	}{
-		{"ashby", "ATS_ASHBY_URL", "https://jobs.ashbyhq.com/fakeco/ashby-open", "https://jobs.ashbyhq.com/fakeco/ashby-gone", "ashby fakeco/ashby-open"},
-		{"recruitee", "ATS_RECRUITEE_URL", "https://fakeco.recruitee.com/o/backend-engineer", "https://fakeco.recruitee.com/o/closed-role", "/api/offers/backend-engineer"},
+		{
+			"ashby", "ATS_ASHBY_URL",
+			"https://jobs.ashbyhq.com/fakeco/ashby-open-" + run, "https://jobs.ashbyhq.com/fakeco/ashby-gone-" + run,
+			"ashby fakeco/ashby-open-" + run, "ashby fakeco/ashby-gone-" + run,
+			map[string]string{"_systemfield_name": "MCP Candidate", "_systemfield_email": email, "phone-1": "+400000000"}, "talk-1",
+		},
+		{
+			"recruitee", "ATS_RECRUITEE_URL",
+			"https://fakeco.recruitee.com/o/backend-engineer-" + run, "https://fakeco.recruitee.com/o/closed-role-" + run,
+			"/api/offers/backend-engineer-" + run, "/api/offers/closed-role-" + run,
+			map[string]string{"name": "MCP Candidate", "email": email, "phone": "+400000000"}, "question_1",
+		},
 	}
 	importJob := func(provider, applyURL string) string {
 		out, text, isErr := call("import_job", map[string]any{
@@ -761,18 +779,23 @@ func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[str
 		if out["ats_provider"] != board.provider || out["channel"] != "ats_form" {
 			t.Fatalf("the %s form was not read from the fake; is the API's %s pointing at port %s? %s", board.provider, board.setting, atsPort, text)
 		}
-		if !slices.Contains(fake.paths(), board.requested) {
-			t.Fatalf("the %s apply URL should route to %q on the fake, got %v", board.provider, board.requested, fake.paths())
+		if !slices.Contains(fake.paths(), board.openRequest) {
+			t.Fatalf("the %s apply URL should route to %q on the fake, got %v", board.provider, board.openRequest, fake.paths())
 		}
-		// Name, email and phone come from the profile, the CV upload takes
-		// the composed CV, and the last question is left for the user.
+		// Name, email and phone come from the profile as the test seeded
+		// them, the CV upload takes the composed CV, and the last question
+		// is left for the user with no answer.
 		sources := map[string]int{}
 		formAnswers, _ := out["answers"].([]any)
 		for _, a := range formAnswers {
 			m, _ := a.(map[string]any)
+			field := fmt.Sprint(m["field"])
 			sources[fmt.Sprint(m["source"])]++
-			if m["source"] == "profile" && m["answer"] == "" {
-				t.Fatalf("a profile answer must carry the fact: %v", m)
+			if want, ok := board.profile[field]; ok && (m["source"] != "profile" || m["answer"] != want) {
+				t.Fatalf("%s field %s should be answered from the profile with %q, got %v", board.provider, field, want, m)
+			}
+			if field == board.unanswered && (m["source"] != "unanswered" || m["answer"] != "") {
+				t.Fatalf("%s field %s should be left unanswered and empty, got %v", board.provider, field, m)
 			}
 		}
 		if len(formAnswers) != 5 || sources["profile"] != 3 || sources["cv"] != 1 || sources["unanswered"] != 1 {
@@ -787,6 +810,9 @@ func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[str
 		if !isErr || !strings.Contains(text, "This posting has closed: the employer's board no longer shows it.") {
 			t.Fatalf("a posting %s reports gone must be refused as closed: %s", board.provider, text)
 		}
+		if !slices.Contains(fake.paths(), board.goneRequest) {
+			t.Fatalf("the gone %s posting should be refused because the fake was asked for %q, got %v", board.provider, board.goneRequest, fake.paths())
+		}
 	}
 }
 
@@ -798,7 +824,8 @@ const fakeUnansweredQuestion = "Which conference talk did you enjoy most this ye
 // for any board, and for any job one form of four required text fields the
 // profile can answer, so the composed entry carries no blockers. On the same
 // port, told apart by path, it answers Ashby's posting query and Recruitee's
-// offer API: board fakeco has one open posting on each, whose form holds one
+// offer API: on board fakeco every posting whose id starts ashby-open- or
+// whose slug starts backend-engineer- is open, with a form holding one
 // required question the profile cannot answer, and every other posting is
 // gone. It listens on every interface, because an API running in a container
 // reaches it through host.docker.internal.
@@ -864,7 +891,7 @@ func serveFakeATS(t *testing.T, port string) *fakeATS {
 		}
 		fake.record("ashby " + request.Variables.Board + "/" + request.Variables.Job)
 		w.Header().Set("Content-Type", "application/json")
-		if request.Variables.Board != "fakeco" || request.Variables.Job != "ashby-open" {
+		if request.Variables.Board != "fakeco" || !strings.HasPrefix(request.Variables.Job, "ashby-open-") {
 			_, _ = w.Write([]byte(`{"data":{"jobPosting":null}}`))
 			return
 		}
@@ -880,12 +907,13 @@ func serveFakeATS(t *testing.T, port string) *fakeATS {
 	// answers an offer it no longer has with 404.
 	mux.HandleFunc("GET /api/offers/{slug}", func(w http.ResponseWriter, r *http.Request) {
 		fake.record(r.URL.Path)
-		if r.PathValue("slug") != "backend-engineer" {
+		slug := r.PathValue("slug")
+		if !strings.HasPrefix(slug, "backend-engineer-") {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"offer":{"id":101,"slug":"backend-engineer","title":"Senior Backend Engineer","company_name":"Fake recruitee Co",` +
+		_, _ = w.Write([]byte(`{"offer":{"id":101,"slug":` + fmt.Sprintf("%q", slug) + `,"title":"Senior Backend Engineer","company_name":"Fake recruitee Co",` +
 			`"options_cv":"required","options_cover_letter":"off","options_phone":"required","options_photo":"off","options_salutation":"off","options_title":"off",` +
 			`"open_questions":[{"id":1,"kind":"text","required":true,"body":` + fmt.Sprintf("%q", fakeUnansweredQuestion) + `,"position":1,"open_question_options":[]}]}}`))
 	})
