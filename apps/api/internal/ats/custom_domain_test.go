@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -22,6 +24,15 @@ func TestGreenhouseJobIDOnAnEmployersDomain(t *testing.T) {
 		// Greenhouse's own embed link with only the job's token names no board.
 		{"https://boards.greenhouse.io/embed/job_app?token=123", "123", true},
 		{"https://example.com/jobs?gh_jid=abc", "", false},
+		// A Greenhouse id fits in an int64: 19 digits is the longest accepted.
+		{"https://example.com/jobs?gh_jid=9223372036854775807", "9223372036854775807", true},
+		{"https://example.com/jobs?gh_jid=12345678901234567890", "", false},
+		{"https://boards.greenhouse.io/embed/job_app?token=12345678901234567890", "", false},
+		{"https://example.com/jobs?gh_jid=" + strings.Repeat("1", 1<<20), "", false},
+		{"https://example.com/jobs?gh_jid=", "", false},
+		// The first of a repeated parameter is the job's.
+		{"https://example.com/jobs?gh_jid=111&gh_jid=222", "111", true},
+		{"https://example.com/jobs?gh_jid=abc&gh_jid=222", "", false},
 		{"https://example.com/jobs/123", "", false},
 		{"not a url", "", false},
 	}
@@ -90,6 +101,29 @@ func TestBareGreenhouseEmbedLinkIsReadFromItsBoard(t *testing.T) {
 	form, err := reader.Fetch(context.Background(), "https://boards.greenhouse.io/embed/job_app?token=123")
 	if err != nil || form.Board != "acme" || len(form.Fields) == 0 {
 		t.Fatalf("form = %+v, err = %v", form, err)
+	}
+}
+
+// An id too long to be Greenhouse's is refused before any request, by the
+// board lookup and the form reader alike.
+func TestOverLongGreenhouseJobIDMakesNoRequest(t *testing.T) {
+	var hits atomic.Int32
+	reader := customDomainReader(t, func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.NotFound(w, r)
+	})
+	link := "https://careers.example.com/?gh_jid=12345678901234567890"
+	if _, _, err := reader.GreenhouseBoard(context.Background(), link); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("GreenhouseBoard: want ErrUnsupported, got %v", err)
+	}
+	if _, err := reader.Fetch(context.Background(), link); !errors.Is(err, ErrUnsupported) {
+		t.Errorf("Fetch: want ErrUnsupported, got %v", err)
+	}
+	if _, ok := GreenhouseLookup(link); ok {
+		t.Error("GreenhouseLookup should refuse an over-long id")
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("want no request, got %d", hits.Load())
 	}
 }
 

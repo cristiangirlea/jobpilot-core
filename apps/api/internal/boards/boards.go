@@ -86,8 +86,9 @@ func Extract(rawURL string) (Detected, bool) {
 }
 
 // resolveTimeout bounds the one request Resolve may make, so a slow Greenhouse
-// costs the user a few seconds at most before detection answers as before.
-const resolveTimeout = 5 * time.Second
+// costs the user a few seconds at most before detection answers as before. A
+// variable only so a test can shorten it.
+var resolveTimeout = 5 * time.Second
 
 // Resolve is Extract plus one lookup: a careers-site link such as
 // careers.example.com/?gh_jid=123 names a Greenhouse job but not its board, so
