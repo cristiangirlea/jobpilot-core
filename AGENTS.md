@@ -17,7 +17,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 | `apps/mcp` | Separate Go module `jobpilot/core/mcp` (needs Go 1.25): stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |
-| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`. |
+| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`. |
 | `deploy/base/` | Kustomize base for the API and web. The lab overlay lives in the private `infra` repo (`apps/jobpilot`). |
 | `Makefile`, `docker-compose.yml` | Local stack and dev commands (`make dev`, `make test`, `make mcp`, smoke targets). |
 
@@ -33,7 +33,8 @@ go test -race ./...       # -race needs cgo: on Windows without gcc run it in a 
 ```
 
 then `npm ci && npm run typecheck` in `apps/web`; `docker build` of `apps/api`, `apps/web`
-(`--build-arg NEXT_PUBLIC_API_URL=...`) and `migrations`; kustomize + kubeconform on `deploy/base`;
+(`--build-arg NEXT_PUBLIC_API_URL=...`) and `migrations`; kustomize + kubeconform on `deploy/base`
+and `sh scripts/infra-bump-test.sh` (git and jq);
 and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and concurrently), the
 `...Postgres` Go tests, the API, both smoke scripts, and the MCP stdio end-to-end test.
 `make test` covers the Go tests and the typecheck; `/check` runs the CI steps in order.
@@ -79,8 +80,9 @@ owner's real profile, CV, applications and tokens.
   and its findings are fixed, a security read of the diff has nothing open, and the head being
   merged is the commit all of that ran on. What could not be tested is said in the PR and waits
   for the owner. Never auto-merge (`--auto`) or `--admin`, never push to `master`, never tag or
-  deploy. A merge, push or manual workflow run on `master` publishes images to the lab registry,
-  so each merge also needs the owner's yes in chat first, and a manual run stays the owner's step.
+  deploy. A merge, push or manual workflow run on `master` publishes images to the lab registry
+  and moves infra's bump PR (merging that one is the deploy), so each merge also needs the
+  owner's yes in chat first, and a manual run stays the owner's step.
 - Commit messages and PR text: plain sentences, optionally an area first (`Migrations: ...`,
   `CI: ...`). No conventional-commit prefixes, no emoji, no AI attribution lines. Commit as
   `maintainer@example.com` (check `git config user.email`).
