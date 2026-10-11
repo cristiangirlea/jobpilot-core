@@ -958,6 +958,16 @@ Both run as non-root numeric users with read-only root filesystems. An overlay s
 
 The lab cluster's overlay lives in the infra repository (`apps/jobpilot`). For that single origin, the web image is built with `NEXT_PUBLIC_API_URL=/api`. CI renders `deploy/base` and validates it with kubeconform.
 
+What the lab runs is pinned in infra's `clusters/local/jobpilot.yaml`: the commit `deploy/base` is read from, and the three images by digest. On `master`, after `publish` pushes the images, CI's `infra bump PR` job (`scripts/infra-bump.sh`) moves one rolling PR in infra, branch `bump/jobpilot`, to that commit and its digests. It skips commits that change nothing deployed (`apps/api`, `apps/web`, `migrations`, `deploy`), never moves the PR back to an older commit, and lists the jobpilot PRs the bump carries. Merging that PR is the deploy: Flux applies infra's `main` within a minute. Nothing merges it automatically.
+
+The job authenticates as a GitHub App of its own, and is skipped until the App is set up. To set it up (once, by the owner):
+
+1. Create a GitHub App (Settings, Developer settings, GitHub Apps): no webhook; repository permissions Contents read and write, and Pull requests read and write; installable only on this account.
+2. Install it on the `infra` repository only.
+3. Generate a private key, then in this repository's Actions settings set the variable `INFRA_BUMP_CLIENT_ID` to the App's client ID and the secret `INFRA_BUMP_APP_KEY` to the key file's contents. Delete the downloaded key afterwards.
+
+The job mints a token for `infra` alone, with only those two permissions, revoked when the job ends. The script only ever pushes `bump/jobpilot`. Treat the key like a deploy key: anyone who can change this repository's workflows can read it.
+
 ## Development commands
 
 ```bash

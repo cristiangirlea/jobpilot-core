@@ -1,0 +1,77 @@
+# P3a (#47): JobPilot. Its API, web and migrations come from the jobpilot repo's deploy/base, the
+# rest (database, Ingress) from apps/jobpilot/local, the namespace and secrets from secrets/local.
+#
+# What runs is pinned here and nowhere else: the commit deploy/base is read from, and the three
+# images by digest. jobpilot's CI prints both after every master run (the publish job's summary);
+# a bump is a reviewed PR changing this file's commit and digests together.
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: jobpilot
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: ssh://git@github.com/example-owner/jobpilot
+  # A read-only deploy key of jobpilot's own (secrets/local/jobpilot-deploy-key.sops.yaml).
+  secretRef:
+    name: jobpilot-deploy-key
+  ref:
+    commit: 8bd96292630be44d7c3b4dc5a2eb97f307ca02a9
+  # Only the manifests; the rest of the repository never reaches the cluster.
+  ignore: |
+    /*
+    !/deploy/
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: lab-jobpilot-infra
+  namespace: flux-system
+spec:
+  interval: 10m
+  dependsOn:
+    - name: lab-secrets
+    - name: lab-databases
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./apps/jobpilot/local
+  # The database's volume goes with its Cluster: never prune it on a mistaken removal from git.
+  prune: false
+  wait: true
+  timeout: 10m
+  # A CloudNativePG Cluster reports no observedGeneration, so the default check would call it
+  # healthy once applied; lab-jobpilot would then start before jobpilot-db-app exists. Healthy means
+  # Ready=True. No failure expression: Ready=False is normal while the database bootstraps.
+  healthCheckExprs:
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      current: status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: lab-jobpilot
+  namespace: flux-system
+spec:
+  interval: 10m
+  dependsOn:
+    - name: lab-jobpilot-infra
+  sourceRef:
+    kind: GitRepository
+    name: jobpilot
+  path: ./deploy/base
+  targetNamespace: jobpilot
+  prune: true
+  wait: true
+  timeout: 10m
+  images:
+    - name: jobpilot-api
+      newName: registry.localhost:5000/jobpilot-api
+      digest: sha256:491376a6722539001f83cbe6ef665c9e9e59345af876f6355d60d3509285d5ac
+    - name: jobpilot-web
+      newName: registry.localhost:5000/jobpilot-web
+      digest: sha256:aa123f578330741b65af4d0aa2f04a6775f44548d7c4e58179596246ae362298
+    - name: jobpilot-migrate
+      newName: registry.localhost:5000/jobpilot-migrate
+      digest: sha256:4bc65580c2b0a34dcc6fd863138a476900eb18a7921f7b54a6e7571fa93ec75f
