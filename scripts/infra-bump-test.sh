@@ -307,9 +307,9 @@ open_fails "open: a failed PR update after the push stops the run" "$c4" 3
 normal
 expect "the branch has moved" "$c4" "$(proposed)"
 answer_on='PATCH *' answer_body='{}'
-open_fails "open: an update answered without the PR's address stops the rerun" "$c4" 3
+open_fails "open: an update answered without the PR's address stops the rerun" "$c4" 33
 normal
-opens "a rerun of the same commit" "$c4" 3
+opens "a rerun of the same commit" "$c4" 33
 expect "open: the rerun only describes the PR again" "1 0 $c4" "$(calls PATCH) $(calls POST) $(proposed)"
 described "open: the PR says what the branch proposes again"
 expect "open: with the run that published the branch's images" 1 "$(jq -r .body "$work/state/pr.json" | grep -Fc '[this CI run](https://github.example/owner/jobpilot/actions/runs/3)')"
@@ -317,14 +317,14 @@ expect "open: with the run that published the branch's images" 1 "$(jq -r .body 
 # 4. Someone pushes a newer proposal after this run looked at the branch: no overwriting it, and
 # the next run describes it.
 rm -rf "$work/hand"
-on_user="git clone -q -b bump/jobpilot '$bare' '$work/hand' && sh '$bump' rewrite '$work/hand/clusters/local/jobpilot.yaml' $c6 $(digest 51) $(digest 52) $(digest 53) && git -C '$work/hand' -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam 'By hand' && git -C '$work/hand' push -q origin HEAD:bump/jobpilot"
+on_user="git clone -q -b bump/jobpilot '$bare' '$work/hand' && sh '$bump' rewrite '$work/hand/clusters/local/jobpilot.yaml' $c6 $(digest 51) $(digest 52) $(digest 53) && git -C '$work/hand' -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam 'By hand' -m 'Images published by https://github.example/someone/else/actions/runs/5' && git -C '$work/hand' push -q origin HEAD:bump/jobpilot"
 open_fails "open: a branch moved since this run looked at it stops the push" "$c7" 4
 normal
 expect "and the other push stays" "$(git -C "$work/hand" rev-parse HEAD)" "$(git -C "$bare" rev-parse bump/jobpilot)"
 opens "a later run deploying nothing beyond the branch" "$c5" 5
 expect "open: it describes the PR again from the branch" "1 0 $c6" "$(calls PATCH) $(calls POST) $(proposed)"
 described "open: the PR says what the other push proposes"
-expect "open: without a run it can't vouch for" "0 1" "$(jq -r .body "$work/state/pr.json" | grep -c 'this CI run') $(jq -r .body "$work/state/pr.json" | grep -c "the commit's page links the run")"
+expect "open: without a run from another repository" "0 1" "$(jq -r .body "$work/state/pr.json" | grep -c 'this CI run') $(jq -r .body "$work/state/pr.json" | grep -c "the commit's page links the run")"
 
 # 5. An older commit, and one deploying nothing new, leave a well-described PR alone.
 opens "an older commit" "$c3" 6
@@ -350,12 +350,13 @@ main_runs() { # COMMIT RUN
 }
 main_runs "$c7" 7
 rm -rf "$work/hand2"
-on_patch="[ -e '$work/hand2' ] || { git clone -q -b bump/jobpilot '$bare' '$work/hand2' && sh '$bump' rewrite '$work/hand2/clusters/local/jobpilot.yaml' $c8 $(digest 81) $(digest 82) $(digest 83) && git -C '$work/hand2' -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam 'By hand' && git -C '$work/hand2' push -q origin HEAD:bump/jobpilot; }"
+on_patch="[ -e '$work/hand2' ] || { git clone -q -b bump/jobpilot '$bare' '$work/hand2' && sh '$bump' rewrite '$work/hand2/clusters/local/jobpilot.yaml' $c8 $(digest 81) $(digest 82) $(digest 83) && git -C '$work/hand2' -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam 'By hand' -m 'Images published by https://github.example/owner/jobpilot/actions/runs/5x' && git -C '$work/hand2' push -q origin HEAD:bump/jobpilot; }"
 open_fails "open: a push while the PR is being closed stops the run" "$c7" 8
 normal
 expect "and the PR is open again, for the newer proposal" "open $c8" "$(pr_state) $(proposed)"
 opens "the run after it" "$c7" 8
 described "open: the run after it describes the newer proposal"
+expect "open: without a run whose id is not a number" "0 1" "$(jq -r .body "$work/state/pr.json" | grep -c 'this CI run') $(jq -r .body "$work/state/pr.json" | grep -c "the commit's page links the run")"
 expect "open: the PR body keeps a commit subject exactly" 1 "$(jq -r .body "$work/state/pr.json" | grep -Fxc -- "- $plain ($(short "$c8"))")"
 main_runs "$c9" 9
 opens "a run after main got ahead of the PR" "$c9" 9
