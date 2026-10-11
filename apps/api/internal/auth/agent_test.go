@@ -157,12 +157,16 @@ func TestRequireSession(t *testing.T) {
 	verifier := &fakeVerifier{principal: Principal{UserID: "user-2", Scopes: []string{"read", "write"}, TokenID: "tok-1"}}
 	raw, _, _, _ := NewAgentToken()
 
-	h := Middleware(secret, verifier, RequireSession(http.HandlerFunc(ok)))
+	h := Middleware(secret, verifier, RequireSession("Use the web app for this.", http.HandlerFunc(ok)))
 
 	// Even a write-scoped agent token cannot manage tokens, so a leaked one
 	// cannot mint siblings or hide itself.
-	if w := request(t, h, "Bearer "+raw); w.Code != 403 {
+	w := request(t, h, "Bearer "+raw)
+	if w.Code != 403 {
 		t.Fatalf("an agent token must be refused token management, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Use the web app for this.") {
+		t.Fatalf("the refusal must say why, got %s", w.Body.String())
 	}
 	if w := request(t, h, "Bearer "+session); w.Code != 204 {
 		t.Fatalf("a browser session must be allowed, got %d", w.Code)

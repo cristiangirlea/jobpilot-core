@@ -595,6 +595,8 @@ An Arbeitnow posting links to Arbeitnow's own page, whose `<posting>/apply` redi
 An entry records two separate things:
 
 - **Blockers** stop approval: an unapproved tailored CV, a required question with no answer, a missing profile email. Approval is refused while any stands, and that check lives in the store rather than the handler, because it is a safety rule rather than a UI concern.
+
+Approval is the user's consent to send exactly what the entry says, so it is checked again at that moment, not taken from compose time: only an entry waiting for approval (`ready`, or `needs_review` with its blockers cleared) can be approved, and one already approved stays as it is; its CV must still exist and be approved; every required answer a model or the template drafted must have been reviewed (an AI draft approved in the answer bank with the wording the entry carries; template wording never counts, so the user saves their own answer and prepares the entry again); and the posting must still be open. The entry stays locked from the checks to the approval. Only a signed-in browser session can approve: the route refuses agent tokens, whatever their scopes, because the consent cannot come from an agent.
 - **Notices** inform without blocking: voluntary demographic questions left blank, or a cover letter that fell back to the template. Treating these as blockers would make an application permanently unapprovable, since there is nothing for the user to fix.
 
 Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten.
@@ -700,7 +702,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 | `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval; 409 for a closed posting |
 | `GET` | `/api/outbox` | The approval queue; `?status=` filters |
 | `GET` | `/api/outbox/{id}` | One composed application in full |
-| `POST` | `/api/outbox/{id}/approve` | Release an application for sending |
+| `POST` | `/api/outbox/{id}/approve` | Release an application for sending; a browser session only (403 for agent tokens), and 409 with the reason while anything holds it back |
 | `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
 | `GET` | `/api/discovery/suggestions` | Curated employer boards worth following |
 | `POST` | `/api/discovery/detect` | Read a board token out of a pasted careers URL |
@@ -808,7 +810,7 @@ List tools return summaries without the job description so a page of matches sta
 
 **Deliberately absent, and worth keeping absent:**
 
-- `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Nothing sends today, but the gate that will authorise sending belongs with the user.
+- `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Nothing sends today, but the gate that will authorise sending belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
 - CV upload, which is multipart and belongs in the web app.
 - Registration, deletes, and profile or filter edits.

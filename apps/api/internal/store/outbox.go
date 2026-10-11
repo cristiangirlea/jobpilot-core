@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"jobpilot/core/api/internal/models"
@@ -219,35 +220,172 @@ func (s *Store) OutboxEntryForJob(ctx context.Context, userID, jobID string) (mo
 	return scanOutbox(s.DB.QueryRow(ctx, `SELECT `+outboxColumns+` FROM application_outbox WHERE user_id=$1 AND job_id=$2`, userID, jobID))
 }
 
-// SetOutboxStatus moves an entry through the queue.
+// OutboxRefusal is why an entry cannot be approved or cancelled as asked: the
+// user's to fix, not a server fault, so the API answers 409 with it.
+type OutboxRefusal string
+
+func (r OutboxRefusal) Error() string { return string(r) }
+
+// ApproveOutboxEntry releases an entry for sending. Approving is the user's
+// consent to send exactly what the entry says, so it is refused unless all of
+// this holds now, not only when the entry was composed:
 //
-// Approval is refused while blockers stand. The check lives here rather than in
-// the handler because it is a safety rule: an entry with an unapproved CV or an
-// unanswered required question must not become sendable, whatever the caller
-// believes.
-func (s *Store) SetOutboxStatus(ctx context.Context, userID, id, status string) (models.OutboxEntry, error) {
+//   - the entry waits for approval (ready, or needs_review with its blockers
+//     cleared); one already approved is returned as it is;
+//   - no blocker stands;
+//   - its CV still exists and is approved;
+//   - every required answer drafted by a provider or a template has been
+//     reviewed: an AI draft is approved in the answer bank with the wording the
+//     entry carries, and template wording is never taken as reviewed;
+//   - the posting is still open.
+//
+// The checks live here rather than in the handler because they are a safety
+// rule, whatever the caller believes. The entry stays locked from the checks to
+// the approval, so a recompose cannot slip in between them. The answers it
+// reads stay locked too (FOR SHARE): a revocation waits for the approval, so
+// the answers approved were approved together, and their writers lock only
+// their own row, so this order cannot deadlock with them. The CV is not
+// locked: SetCVApproval locks the CV before the entries, the other way round,
+// and it already carries a withdrawal into the entry (syncCVBlocker waits for
+// this lock, then moves an approved entry back to needs_review).
+func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	defer tx.Rollback(ctx)
+	entry, err := scanOutbox(tx.QueryRow(ctx, `SELECT `+outboxColumns+` FROM application_outbox WHERE user_id=$1 AND id=$2 FOR UPDATE`, userID, id))
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	switch entry.Status {
+	case models.OutboxApproved:
+		// Done with the transaction before withJob takes another connection
+		// from the pool: holding this one while waiting for that could
+		// exhaust a small pool.
+		if err := tx.Rollback(ctx); err != nil {
+			return models.OutboxEntry{}, err
+		}
+		return s.withJob(ctx, entry), nil
+	case models.OutboxReady, models.OutboxNeedsReview:
+	case models.OutboxSent:
+		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
+	default:
+		return models.OutboxEntry{}, OutboxRefusal(fmt.Sprintf("This application is %s. Prepare it again to approve it.", entry.Status))
+	}
+	refusal, err := approvalRefusal(ctx, tx, userID, entry)
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	if refusal != "" {
+		return models.OutboxEntry{}, refusal
+	}
+	approved, err := scanOutbox(tx.QueryRow(ctx, `UPDATE application_outbox
+		SET status='approved', approved_at=now(), updated_at=now()
+		WHERE user_id=$1 AND id=$2 RETURNING `+outboxColumns, userID, id))
+	if err != nil {
+		return models.OutboxEntry{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return models.OutboxEntry{}, err
+	}
+	return s.withJob(ctx, approved), nil
+}
+
+// approvalRefusal is the first reason the entry cannot be approved now, or "".
+func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models.OutboxEntry) (OutboxRefusal, error) {
+	if len(entry.Blockers) > 0 {
+		return OutboxRefusal("This application cannot be approved yet: " + entry.Blockers[0]), nil
+	}
+
+	// The CV. Deleting it leaves the entry without one (the column is set to
+	// null), which no blocker records.
+	if entry.CVDocumentID == "" {
+		return OutboxRefusal("This application's CV was deleted. Prepare it again to attach another."), nil
+	}
+	var kind string
+	var cvApproved bool
+	err := tx.QueryRow(ctx, `SELECT kind, approved FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, entry.CVDocumentID).Scan(&kind, &cvApproved)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return OutboxRefusal("This application's CV was deleted. Prepare it again to attach another."), nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !cvApproved {
+		return OutboxRefusal(cvBlocker(kind)), nil
+	}
+
+	// Required answers someone has to have read. The sources are answers.SourceAI
+	// and answers.SourceTemplate; a model or the template wrote them, not the user.
+	for _, answer := range entry.Answers {
+		if !answer.Required || !answer.NeedsReview {
+			continue
+		}
+		switch answer.Source {
+		case "template":
+			return OutboxRefusal(fmt.Sprintf("A required question carries template wording you have not reviewed: %q. Save your own answer to it in the answer bank, then prepare this application again.", answer.Label)), nil
+		case "ai":
+			var banked string
+			var bankApproved bool
+			err := pgx.ErrNoRows // a draft the bank never stored has nothing to approve
+			if answer.EntryID != "" {
+				err = tx.QueryRow(ctx, `SELECT answer, approved FROM answer_bank WHERE user_id=$1 AND id=$2 FOR SHARE`, userID, answer.EntryID).Scan(&banked, &bankApproved)
+			}
+			if errors.Is(err, pgx.ErrNoRows) || (err == nil && !bankApproved) {
+				return OutboxRefusal(fmt.Sprintf("A required question carries a drafted answer you have not approved: %q. Approve it in the answer bank first.", answer.Label)), nil
+			}
+			if err != nil {
+				return "", err
+			}
+			if strings.TrimSpace(banked) != strings.TrimSpace(answer.Answer) {
+				return OutboxRefusal(fmt.Sprintf("You changed your answer to %q after this application was prepared. Prepare it again so it carries the answer you approved.", answer.Label)), nil
+			}
+		}
+	}
+
+	// The posting may have closed after the entry was composed.
+	var reason string
+	err = tx.QueryRow(ctx, `SELECT closed_reason FROM jobs WHERE id=$1 AND closed_at IS NOT NULL`, entry.JobID).Scan(&reason)
+	if err == nil {
+		return OutboxRefusal(fmt.Sprintf("This posting has closed: %s. It can no longer be applied to.", reason)), nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	return "", nil
+}
+
+// CancelOutboxEntry drops an entry from the queue. A sent one is history and
+// stays as it is.
+func (s *Store) CancelOutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
 	current, err := s.OutboxEntry(ctx, userID, id)
 	if err != nil {
 		return models.OutboxEntry{}, err
 	}
 	if current.Status == models.OutboxSent {
-		return models.OutboxEntry{}, errors.New("this application has already been sent")
+		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
 	}
-	if status == models.OutboxApproved && len(current.Blockers) > 0 {
-		return models.OutboxEntry{}, fmt.Errorf("this application cannot be approved yet: %s", current.Blockers[0])
+	cancelled, err := scanOutbox(s.DB.QueryRow(ctx, `UPDATE application_outbox
+		SET status='cancelled', updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND status <> 'sent' RETURNING `+outboxColumns, userID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Sent between the read and the update.
+		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
 	}
-	if status == models.OutboxApproved {
-		// The posting may have closed after the entry was composed.
-		var reason string
-		if err := s.DB.QueryRow(ctx, `SELECT closed_reason FROM jobs WHERE id=$1 AND closed_at IS NOT NULL`, current.JobID).Scan(&reason); err == nil {
-			return models.OutboxEntry{}, fmt.Errorf("this posting has closed: %s. It can no longer be applied to", reason)
-		} else if !errors.Is(err, pgx.ErrNoRows) {
-			return models.OutboxEntry{}, err
-		}
+	if err != nil {
+		return models.OutboxEntry{}, err
 	}
-	return scanOutbox(s.DB.QueryRow(ctx, `UPDATE application_outbox
-		SET status=$3, approved_at=CASE WHEN $3='approved' THEN now() ELSE approved_at END, updated_at=now()
-		WHERE user_id=$1 AND id=$2 RETURNING `+outboxColumns, userID, id, status))
+	return s.withJob(ctx, cancelled), nil
+}
+
+// withJob attaches the job an entry is for, since a queue entry is unreadable
+// without it.
+func (s *Store) withJob(ctx context.Context, entry models.OutboxEntry) models.OutboxEntry {
+	if job, err := s.CatalogJob(ctx, entry.JobID); err == nil {
+		entry.Job = &job
+	}
+	return entry
 }
 
 func (s *Store) DeleteOutboxEntry(ctx context.Context, userID, id string) error {

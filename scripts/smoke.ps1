@@ -185,6 +185,8 @@ $script:Headers = @{ Authorization = "Bearer $($writeToken.token)" }
 $agentDocs = Send-JobPilotRequest POST "/jobs/$($accepted.job.id)/generate"
 if (-not $agentDocs.cover_letter) { throw "A write token should be able to generate documents" }
 Assert-Forbidden { Send-JobPilotRequest POST "/tokens" @{ name = "Nope"; scopes = @("read") } } "An agent token minting a token"
+# Approving an application is the user's consent to send it: no agent token gives it.
+Assert-Forbidden { Send-JobPilotRequest POST "/outbox/$($entry.id)/approve" } "A write token approving an application"
 
 $script:Headers = $sessionHeaders
 $tokens = Send-JobPilotRequest GET "/tokens"

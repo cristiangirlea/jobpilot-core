@@ -47,7 +47,15 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 	if doc.ParentID != "" {
 		parent = doc.ParentID
 	}
-	return scanCV(s.DB.QueryRow(ctx, `INSERT INTO cv_documents
+	// The queued applications carrying the CV follow its approval in the same
+	// transaction, as SetCVApproval does: a re-upload clears it, and an entry
+	// already approved with this CV must not stay approved without it.
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	defer tx.Rollback(ctx)
+	saved, err := scanCV(tx.QueryRow(ctx, `INSERT INTO cv_documents
 		(user_id,kind,label,filename,format,content_type,size_bytes,data,extracted_text,parsed,role_family,technologies,parent_id,fingerprint,approved)
 		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
 		ON CONFLICT (user_id,fingerprint) WHERE fingerprint <> '' DO UPDATE SET
@@ -59,6 +67,13 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 		RETURNING `+cvColumns,
 		userID, doc.Kind, doc.Label, doc.Filename, doc.Format, doc.ContentType, doc.SizeBytes,
 		data, doc.ExtractedText, parsed, doc.RoleFamily, doc.Technologies, parent, doc.Fingerprint, doc.Approved))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if err := syncCVBlocker(ctx, tx, userID, saved); err != nil {
+		return models.CVDocument{}, err
+	}
+	return saved, tx.Commit(ctx)
 }
 
 func (s *Store) ListCVs(ctx context.Context, userID string) ([]models.CVDocument, error) {

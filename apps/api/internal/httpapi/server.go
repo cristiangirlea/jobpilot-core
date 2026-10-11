@@ -34,7 +34,13 @@ import (
 //	   withheld for rejected matches; agent tokens with read and write scopes.
 //	2: composing an application refuses a closed posting with 409; jobs carry
 //	   closed_at and closed_reason.
-const Contract = 2
+//	3: approving an outbox entry needs a browser session (403 for agent
+//	   tokens), and re-checks the entry's status, its CV and its required
+//	   drafted answers at that moment, refusing with 409.
+const Contract = 3
+
+// ApprovalNeedsSession is the refusal an agent token gets from the approve route.
+const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
 
 type Server struct {
 	Store       *store.Store
@@ -55,13 +61,18 @@ func (s *Server) Handler() http.Handler {
 	m.HandleFunc("POST /api/auth/login", s.login)
 	// p: any authenticated caller. w: agent tokens need the write scope.
 	// session: browser logins only, so a leaked agent token cannot mint
-	// siblings or revoke itself.
+	// siblings or revoke itself. consent: browser logins only too, because
+	// approving an application is the user's consent to send it, which no
+	// agent gives, whatever its scopes.
 	p := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.Secret, s.Store, h) }
 	w := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireScope(auth.ScopeWrite, h))
 	}
 	session := func(h http.HandlerFunc) http.Handler {
-		return auth.Middleware(s.Secret, s.Store, auth.RequireSession(h))
+		return auth.Middleware(s.Secret, s.Store, auth.RequireSession("Use the web app to manage agent tokens.", h))
+	}
+	consent := func(h http.HandlerFunc) http.Handler {
+		return auth.Middleware(s.Secret, s.Store, auth.RequireSession(ApprovalNeedsSession, h))
 	}
 	m.Handle("GET /api/ai/status", p(s.aiStatus))
 	m.Handle("GET /api/answers", p(s.listAnswers))
@@ -80,7 +91,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/jobs/{id}/compose", w(s.compose))
 	m.Handle("GET /api/outbox", p(s.listOutbox))
 	m.Handle("GET /api/outbox/{id}", p(s.getOutboxEntry))
-	m.Handle("POST /api/outbox/{id}/approve", w(s.approveOutboxEntry))
+	m.Handle("POST /api/outbox/{id}/approve", consent(s.approveOutboxEntry))
 	m.Handle("POST /api/outbox/{id}/cancel", w(s.cancelOutboxEntry))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", w(s.putProfile))
@@ -918,6 +929,3 @@ func nonNil(in []string) []string {
 func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) {
 	write(w, 200, map[string]any{"enabled": s.LLM.Enabled(), "provider": s.LLM.Describe()})
 }
-
-// isNotFound reports whether an error is a missing row rather than a refusal.
-func isNotFound(err error) bool { return errors.Is(err, pgx.ErrNoRows) }

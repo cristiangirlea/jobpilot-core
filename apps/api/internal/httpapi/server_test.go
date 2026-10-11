@@ -2,11 +2,14 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
 )
 
@@ -148,5 +151,27 @@ func TestCorsExposesTheTotalCount(t *testing.T) {
 	(&Server{FrontendURL: "http://localhost:3000"}).cors(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})).ServeHTTP(rec, httptest.NewRequest("GET", "/api/jobs", nil))
 	if !strings.Contains(rec.Header().Get("Access-Control-Expose-Headers"), "X-Total-Count") {
 		t.Fatalf("X-Total-Count should be exposed to the web app, got %q", rec.Header().Get("Access-Control-Expose-Headers"))
+	}
+}
+
+// A refused approval or cancellation is the user's to fix (409), a missing
+// entry a 404, and anything else a server fault (500), never passed off as a
+// refusal.
+func TestOutboxResponsesTellRefusalsFromFaults(t *testing.T) {
+	cases := []struct {
+		err  error
+		code int
+	}{
+		{store.OutboxRefusal("This application has already been sent."), 409},
+		{pgx.ErrNoRows, 404},
+		{errors.New("connection reset"), 500},
+		{nil, 200},
+	}
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		respondOutbox(w, models.OutboxEntry{ID: "entry-1"}, c.err)
+		if w.Code != c.code {
+			t.Errorf("%v: got %d, want %d", c.err, w.Code, c.code)
+		}
 	}
 }
