@@ -25,9 +25,10 @@ DEPLOYED='apps/api apps/web migrations deploy'
 INFRA_FILE=clusters/local/jobpilot.yaml
 BRANCH=bump/jobpilot
 
-die() { echo "infra-bump: $*" >&2; exit 1; }
-say() { echo "infra-bump: $*"; }
-usage() { echo "usage: infra-bump.sh pinned|rewrite|decide|changes|open ... (see the script's header)" >&2; exit 2; }
+# printf, never echo, for anything that carries text from commits: dash's echo reads backslashes.
+die() { printf 'infra-bump: %s\n' "$*" >&2; exit 1; }
+say() { printf 'infra-bump: %s\n' "$*"; }
+usage() { die "usage: infra-bump.sh pinned|rewrite|decide|changes|open ... (see the script's header)"; }
 
 # is_hex VALUE LENGTH: exactly LENGTH lowercase hex digits, so nothing else reaches the YAML.
 is_hex() {
@@ -52,23 +53,31 @@ cmd_rewrite() {
   is_hex "$2" 40 || die "not a commit SHA: $2"
   for d in "$3" "$4" "$5"; do is_digest "$d" || die "not an image digest: $d"; done
   tmp="$1.bump.$$"
-  # Exactly one commit line, and for each image one digest line in its own list item; anything
-  # else means the file changed shape, and the bump stops rather than guess.
+  # Exactly one commit line, each image listed once, and one digest line inside each image's list
+  # item (the lines indented deeper than its "- name:"); anything else means the file changed
+  # shape, and the bump stops rather than guess.
   if ! awk -v commit="$2" -v api="$3" -v web="$4" -v migrate="$5" '
+    function indent(s) { match(s, /^ */); return RLENGTH }
+    function close_item() {
+      if (image != "" && digests != 1) bad = 1
+      image = ""
+      digests = 0
+    }
     BEGIN { want["jobpilot-api"] = api; want["jobpilot-web"] = web; want["jobpilot-migrate"] = migrate }
-    /^[^ \t#]/ { image = "" }
-    /^[ \t]*commit:[ \t]*[0-9a-f]+[ \t]*$/ { sub(/commit:.*/, "commit: " commit); commits++ }
+    image != "" && $0 !~ /^[ \t]*(#.*)?$/ && indent($0) <= item_indent { close_item() }
     /^[ \t]*-[ \t]*name:/ {
       name = $0
       sub(/^[ \t]*-[ \t]*name:[ \t]*/, "", name)
       sub(/[ \t]*$/, "", name)
-      image = (name in want) ? name : ""
+      if (name in want) { image = name; item_indent = indent($0); items[name]++ }
     }
-    image != "" && /^[ \t]*digest:/ { sub(/digest:.*/, "digest: " want[image]); got[image]++; image = "" }
+    image != "" && /^[ \t]*digest:/ { if (++digests == 1) sub(/digest:.*/, "digest: " want[image]) }
+    /^[ \t]*commit:[ \t]*[0-9a-f]+[ \t]*$/ { sub(/commit:.*/, "commit: " commit); commits++ }
     { print }
     END {
-      bad = commits != 1
-      for (n in want) if (got[n] != 1) bad = 1
+      close_item()
+      if (commits != 1) bad = 1
+      for (n in want) if (items[n] != 1) bad = 1
       exit bad
     }' "$1" > "$tmp"; then
     rm -f "$tmp"
@@ -106,9 +115,9 @@ cmd_changes() {
         n=${subject#'Merge pull request #'}
         n=${n%% *}
         title=$(git log -1 --format=%b "$c" | sed -n '/./{p;q;}')
-        echo "- $3#$n ${title:-$subject}"
+        printf -- '- %s#%s %s\n' "$3" "$n" "${title:-$subject}"
         ;;
-      *) echo "- $subject ($(short "$c"))" ;;
+      *) printf -- '- %s (%s)\n' "$subject" "$(short "$c")" ;;
     esac
   done
 }
@@ -144,12 +153,15 @@ cmd_open() {
   esac
 
   # One PR, moved forward: never back to an older commit, and not for a commit that deploys
-  # nothing the PR doesn't already carry.
+  # nothing the PR doesn't already carry. Every answer from GitHub is checked before it is used:
+  # a failed lookup must stop the run, not read as "no PR".
   owner=${INFRA_REPO%%/*}
-  number=$(github GET "/repos/$INFRA_REPO/pulls?state=open&base=$base&head=$owner:$BRANCH" | jq -r '.[0].number // empty')
+  answer=$(github GET "/repos/$INFRA_REPO/pulls?state=open&base=$base&head=$owner:$BRANCH")
+  number=$(printf '%s' "$answer" | jq -er 'if type == "array" then (.[0].number // "") | tostring else error("not a list of pull requests") end')
   if [ -n "$number" ]; then
     git -C "$infra" fetch -q --depth=1 origin "refs/heads/$BRANCH"
-    git -C "$infra" show "FETCH_HEAD:$INFRA_FILE" > "$work/open.yaml"
+    seen=$(git -C "$infra" rev-parse FETCH_HEAD)
+    git -C "$infra" show "$seen:$INFRA_FILE" > "$work/open.yaml"
     proposed=$(cmd_pinned "$work/open.yaml")
     decision=$(cmd_decide "$proposed" "$SHA")
     case $decision in
@@ -158,9 +170,13 @@ cmd_open() {
         return
         ;;
     esac
+  else
+    seen=$(git -C "$infra" ls-remote origin "refs/heads/$BRANCH")
+    seen=$(printf '%s' "$seen" | cut -f1)
   fi
 
-  bot_id=$(github GET "/users/$APP_SLUG%5Bbot%5D" | jq -r '.id')
+  answer=$(github GET "/users/$APP_SLUG%5Bbot%5D")
+  bot_id=$(printf '%s' "$answer" | jq -er '.id')
   bot="${APP_SLUG}[bot]"
   case $bot_id in '' | *[!0-9]*) die "no user id for $bot: $bot_id" ;; esac
 
@@ -170,10 +186,6 @@ cmd_open() {
   cmd_rewrite "$infra/$INFRA_FILE" "$SHA" "$API_DIGEST" "$WEB_DIGEST" "$MIGRATE_DIGEST"
   git -C "$infra" -c "user.name=$bot" -c "user.email=$bot_id+$bot@users.noreply.github.com" \
     commit -q -m "$title" -m "$list" -- "$INFRA_FILE"
-  # The branch belongs to this job and is rebuilt from main each time; the lease only refuses a
-  # push that would overwrite something pushed since the lookup above.
-  remote=$(git -C "$infra" ls-remote origin "refs/heads/$BRANCH" | cut -f1)
-  git -C "$infra" push -q --force-with-lease="refs/heads/$BRANCH:$remote" origin "HEAD:refs/heads/$BRANCH"
 
   body="Runs jobpilot [\`$(short "$SHA")\`](https://github.com/$JOBPILOT_REPO/commit/$SHA) on the lab: \`deploy/base\` at that commit and its three images by digest, built and pushed by [this CI run]($RUN_URL).
 
@@ -182,19 +194,37 @@ Since the commit the lab runs now (\`$(short "$running")\`):
 $list
 
 Merging this PR deploys it: Flux applies \`$base\` within a minute. jobpilot's CI moves this PR forward on each \`master\` commit that changes what runs, so one merge can carry several of them."
+  # An open PR is described first and its branch moved second: if the push then fails, the branch
+  # still proposes the older commit, so the next run (or a rerun) moves it again. The other order
+  # could leave a moved branch under a stale description that no later run repairs. A new PR
+  # needs its branch first; if opening it fails, the next run finds no PR and opens it.
   if [ -n "$number" ]; then
-    url=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" \
-      "$(jq -n --arg title "$title" --arg body "$body" '{title: $title, body: $body}')" | jq -r '.html_url')
+    answer=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" \
+      "$(jq -n --arg title "$title" --arg body "$body" '{title: $title, body: $body}')")
+    url=$(pr_url "$answer")
+    push_branch
     say "moved $url to $(short "$SHA")"
   else
-    url=$(github POST "/repos/$INFRA_REPO/pulls" \
+    push_branch
+    answer=$(github POST "/repos/$INFRA_REPO/pulls" \
       "$(jq -n --arg title "$title" --arg body "$body" --arg head "$BRANCH" --arg base "$base" \
-        '{title: $title, body: $body, head: $head, base: $base}')" | jq -r '.html_url')
+        '{title: $title, body: $body, head: $head, base: $base}')")
+    url=$(pr_url "$answer")
     say "opened $url"
   fi
   if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
-    echo "Bump PR in infra, running $(short "$SHA"): $url" >> "$GITHUB_STEP_SUMMARY"
+    printf 'Bump PR in infra, running %s: %s\n' "$(short "$SHA")" "$url" >> "$GITHUB_STEP_SUMMARY"
   fi
+}
+
+# The branch belongs to this job and is rebuilt from main each time. The lease is the tip this run
+# looked at: a push from anywhere since then makes this one fail instead of overwriting it.
+push_branch() {
+  git -C "$infra" push -q --force-with-lease="refs/heads/$BRANCH:$seen" origin "HEAD:refs/heads/$BRANCH"
+}
+
+pr_url() { # ANSWER: the pull request's address, or a failed run
+  printf '%s' "$1" | jq -er '.html_url | select(type == "string" and startswith("https://"))'
 }
 
 [ $# -gt 0 ] || usage
