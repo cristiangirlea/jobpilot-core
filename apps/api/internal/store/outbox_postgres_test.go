@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -403,14 +405,17 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	saveCV := func(userID, name, kind string, parsed map[string]any) models.CVDocument {
+	saveApprovedCV := func(userID, name, kind string, parsed map[string]any, approved bool) models.CVDocument {
 		doc, err := st.SaveCV(ctx, userID, models.CVDocument{
-			Kind: kind, Filename: name + ".pdf", Format: "pdf", Parsed: parsed, Fingerprint: "summary-" + name + "-" + run,
+			Kind: kind, Filename: name + ".pdf", Format: "pdf", Parsed: parsed, Approved: approved, Fingerprint: "summary-" + name + "-" + run,
 		}, []byte("%PDF-1.4 test"))
 		if err != nil {
 			t.Fatal(err)
 		}
 		return doc
+	}
+	saveCV := func(userID, name, kind string, parsed map[string]any) models.CVDocument {
+		return saveApprovedCV(userID, name, kind, parsed, false)
 	}
 	compose := func(name, cvID string) models.OutboxEntry {
 		in := models.JobInput{Title: "Backend Engineer", Company: "Summary Test " + run, Description: "Build services.", ApplyURL: "https://example.test/" + name + "-" + run}
@@ -440,8 +445,8 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 		}
 		for _, listed := range list {
 			if listed.ID == id {
-				if (listed.CV == nil) != (entry.CV == nil) || (listed.CV != nil && (listed.CV.Approved != entry.CV.Approved || listed.CV.ID != entry.CV.ID)) {
-					t.Fatalf("the list and the detail disagree on the CV: %+v vs %+v", listed.CV, entry.CV)
+				if !sameOutboxCV(listed.CV, entry.CV) {
+					t.Fatalf("the list and the detail disagree on the CV: %s vs %s", describeOutboxCV(listed.CV), describeOutboxCV(entry.CV))
 				}
 				return entry
 			}
@@ -467,8 +472,21 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	if _, err := st.SetCVApproval(ctx, ana.ID, tailored.ID, true); err != nil {
 		t.Fatal(err)
 	}
-	if cv := read(entry.ID).CV; cv == nil || !cv.Approved {
-		t.Fatalf("a CV approved after compose must show approved, got %+v", cv)
+	approvedCV := read(entry.ID).CV
+	if approvedCV == nil || !approvedCV.Approved {
+		t.Fatalf("a CV approved after compose must show approved, got %+v", approvedCV)
+	}
+
+	// The entry an approval returns carries the full summary, the first time
+	// and when the entry was already approved.
+	for _, step := range []string{"the first approval", "an approval of an approved entry"} {
+		approved, err := st.ApproveOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if !sameOutboxCV(approved.CV, approvedCV) || approved.CV.Alignment == nil || len(approved.CV.Missing) != 2 {
+			t.Fatalf("%s must carry the CV's full summary %s, got %s", step, describeOutboxCV(approvedCV), describeOutboxCV(approved.CV))
+		}
 	}
 
 	// A base CV has no coverage line, and the entry a cancellation returns
@@ -482,8 +500,8 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cancelled.CV == nil || cancelled.CV.ID != base.ID {
-		t.Fatalf("the cancelled entry must carry its CV's summary, got %+v", cancelled.CV)
+	if cancelled.CV == nil || cancelled.CV.ID != base.ID || cancelled.CV.Filename != "base.pdf" || cancelled.CV.Kind != "base" {
+		t.Fatalf("the cancelled entry must carry its CV's summary, got %s", describeOutboxCV(cancelled.CV))
 	}
 
 	// A deleted CV leaves the entry without a summary.
@@ -505,4 +523,64 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	if cancelled, err := st.CancelOutboxEntry(ctx, ana.ID, foreign.ID); err != nil || cancelled.CV != nil {
 		t.Fatalf("another user's CV leaked through a cancellation: %+v, %v", cancelled.CV, err)
 	}
+
+	// The schema does not enforce the parse's shape. A coverage value that is
+	// not what the summary expects is left out of it; it never fails the list,
+	// the detail, an approval or a cancellation, and the rest of the summary
+	// stays.
+	zero := 0.0
+	for _, c := range []struct {
+		name               string
+		alignment, missing any
+		wantAlignment      *float64
+		wantMissing        []string
+	}{
+		{"a string", "unknown", "Rust", nil, nil},
+		{"a boolean", true, []any{"Rust", 1}, nil, nil},
+		{"an object", map[string]any{"score": 0.5}, map[string]any{"Rust": true}, nil, nil},
+		{"null", nil, nil, nil, nil},
+		{"a numeric string", "0.5", []any{1, 2}, nil, nil},
+		{"zero", 0, []string{"Go"}, &zero, []string{"Go"}},
+	} {
+		name := "malformed-" + strings.ReplaceAll(c.name, " ", "-")
+		doc := saveApprovedCV(ana.ID, name, "tailored", map[string]any{
+			"tailored": map[string]any{"alignment": c.alignment, "missing": c.missing},
+		}, true)
+		entry := compose(name, doc.ID)
+		want := &models.OutboxCV{ID: doc.ID, Filename: name + ".pdf", Kind: "tailored", Approved: true, Alignment: c.wantAlignment, Missing: c.wantMissing}
+		if cv := read(entry.ID).CV; !sameOutboxCV(cv, want) {
+			t.Fatalf("%s: expected the summary %s, got %s", c.name, describeOutboxCV(want), describeOutboxCV(cv))
+		}
+		approved, err := st.ApproveOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil || !sameOutboxCV(approved.CV, want) {
+			t.Fatalf("%s: the approval must carry %s, got %s, %v", c.name, describeOutboxCV(want), describeOutboxCV(approved.CV), err)
+		}
+		cancelled, err := st.CancelOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil || !sameOutboxCV(cancelled.CV, want) {
+			t.Fatalf("%s: the cancellation must carry %s, got %s, %v", c.name, describeOutboxCV(want), describeOutboxCV(cancelled.CV), err)
+		}
+	}
+}
+
+// sameOutboxCV compares two CV summaries field by field.
+func sameOutboxCV(a, b *models.OutboxCV) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if (a.Alignment == nil) != (b.Alignment == nil) || (a.Alignment != nil && *a.Alignment != *b.Alignment) {
+		return false
+	}
+	return a.ID == b.ID && a.Filename == b.Filename && a.Kind == b.Kind && a.Approved == b.Approved &&
+		slices.Equal(a.Missing, b.Missing)
+}
+
+func describeOutboxCV(cv *models.OutboxCV) string {
+	if cv == nil {
+		return "no summary"
+	}
+	alignment := "none"
+	if cv.Alignment != nil {
+		alignment = fmt.Sprint(*cv.Alignment)
+	}
+	return fmt.Sprintf("{id %s, filename %q, kind %s, approved %t, alignment %s, missing %q}", cv.ID, cv.Filename, cv.Kind, cv.Approved, alignment, cv.Missing)
 }

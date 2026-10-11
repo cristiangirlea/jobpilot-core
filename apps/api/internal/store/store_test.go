@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -203,5 +204,39 @@ func TestProfileActionNamesTheMissingFields(t *testing.T) {
 	sparse.Phone, sparse.NoticePeriod = "", ""
 	if got, want := profileAction(sparse), "Complete your candidate profile: add a phone number, work experience and a notice period"; got != want {
 		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+// A CV's parse has no enforced shape: a coverage value the summary cannot use
+// is left out, and the rest of the summary stays.
+func TestCVSummaryLeavesOutMalformedCoverage(t *testing.T) {
+	id, filename := "cv-1", "cv.pdf"
+	for _, c := range []struct {
+		alignment, missing string
+		wantAlignment      string
+		wantMissing        string
+	}{
+		{`0.62`, `["Rust","Kafka"]`, "0.62", "Rust,Kafka"},
+		{`0`, `[]`, "0", ""},
+		{`"unknown"`, `"Rust"`, "none", ""},
+		{`true`, `["Rust",1]`, "none", ""},
+		{`{"score":0.5}`, `{"Rust":true}`, "none", ""},
+		{`null`, `null`, "none", ""},
+		{`"0.5"`, `[1,2]`, "none", ""},
+		{`1e400`, ``, "none", ""},
+		{``, ``, "none", ""},
+	} {
+		raw := cvSummary{id: &id, filename: &filename, alignment: []byte(c.alignment), missing: []byte(c.missing)}
+		cv := raw.summary()
+		alignment := "none"
+		if cv.Alignment != nil {
+			alignment = strconv.FormatFloat(*cv.Alignment, 'g', -1, 64)
+		}
+		if cv.ID != id || cv.Filename != filename || alignment != c.wantAlignment || strings.Join(cv.Missing, ",") != c.wantMissing {
+			t.Errorf("alignment %s, missing %s: got %+v (alignment %s)", c.alignment, c.missing, cv, alignment)
+		}
+	}
+	if (&cvSummary{}).summary() != nil {
+		t.Error("no CV must give no summary")
 	}
 }

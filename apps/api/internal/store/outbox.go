@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -20,8 +21,10 @@ var outboxSelect = `SELECT o.` + strings.ReplaceAll(outboxColumns, ",", ",o.") +
 	FROM application_outbox o LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=o.user_id`
 
 // outboxCVColumns are the CV summary the outbox shows: the coverage line comes
-// from a tailored CV's parse, so the whole document is never read for it.
-const outboxCVColumns = `c.id,c.filename,c.kind,c.approved,(c.parsed->'tailored'->>'alignment')::float8,c.parsed->'tailored'->'missing'`
+// from a tailored CV's parse, so the whole document is never read for it. The
+// parse's shape is not enforced by the schema, so its values are read as raw
+// JSON and decoded in Go: a malformed one is left out, never fails the query.
+const outboxCVColumns = `c.id,c.filename,c.kind,c.approved,c.parsed->'tailored'->'alignment',c.parsed->'tailored'->'missing'`
 
 func scanOutbox(row pgx.Row) (models.OutboxEntry, error) {
 	return scanOutboxRow(row, false)
@@ -68,8 +71,7 @@ func scanOutboxRow(row pgx.Row, withCV bool) (models.OutboxEntry, error) {
 type cvSummary struct {
 	id, filename, kind *string
 	approved           *bool
-	alignment          *float64
-	missing            []byte
+	alignment, missing []byte
 }
 
 func (c *cvSummary) dest() []any {
@@ -81,7 +83,7 @@ func (c *cvSummary) summary() *models.OutboxCV {
 	if c.id == nil {
 		return nil
 	}
-	cv := &models.OutboxCV{ID: *c.id, Alignment: c.alignment}
+	cv := &models.OutboxCV{ID: *c.id}
 	if c.filename != nil {
 		cv.Filename = *c.filename
 	}
@@ -91,8 +93,16 @@ func (c *cvSummary) summary() *models.OutboxCV {
 	if c.approved != nil {
 		cv.Approved = *c.approved
 	}
-	if len(c.missing) > 0 {
-		_ = json.Unmarshal(c.missing, &cv.Missing)
+	// Only a number is an alignment (JSON has no NaN or infinity), and only a
+	// list of strings is a missing list; anything else is left out. A pointer,
+	// because decoding JSON null succeeds and would otherwise read as zero.
+	var alignment *float64
+	if len(c.alignment) > 0 && json.Unmarshal(c.alignment, &alignment) == nil {
+		cv.Alignment = alignment
+	}
+	var missing []string
+	if len(c.missing) > 0 && json.Unmarshal(c.missing, &missing) == nil {
+		cv.Missing = missing
 	}
 	return cv
 }
@@ -446,9 +456,15 @@ func (s *Store) withJob(ctx context.Context, userID string, entry models.OutboxE
 		var cv cvSummary
 		err := s.DB.QueryRow(ctx, `SELECT `+outboxCVColumns+` FROM cv_documents c WHERE c.user_id=$1 AND c.id=$2`,
 			userID, entry.CVDocumentID).Scan(cv.dest()...)
-		if err == nil {
+		switch {
+		case err == nil:
 			entry.CV = cv.summary()
+		case !errors.Is(err, pgx.ErrNoRows):
+			// The approval or cancellation has happened; the entry is still
+			// the answer, without its summary.
+			slog.Warn("could not read the CV summary of an outbox entry", "entry_id", entry.ID, "error", err)
 		}
+		// No row: the CV was deleted, or is not the user's, so no summary.
 	}
 	return entry
 }
