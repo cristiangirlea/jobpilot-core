@@ -20,6 +20,7 @@ type detectRequest struct {
 
 // detectBoard turns a pasted careers or posting URL into a provider and board
 // token, so the user does not have to work out which part of the URL matters.
+// A careers-site link to a Greenhouse job is resolved by asking Greenhouse.
 func (s *Server) detectBoard(w http.ResponseWriter, r *http.Request) {
 	var body detectRequest
 	if !decode(w, r, &body) {
@@ -29,9 +30,9 @@ func (s *Server) detectBoard(w http.ResponseWriter, r *http.Request) {
 		problem(w, 400, "Paste a link to a company's job board or one of its postings.")
 		return
 	}
-	detected, ok := boards.Extract(body.URL)
+	detected, ok := boards.Resolve(r.Context(), s.ATS, body.URL)
 	if !ok {
-		problem(w, 422, "That link is not a job board this app can follow. Links to Greenhouse, Lever, Ashby and SmartRecruiters boards or their postings work; a company's own careers page and job aggregators do not.")
+		problem(w, 422, "That link is not a job board this app can follow. Links to Greenhouse, Lever, Ashby and SmartRecruiters boards or their postings work, as do careers-page links to a Greenhouse posting (with gh_jid); other careers pages and job aggregators do not.")
 		return
 	}
 	if !detected.Supported {

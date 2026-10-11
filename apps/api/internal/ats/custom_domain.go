@@ -51,6 +51,30 @@ func GreenhouseLookup(link string) (string, bool) {
 	return greenhouseLegacy + "/embed/job_app?token=" + id, true
 }
 
+// GreenhouseBoard names the board of a Greenhouse job whose link names none,
+// such as a careers-site link carrying gh_jid. It asks only Greenhouse's own
+// origin, never the link's host, and returns ErrUnsupported without a request
+// when the link carries no Greenhouse job id.
+func (r *Reader) GreenhouseBoard(ctx context.Context, link string) (board, jobID string, err error) {
+	jobID, ok := greenhouseJobID(link)
+	if !ok {
+		return "", "", ErrUnsupported
+	}
+	board, err = r.greenhouseBoard(ctx, jobID)
+	if err != nil {
+		return "", jobID, err
+	}
+	return board, jobID, nil
+}
+
+// WithGreenhouseLegacyBase replaces the origin asked which board a job id is
+// on, so a test outside this package can answer for Greenhouse. An empty base
+// keeps the public host.
+func (r *Reader) WithGreenhouseLegacyBase(base string) *Reader {
+	r.greenhouseLegacyBase = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	return r
+}
+
 func (r *Reader) greenhouseLegacyOrigin() string {
 	if r.greenhouseLegacyBase == "" {
 		return greenhouseLegacy

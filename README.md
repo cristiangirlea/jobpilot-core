@@ -563,7 +563,7 @@ Two kinds of question are never answered automatically, and both are matched on 
 
 ### Finding boards
 
-A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. The Discovery page offers both.
+A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. A careers-site link to a Greenhouse posting (`careers.example.com/?gh_jid=123`) names no board, so detection then makes the same single lookup the form reader makes (see above), at Greenhouse only and with a five-second limit; the pasted link is never fetched, and a failed lookup leaves the answer as it was. The Discovery page offers both, and the MCP `detect_board` tool uses detection too.
 
 ### Where the deterministic boundary sits
 

@@ -301,7 +301,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "detect_board",
 		Title:       "Detect a job board",
-		Description: "Read a careers page or posting URL and work out which board provider and identifier it uses, ready for add_discovery_source. Parses the URL only; it fetches nothing.",
+		Description: "Read a careers page or posting URL and work out which board provider and identifier it uses, ready for add_discovery_source. The link itself is never fetched; a careers-site link to a Greenhouse job (gh_jid) is looked up at Greenhouse.",
 		Annotations: readOnly("Detect a job board"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in detectBoardInput) (*mcp.CallToolResult, DetectedBoard, error) {
 		if strings.TrimSpace(in.URL) == "" {

@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"jobpilot/core/api/internal/ats"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
 )
@@ -140,6 +142,45 @@ func TestDetectBoardDoesNotCallEveryLinkAnAggregator(t *testing.T) {
 	}
 	if body := rec.Body.String(); strings.Contains(body, "an aggregator link") || !strings.Contains(body, "careers page") {
 		t.Fatalf("the refusal should not call a careers page an aggregator: %s", body)
+	}
+}
+
+// A careers-site link to a Greenhouse job becomes a Greenhouse source once
+// Greenhouse names the board; when it cannot, the refusal is the usual one.
+func TestDetectBoardResolvesAGreenhouseCareersSiteLink(t *testing.T) {
+	var found atomic.Bool
+	found.Store(true)
+	greenhouse := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !found.Load() || r.URL.Path != "/embed/job_app" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "https://job-boards.greenhouse.io/embed/job_app?for=acme&token="+r.URL.Query().Get("token"), http.StatusMovedPermanently)
+	}))
+	defer greenhouse.Close()
+	server := &Server{ATS: ats.NewReader().WithGreenhouseLegacyBase(greenhouse.URL)}
+	detect := func() *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		server.detectBoard(rec, httptest.NewRequest("POST", "/api/discovery/detect", strings.NewReader(`{"url":"https://careers.example.com/?gh_jid=123"}`)))
+		return rec
+	}
+
+	rec := detect()
+	var got struct {
+		Provider, Identifier string
+		JobID                string `json:"job_id"`
+		Supported            bool
+	}
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &got) != nil {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body)
+	}
+	if got.Provider != "greenhouse" || got.Identifier != "acme" || got.JobID != "123" || !got.Supported {
+		t.Fatalf("detected %+v", got)
+	}
+
+	found.Store(false)
+	if rec = detect(); rec.Code != 422 || !strings.Contains(rec.Body.String(), "not a job board") {
+		t.Fatalf("an unknown job should get the usual refusal, got %d: %s", rec.Code, rec.Body)
 	}
 }
 
