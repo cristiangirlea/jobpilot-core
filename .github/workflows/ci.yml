@@ -3,9 +3,9 @@ name: ci
 # Mirrors `make test` (split into parallel jobs) plus image builds and an
 # integration pass against a real API. Keep this file and the Makefile in step.
 #
-# Jobs run on the lab cluster's self-hosted runners when the repository
-# variable CI_RUNNER names its scale set (set by the infra repo's tofu), and
-# on GitHub-hosted runners when it is unset. The cluster's runner image is
+# Jobs run only on the lab cluster's self-hosted runners, whose scale set the
+# repository variable CI_RUNNER names (set by the infra repo's tofu); unset,
+# they are skipped, never sent to GitHub's runners. The cluster's runner image is
 # GitHub's runner plus build tools, so the steps install what else they need.
 
 on:
@@ -25,7 +25,8 @@ concurrency:
 jobs:
   go:
     name: ${{ matrix.module }} (Go)
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: ${{ vars.CI_RUNNER != '' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -51,7 +52,8 @@ jobs:
 
   web:
     name: web (typecheck)
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: ${{ vars.CI_RUNNER != '' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 15
     defaults:
       run:
@@ -70,7 +72,8 @@ jobs:
 
   images:
     name: docker images
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: ${{ vars.CI_RUNNER != '' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -83,7 +86,8 @@ jobs:
 
   manifests:
     name: deploy manifests
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: ${{ vars.CI_RUNNER != '' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -104,7 +108,8 @@ jobs:
 
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)
-    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-latest' }}
+    if: ${{ vars.CI_RUNNER != '' }}
+    runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 20
     needs: [go]
     services:
@@ -188,8 +193,8 @@ jobs:
             sleep 1
           done
           curl -fsS http://localhost:8080/api/health
-      # GitHub-hosted runners ship PowerShell and the cluster's do not, so a
-      # pinned release is installed when it is missing, checked against the
+      # The cluster's runner image has no PowerShell, so a pinned release is
+      # installed when it is missing, checked against the
       # SHA-256 that release publishes.
       - name: PowerShell
         run: |
