@@ -285,8 +285,9 @@ jobs:
           path: ${{ runner.temp }}/images.yaml
 
   # After publish: the rolling bump PR in infra (branch bump/jobpilot), which pins this commit and
-  # its three images in clusters/local/jobpilot.yaml. It skips commits that change nothing deployed
-  # and never moves the PR back to an older commit; merging the PR is the release, the owner's act.
+  # its three images in clusters/local/jobpilot.yaml. It skips commits that change nothing deployed,
+  # never moves the PR back to an older commit, keeps its description true to the branch, and
+  # closes it once infra runs that far; merging the PR is the release, the owner's act.
   # scripts/infra-bump.sh does the work (tested in the manifests job). It authenticates as the
   # owner's bump GitHub App (README, "Kubernetes"), and without the INFRA_BUMP_CLIENT_ID variable
   # the job is skipped.
