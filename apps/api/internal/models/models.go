@@ -331,6 +331,20 @@ type OutboxEntry struct {
 	ApprovedAt        *time.Time     `json:"approved_at,omitempty"`
 	SentAt            *time.Time     `json:"sent_at,omitempty"`
 	Job               *Job           `json:"job,omitempty"`
+	CV                *OutboxCV      `json:"cv,omitempty"`
+}
+
+// OutboxCV is the CV an outbox entry carries, read as it is now rather than as
+// it was when the entry was composed, so an approval given since shows. It is
+// absent when the CV was deleted. Alignment and Missing come from a tailored
+// CV's parse (parsed.tailored); Alignment is nil for a CV that was not tailored.
+type OutboxCV struct {
+	ID        string   `json:"id"`
+	Filename  string   `json:"filename"`
+	Kind      string   `json:"kind"`
+	Approved  bool     `json:"approved"`
+	Alignment *float64 `json:"alignment,omitempty"`
+	Missing   []string `json:"missing,omitempty"`
 }
 
 // AgentToken is a long-lived credential for an agent host or script. The

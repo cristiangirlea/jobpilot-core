@@ -700,7 +700,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 | `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
 | `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
 | `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval; 409 for a closed posting |
-| `GET` | `/api/outbox` | The approval queue; `?status=` filters |
+| `GET` | `/api/outbox` | The approval queue; `?status=` filters. Each entry carries `cv`, a summary of its CV as it is now (id, filename, kind, approval, and a tailored CV's `alignment` and `missing`), absent once the CV is deleted |
 | `GET` | `/api/outbox/{id}` | One composed application in full |
 | `POST` | `/api/outbox/{id}/approve` | Release an application for sending; a browser session only (403 for agent tokens), and 409 with the reason while anything holds it back |
 | `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
