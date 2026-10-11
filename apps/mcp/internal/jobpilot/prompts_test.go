@@ -65,6 +65,22 @@ func TestPromptsOnlyNameToolsThatExist(t *testing.T) {
 	}
 }
 
+// The API decides where a job is applied (models.Job in apps/api); the host
+// is told the same order, in one sentence, wherever it hands out a link.
+func TestApplyLinkOrderIsStatedOnce(t *testing.T) {
+	if !strings.Contains(instructions, applyLinkOrder) {
+		t.Error("server instructions should state the apply link order")
+	}
+	cs, _ := session(t)
+	got, err := cs.GetPrompt(context.Background(), &mcp.GetPromptParams{Name: "prepare_application", Arguments: map[string]string{"job_id": "job-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := got.Messages[0].Content.(*mcp.TextContent).Text; !strings.Contains(text, applyLinkOrder) {
+		t.Error("prepare_application should state the apply link order")
+	}
+}
+
 // Found in early use: the review asks whether the filters are too
 // narrow, but never had the model read them, so it could only guess.
 func TestWeeklyReviewReadsTheFilters(t *testing.T) {

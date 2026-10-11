@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -52,18 +51,19 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	//
 	// A posting found through an aggregator is read at the employer. While
 	// that is not known yet, the link is checked first, which also asks the
-	// aggregator where the posting applies.
+	// aggregator where the posting applies; the check stores that page, and
+	// the job carries it from here on.
 	link := store.LinkToCheck{ID: job.Job.ID, ApplyURL: job.Job.ApplyURL, SourceProvider: job.Job.SourceProvider, EmployerURL: job.Job.EmployerURL}
 	canCheck := link.ApplyURL != "" && s.Discovery != nil
 	checked, closedNow, reason := false, false, ""
 	if canCheck && link.EmployerURL == "" && discovery.RedirectsToEmployer(link.SourceProvider) {
 		result := s.Discovery.CheckJob(ctx, link, 8*time.Second)
-		checked, closedNow, reason, link.EmployerURL = true, result.Closed, result.Reason, result.EmployerURL
+		checked, closedNow, reason, job.Job.EmployerURL = true, result.Closed, result.Reason, result.EmployerURL
 	}
 	var form ats.Form
 	var formErr error
 	if !closedNow {
-		form, formErr = s.ATS.Fetch(ctx, cmp.Or(link.EmployerURL, link.ApplyURL))
+		form, formErr = s.ATS.Fetch(ctx, job.Job.FormTarget())
 		switch {
 		case errors.Is(formErr, ats.ErrNotFound):
 			closedNow, reason = true, discovery.ReasonBoard

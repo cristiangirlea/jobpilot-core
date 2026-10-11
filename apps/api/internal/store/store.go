@@ -848,7 +848,7 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	// here rather than in each client. The value returned by this helper is
 	// therefore a read model: never write it back to the catalog row.
 	if x.Match.Rejected {
-		x.Job.ApplyURL, x.Job.EmployerURL = "", ""
+		x.Job.ApplyURL, x.Job.EmployerURL, x.Job.PartnerApplyURL = "", "", ""
 		// The slug is made from the end of that URL, so it goes too; the job
 		// stays reachable by id.
 		x.Job.Slug = ""
@@ -981,8 +981,8 @@ func (s *Store) Documents(ctx context.Context, u, jobID string) (models.Document
 }
 
 func (s *Store) RecordOutbound(ctx context.Context, u, jobID string) (string, string, string, error) {
-	var destination, partner, disclosure string
-	err := s.DB.QueryRow(ctx, `SELECT COALESCE(NULLIF(j.partner_apply_url,''),NULLIF(j.employer_url,''),j.apply_url),j.referral_partner,j.referral_disclosure FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE j.id=$1 AND m.user_id=$2 AND m.rejected=false`, jobID, u).Scan(&destination, &partner, &disclosure)
+	var job models.Job
+	err := s.DB.QueryRow(ctx, `SELECT j.partner_apply_url,j.employer_url,j.apply_url,j.referral_partner,j.referral_disclosure FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE j.id=$1 AND m.user_id=$2 AND m.rejected=false`, jobID, u).Scan(&job.PartnerApplyURL, &job.EmployerURL, &job.ApplyURL, &job.ReferralPartner, &job.ReferralDisclosure)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var rejected bool
 		checkErr := s.DB.QueryRow(ctx, `SELECT rejected FROM job_matches WHERE user_id=$1 AND job_id=$2`, u, jobID).Scan(&rejected)
@@ -993,6 +993,7 @@ func (s *Store) RecordOutbound(ctx context.Context, u, jobID string) (string, st
 	if err != nil {
 		return "", "", "", err
 	}
+	destination, partner, disclosure := job.ApplyTarget(), job.ReferralPartner, job.ReferralDisclosure
 	if destination == "" {
 		return "", "", "", errors.New("this job has no apply URL")
 	}

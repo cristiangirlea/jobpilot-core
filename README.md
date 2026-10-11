@@ -617,7 +617,7 @@ Application statuses are:
 
 Every status change creates an `application_events` history row.
 
-Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint returns a partner destination only when an authorized partner URL is configured; otherwise it returns the original employer apply URL. It is blocked for rejected jobs.
+Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint returns a partner destination only when an authorized partner URL is configured; otherwise it returns the employer's own page (`employer_url`) when known, else the apply URL. It is blocked for rejected jobs. That order is decided in one place, `models.Job.ApplyTarget`; composing reads the form at `models.Job.FormTarget` (the employer's page, else the apply URL, since a partner link is attribution, never a form), and the MCP server's `applyLinkOrder` sentence tells agents the same order.
 
 Click attribution alone does not create revenue. Monetization requires a real employer, affiliate, CPA, recruiting, or hiring-partner agreement plus suitable user disclosure. Do not create or guess third-party referral codes.
 

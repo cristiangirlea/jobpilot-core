@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"cmp"
+	"time"
+)
 
 type User struct {
 	ID        string    `json:"id"`
@@ -131,6 +134,23 @@ type Job struct {
 	// EmployerURL is the employer's own application page for a posting found
 	// through an aggregator, once the aggregator's redirect has been read.
 	EmployerURL string `json:"employer_url,omitempty"`
+	// PartnerApplyURL is an authorized partner's link to the posting. It is
+	// attribution, never served with the job: only the outbound endpoint
+	// returns it, as the place to apply.
+	PartnerApplyURL string `json:"-"`
+}
+
+// ApplyTarget is where a person applies: the partner link, else the
+// employer's own page, else the apply URL. It is empty for a job whose links
+// were withheld.
+func (j Job) ApplyTarget() string {
+	return cmp.Or(j.PartnerApplyURL, j.EmployerURL, j.ApplyURL)
+}
+
+// FormTarget is where the application form is read: the employer's own page,
+// else the apply URL. A partner link is attribution, never a form.
+func (j Job) FormTarget() string {
+	return cmp.Or(j.EmployerURL, j.ApplyURL)
 }
 
 type Evaluation struct {
