@@ -15,3 +15,7 @@ apps/mcp/jobpilot-mcp.exe
 # A local copy of .mcp.json.example. Committed, it would override the
 # jobpilot server each user registers, with its token, in every session.
 .mcp.json
+
+# Personal agent notes and local Claude Code settings.
+CLAUDE.local.md
+.claude/settings.local.json
