@@ -45,7 +45,7 @@ func TestRecordOutboundPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err = st.DB.Exec(ctx, `UPDATE jobs SET employer_url=$2, partner_apply_url=$3, referral_partner=$4 WHERE id=$1`, job.ID, employer, partner, "partner-"+name); err != nil {
+		if _, err = st.DB.Exec(ctx, `UPDATE jobs SET employer_url=$2, partner_apply_url=$3, referral_partner=$4, referral_disclosure=$5 WHERE id=$1`, job.ID, employer, partner, "partner-"+name, "disclosure-"+name); err != nil {
 			t.Fatal(err)
 		}
 		evaluation := models.Evaluation{Rejected: rejected, Breakdown: map[string]int{}, RejectionReasons: []string{}, Warnings: []string{}, Reasons: []string{}, MatchedSkills: []string{}, MissingSkills: []string{}, RedFlags: []string{}}
@@ -64,12 +64,15 @@ func TestRecordOutboundPostgres(t *testing.T) {
 		{"apply", apply, "", "", apply},
 	} {
 		id := add(c.name, c.apply, c.employer, c.partner, false)
-		destination, referral, _, err := st.RecordOutbound(ctx, user.ID, id)
+		destination, referral, disclosure, err := st.RecordOutbound(ctx, user.ID, id)
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 		if destination != c.want || referral != "partner-"+c.name {
 			t.Errorf("%s: got %q via %q, want %q via %q", c.name, destination, referral, c.want, "partner-"+c.name)
+		}
+		if disclosure != "disclosure-"+c.name {
+			t.Errorf("%s: disclosure %q, want %q", c.name, disclosure, "disclosure-"+c.name)
 		}
 		var recorded string
 		if err = st.DB.QueryRow(ctx, `SELECT destination_url FROM outbound_clicks WHERE user_id=$1 AND job_id=$2`, user.ID, id).Scan(&recorded); err != nil || recorded != c.want {

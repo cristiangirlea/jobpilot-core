@@ -31,10 +31,12 @@ var discoveryProviders = []string{"remotive", "greenhouse", "lever", "ashby", "s
 // A variable so tests can shorten it.
 var progressInterval = 5 * time.Second
 
-// applyLinkOrder names where a user applies themselves, in the order the API
-// decides it (models.Job.FormTarget): the employer's own page, else the apply
-// URL. The instructions and the prompts say it in these words.
-const applyLinkOrder = "A job is applied at its employer_url, or at its apply_url when it has none."
+// applyLinkOrder names the link the agent gives the user to apply themselves:
+// the employer's own page, else the apply URL, as the API reads the form
+// (models.Job.FormTarget). The MCP server never sees a partner link; that is
+// the outbound endpoint's, in the web app. The instructions and the prompts
+// say it in these words.
+const applyLinkOrder = "The link to give the user is the job's employer_url, or its apply_url when it has none."
 
 // instructions is sent to the host once per session. It carries the product
 // invariants the tool descriptions cannot repeat on every call.

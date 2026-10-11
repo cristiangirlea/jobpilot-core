@@ -65,9 +65,18 @@ func TestPromptsOnlyNameToolsThatExist(t *testing.T) {
 	}
 }
 
-// The API decides where a job is applied (models.Job in apps/api); the host
-// is told the same order, in one sentence, wherever it hands out a link.
+// The host is told which link to give the user (the employer's page, else the
+// apply URL, as models.Job.FormTarget in apps/api reads the form), in one
+// sentence, wherever it hands out a link. The partner link is the outbound
+// endpoint's alone and never reaches the MCP server.
 func TestApplyLinkOrderIsStatedOnce(t *testing.T) {
+	employer, apply := strings.Index(applyLinkOrder, "employer_url"), strings.Index(applyLinkOrder, "apply_url")
+	if employer < 0 || apply < 0 || employer > apply {
+		t.Errorf("applyLinkOrder should name employer_url before apply_url: %q", applyLinkOrder)
+	}
+	if strings.Contains(strings.ToLower(applyLinkOrder), "partner") {
+		t.Errorf("applyLinkOrder should never mention a partner link: %q", applyLinkOrder)
+	}
 	if !strings.Contains(instructions, applyLinkOrder) {
 		t.Error("server instructions should state the apply link order")
 	}

@@ -1,6 +1,10 @@
 package models
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 // The links a job is applied at and read at are decided here and nowhere
 // else: the outbound endpoint applies at ApplyTarget, compose reads the form
@@ -27,6 +31,21 @@ func TestJobTargets(t *testing.T) {
 		}
 		if got := c.job.FormTarget(); got != c.wantForm {
 			t.Errorf("%s: FormTarget() = %q, want %q", c.name, got, c.wantForm)
+		}
+	}
+}
+
+// A partner link is attribution: only the outbound endpoint returns it, so a
+// job served as JSON never carries it.
+func TestJobJSONOmitsPartnerApplyURL(t *testing.T) {
+	const partner = "https://partner.example/p/1"
+	body, err := json.Marshal(Job{JobInput: JobInput{ApplyURL: "https://aggregator.example/j/1"}, EmployerURL: "https://boards.example/acme/1", PartnerApplyURL: partner})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{partner, "partner_apply_url", "PartnerApplyURL"} {
+		if strings.Contains(string(body), leak) {
+			t.Errorf("job JSON carries %q: %s", leak, body)
 		}
 	}
 }
