@@ -785,12 +785,13 @@ func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[str
 		// Name, email and phone come from the profile as the test seeded
 		// them, the CV upload takes the composed CV, and the last question
 		// is left for the user with no answer.
-		sources := map[string]int{}
+		sources, seen := map[string]int{}, map[string]int{}
 		formAnswers, _ := out["answers"].([]any)
 		for _, a := range formAnswers {
 			m, _ := a.(map[string]any)
 			field := fmt.Sprint(m["field"])
 			sources[fmt.Sprint(m["source"])]++
+			seen[field]++
 			if want, ok := board.profile[field]; ok && (m["source"] != "profile" || m["answer"] != want) {
 				t.Fatalf("%s field %s should be answered from the profile with %q, got %v", board.provider, field, want, m)
 			}
@@ -800,6 +801,16 @@ func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[str
 		}
 		if len(formAnswers) != 5 || sources["profile"] != 3 || sources["cv"] != 1 || sources["unanswered"] != 1 {
 			t.Fatalf("expected three profile answers, the CV and one unanswered question on %s, got %v: %s", board.provider, sources, text)
+		}
+		// Each expected field exactly once, so a renamed or repeated field
+		// cannot keep the counts above while skipping the checks in the loop.
+		for field := range board.profile {
+			if seen[field] != 1 {
+				t.Fatalf("%s field %s should be answered exactly once, got %d: %s", board.provider, field, seen[field], text)
+			}
+		}
+		if seen[board.unanswered] != 1 {
+			t.Fatalf("%s field %s should appear exactly once, got %d: %s", board.provider, board.unanswered, seen[board.unanswered], text)
 		}
 		blockers, _ := out["blockers"].([]any)
 		if out["status"] != "needs_review" || !slices.Contains(blockers, any(unanswered)) {

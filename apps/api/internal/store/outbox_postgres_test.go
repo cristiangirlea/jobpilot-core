@@ -467,6 +467,10 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	if cv.Alignment == nil || *cv.Alignment != 0.62 || strings.Join(cv.Missing, ",") != "Rust,Kafka" {
 		t.Fatalf("expected the tailored coverage, got alignment %v missing %v", cv.Alignment, cv.Missing)
 	}
+	// Composing answers with the same summary the outbox then shows.
+	if !sameOutboxCV(entry.CV, cv) {
+		t.Fatalf("the composed entry must carry the summary %s, got %s", describeOutboxCV(cv), describeOutboxCV(entry.CV))
+	}
 
 	// Approved after compose: the entry shows the CV as it is now.
 	if _, err := st.SetCVApproval(ctx, ana.ID, tailored.ID, true); err != nil {
@@ -528,7 +532,7 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 	// not what the summary expects is left out of it; it never fails the list,
 	// the detail, an approval or a cancellation, and the rest of the summary
 	// stays.
-	zero := 0.0
+	zero, half := 0.0, 0.5
 	for _, c := range []struct {
 		name               string
 		alignment, missing any
@@ -540,6 +544,8 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 		{"an object", map[string]any{"score": 0.5}, map[string]any{"Rust": true}, nil, nil},
 		{"null", nil, nil, nil, nil},
 		{"a numeric string", "0.5", []any{1, 2}, nil, nil},
+		{"a null technology", 0.5, []any{nil}, &half, nil},
+		{"a null among technologies", 0.5, []any{"Rust", nil}, &half, nil},
 		{"zero", 0, []string{"Go"}, &zero, []string{"Go"}},
 	} {
 		name := "malformed-" + strings.ReplaceAll(c.name, " ", "-")
@@ -548,6 +554,9 @@ func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
 		}, true)
 		entry := compose(name, doc.ID)
 		want := &models.OutboxCV{ID: doc.ID, Filename: name + ".pdf", Kind: "tailored", Approved: true, Alignment: c.wantAlignment, Missing: c.wantMissing}
+		if !sameOutboxCV(entry.CV, want) {
+			t.Fatalf("%s: composing must answer with the summary %s, got %s", c.name, describeOutboxCV(want), describeOutboxCV(entry.CV))
+		}
 		if cv := read(entry.ID).CV; !sameOutboxCV(cv, want) {
 			t.Fatalf("%s: expected the summary %s, got %s", c.name, describeOutboxCV(want), describeOutboxCV(cv))
 		}

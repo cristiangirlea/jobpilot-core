@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -100,9 +101,12 @@ func (c *cvSummary) summary() *models.OutboxCV {
 	if len(c.alignment) > 0 && json.Unmarshal(c.alignment, &alignment) == nil {
 		cv.Alignment = alignment
 	}
-	var missing []string
-	if len(c.missing) > 0 && json.Unmarshal(c.missing, &missing) == nil {
-		cv.Missing = missing
+	// Pointers again, so a null element is told apart from an empty string.
+	var missing []*string
+	if len(c.missing) > 0 && json.Unmarshal(c.missing, &missing) == nil && !slices.Contains(missing, nil) {
+		for _, technology := range missing {
+			cv.Missing = append(cv.Missing, *technology)
+		}
 	}
 	return cv
 }
@@ -234,7 +238,10 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if err != nil {
 		return models.OutboxEntry{}, err
 	}
-	return saved, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return models.OutboxEntry{}, err
+	}
+	return s.withCV(ctx, userID, saved), nil
 }
 
 // OutboxEntries lists the queue. status "" means every entry.
@@ -452,20 +459,27 @@ func (s *Store) withJob(ctx context.Context, userID string, entry models.OutboxE
 	if job, err := s.CatalogJob(ctx, entry.JobID); err == nil {
 		entry.Job = &job
 	}
-	if entry.CVDocumentID != "" {
-		var cv cvSummary
-		err := s.DB.QueryRow(ctx, `SELECT `+outboxCVColumns+` FROM cv_documents c WHERE c.user_id=$1 AND c.id=$2`,
-			userID, entry.CVDocumentID).Scan(cv.dest()...)
-		switch {
-		case err == nil:
-			entry.CV = cv.summary()
-		case !errors.Is(err, pgx.ErrNoRows):
-			// The approval or cancellation has happened; the entry is still
-			// the answer, without its summary.
-			slog.Warn("could not read the CV summary of an outbox entry", "entry_id", entry.ID, "error", err)
-		}
-		// No row: the CV was deleted, or is not the user's, so no summary.
+	return s.withCV(ctx, userID, entry)
+}
+
+// withCV attaches the summary of the CV an entry carries, as the outbox lists
+// read it. It runs after the write it reports on (a compose, an approval, a
+// cancellation) has happened, so a failed lookup leaves the summary out and is
+// logged, rather than turning that answer into an error.
+func (s *Store) withCV(ctx context.Context, userID string, entry models.OutboxEntry) models.OutboxEntry {
+	if entry.CVDocumentID == "" {
+		return entry
 	}
+	var cv cvSummary
+	err := s.DB.QueryRow(ctx, `SELECT `+outboxCVColumns+` FROM cv_documents c WHERE c.user_id=$1 AND c.id=$2`,
+		userID, entry.CVDocumentID).Scan(cv.dest()...)
+	switch {
+	case err == nil:
+		entry.CV = cv.summary()
+	case !errors.Is(err, pgx.ErrNoRows):
+		slog.Warn("could not read the CV summary of an outbox entry", "entry_id", entry.ID, "error", err)
+	}
+	// No row: the CV was deleted, or is not the user's, so no summary.
 	return entry
 }
 
