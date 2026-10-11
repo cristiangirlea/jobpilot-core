@@ -46,17 +46,17 @@ and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and conc
 
 ## The owner's data
 
-The owner's own stack (Compose Postgres on 5432, API on 8080, and the lab cluster) holds his
-real profile, CV, applications and tokens.
+The owner's own stack (Compose Postgres on 5432, API on 8080, and the lab cluster) holds the
+owner's real profile, CV, applications and tokens.
 
 - Never read, query or print real data or the profile, in tests or while debugging. Tests use
   fakes or a throwaway `postgres:16-alpine` container; local integration runs use other ports
   (for example Postgres 55432, API 18080, fake ATS 18999), never 5432/8080.
 - The smoke scripts, `make seed`, `make migrate` and the MCP end-to-end test write to whatever API
-  or database they point at, and their defaults are his (`localhost:8080`, and the API's
+  or database they point at, and their defaults are the owner's (`localhost:8080`, and the API's
   `DATABASE_URL` defaults to `localhost:5432`): always set the target to a throwaway stack.
 - Never commit `.env`, `.mcp.json` (git-ignored; it may hold a token), CV files, exports or
-  anything copied from his database. `.env.example` and `.mcp.json.example` hold placeholders only.
+  anything copied from the owner's database. `.env.example` and `.mcp.json.example` hold placeholders only.
 
 ## Product rules the code enforces (keep them true)
 

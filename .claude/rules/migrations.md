@@ -11,4 +11,4 @@ paths:
   a file that does.
 - Add the file to the migration table in `README.md` ("Database and migrations").
 - Try it on a throwaway `postgres:16-alpine` container with `DATABASE_URL=... sh migrations/migrate.sh`,
-  never on the owner's database (`make migrate` targets his Compose stack).
+  never on the owner's database (`make migrate` targets the owner's Compose stack).

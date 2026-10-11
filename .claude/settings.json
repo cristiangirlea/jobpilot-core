@@ -208,7 +208,13 @@
       "Bash(git tag *)",
       "PowerShell(git tag *)",
       "Bash(git push *--follow-tags*)",
-      "PowerShell(git push *--follow-tags*)"
+      "PowerShell(git push *--follow-tags*)",
+      "Bash(docker build *--output*)",
+      "PowerShell(docker build *--output*)",
+      "Bash(docker buildx *)",
+      "PowerShell(docker buildx *)",
+      "Bash(docker build *push=true*)",
+      "PowerShell(docker build *push=true*)"
     ]
   },
   "hooks": {
