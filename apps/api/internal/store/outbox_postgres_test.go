@@ -220,50 +220,134 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	}
 	refuses("a failed entry", failed, "Prepare it again")
 
+	// A deleted bank entry is no approval either.
+	deleted := newDraft("What is your notice period?", true)
+	withDeleted := compose(job, cv.ID, []models.OutboxAnswer{required("Notice?", "ai", deleted.Answer, deleted.ID)})
+	if err := st.DeleteAnswer(ctx, ana.ID, deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+	refuses("a draft whose bank entry was deleted", withDeleted, "not approved")
+
+	// Re-uploading the entry's CV clears its approval, and the entries carrying
+	// it follow, as when its approval is withdrawn: an approved one goes back to
+	// review, a ready one is blocked.
+	reuploaded := newCV("reuploaded", true)
+	followed := approves("an entry whose CV will be uploaded again", compose(job, reuploaded.ID, nil))
+	if _, err := st.SaveCV(ctx, ana.ID, models.CVDocument{Kind: "tailored", Filename: "reuploaded.pdf", Format: "pdf", Fingerprint: "approval-reuploaded-" + run}, []byte("%PDF-1.4 test")); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := st.OutboxEntry(ctx, ana.ID, followed.ID); err != nil || back.Status != models.OutboxNeedsReview || back.ApprovedAt != nil || len(back.Blockers) != 1 || back.Blockers[0] != CVBlocker {
+		t.Fatalf("a re-uploaded CV must send its approved entry back to review, got %+v, %v", back, err)
+	}
+
+	// Concurrency. bounded caps every wait below, so a regression fails the test
+	// instead of hanging it.
+	bounded, cancelBounded := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelBounded()
+	backend := func(tx pgx.Tx) int {
+		var pid int
+		if err := tx.QueryRow(bounded, `SELECT pg_backend_pid()`).Scan(&pid); err != nil {
+			t.Fatal(err)
+		}
+		return pid
+	}
+	// waiter returns the backend waiting for a lock that backend holder holds,
+	// once there is one. A run that finishes instead of waiting fails the test.
+	waiter := func(name string, holder int, finished <-chan error) int {
+		t.Helper()
+		for i := 0; i < 250; i++ {
+			select {
+			case err := <-finished:
+				t.Fatalf("%s must wait for the transaction in flight, but it finished: %v", name, err)
+			default:
+			}
+			var pid int
+			err := pool.QueryRow(bounded, `SELECT pid FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) LIMIT 1`, holder).Scan(&pid)
+			if err == nil {
+				return pid
+			}
+			if !errors.Is(err, pgx.ErrNoRows) {
+				t.Fatal(err)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+		t.Fatalf("%s never waited for the transaction in flight", name)
+		return 0
+	}
+	approval := func(entry models.OutboxEntry) <-chan error {
+		finished := make(chan error, 1)
+		go func() {
+			_, err := st.ApproveOutboxEntry(bounded, ana.ID, entry.ID)
+			finished <- err
+		}()
+		return finished
+	}
+	outcome := func(finished <-chan error) error {
+		select {
+		case err := <-finished:
+			return err
+		case <-bounded.Done():
+			t.Fatal("timed out waiting for the approval")
+			return nil
+		}
+	}
+
 	// An approval reads each answer under a share lock, so it waits for a
 	// revocation in flight and then sees it, rather than approving on the
 	// committed value the revocation is about to replace.
 	revoked := newDraft("Where are you based?", true)
 	inFlight := compose(job, cv.ID, []models.OutboxAnswer{required("Based?", "ai", revoked.Answer, revoked.ID)})
-	revoking, err := pool.Begin(ctx)
+	revoking, err := pool.Begin(bounded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := revoking.Exec(ctx, `UPDATE answer_bank SET approved=false WHERE id=$1`, revoked.ID); err != nil {
+	defer revoking.Rollback(ctx)
+	if _, err := revoking.Exec(bounded, `UPDATE answer_bank SET approved=false WHERE id=$1`, revoked.ID); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan error, 1)
-	go func() {
-		_, err := st.ApproveOutboxEntry(ctx, ana.ID, inFlight.ID)
-		done <- err
-	}()
-	waiting := false
-	for i := 0; i < 250 && !waiting; i++ {
-		select {
-		case err := <-done:
-			_ = revoking.Rollback(ctx)
-			t.Fatalf("the approval must wait for the revocation in flight, but it finished: %v", err)
-		default:
-		}
-		var n int
-		if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity
-			WHERE datname=current_database() AND pid <> pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%FROM answer_bank%'`).Scan(&n); err != nil {
-			t.Fatal(err)
-		}
-		if waiting = n > 0; !waiting {
-			time.Sleep(20 * time.Millisecond)
-		}
-	}
-	if !waiting {
-		_ = revoking.Rollback(ctx)
-		t.Fatal("the approval never waited for the answer being revoked")
-	}
-	if err := revoking.Commit(ctx); err != nil {
+	waitingApproval := approval(inFlight)
+	waiter("the approval", backend(revoking), waitingApproval)
+	if err := revoking.Commit(bounded); err != nil {
 		t.Fatal(err)
 	}
 	var waited OutboxRefusal
-	if err := <-done; !errors.As(err, &waited) || !strings.Contains(waited.Error(), "not approved") {
+	if err := outcome(waitingApproval); !errors.As(err, &waited) || !strings.Contains(waited.Error(), "not approved") {
 		t.Fatalf("after the revocation the approval must be refused, got %v", err)
+	}
+
+	// The CV is read without a lock. A re-upload during the approval clears it
+	// only together with its entries, whose lock the approval holds: so once the
+	// approval commits, the entry is sent back to review.
+	raced := newCV("raced", true)
+	racedDraft := newDraft("What do you value in a team?", false)
+	racing := compose(job, raced.ID, []models.OutboxAnswer{required("Value?", "ai", racedDraft.Answer, racedDraft.ID)})
+	approving, err := pool.Begin(bounded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer approving.Rollback(ctx)
+	if _, err := approving.Exec(bounded, `UPDATE answer_bank SET approved=true WHERE id=$1`, racedDraft.ID); err != nil {
+		t.Fatal(err)
+	}
+	racingApproval := approval(racing)
+	approver := waiter("the approval", backend(approving), racingApproval)
+	upload := make(chan error, 1)
+	go func() {
+		_, err := st.SaveCV(bounded, ana.ID, models.CVDocument{Kind: "tailored", Filename: "raced.pdf", Format: "pdf", Fingerprint: "approval-raced-" + run}, []byte("%PDF-1.4 test"))
+		upload <- err
+	}()
+	waiter("the re-upload", approver, upload)
+	if err := approving.Commit(bounded); err != nil {
+		t.Fatal(err)
+	}
+	if err := outcome(racingApproval); err != nil {
+		t.Fatalf("the approval read an approved CV and answer, so it goes through: %v", err)
+	}
+	if err := outcome(upload); err != nil {
+		t.Fatal(err)
+	}
+	if back, err := st.OutboxEntry(ctx, ana.ID, racing.ID); err != nil || back.Status != models.OutboxNeedsReview || back.ApprovedAt != nil {
+		t.Fatalf("a CV re-uploaded during the approval must leave the entry back in review, got %+v, %v", back, err)
 	}
 
 	// Only the owner reaches an entry, and a missing one is a missing row.
