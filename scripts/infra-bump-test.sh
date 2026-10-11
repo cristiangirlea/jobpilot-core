@@ -58,6 +58,12 @@ awk '{ print } /- name: lab-jobpilot-infra$/ { print "    - name: jobpilot-api" 
 rewrite_ok "$work/a3.yaml" || fail "rewrite with an image's name in dependsOn failed"
 expect "rewrite counts only the images: list" "$(digest 2)" "$(image "$work/a3.yaml" jobpilot-api)"
 
+# The images list at its key's own indentation, which YAML allows.
+awk 'f { sub(/^  /, "") } { print } /^  images:$/ { f = 1 }' "$fixture" > "$work/a4.yaml"
+expect "the fixture can put the list at its key's indentation" 1 "$(grep -c '^  - name: jobpilot-migrate$' "$work/a4.yaml")"
+rewrite_ok "$work/a4.yaml" || fail "rewrite of a list at its key's indentation failed"
+expect "rewrite reads a list at its key's indentation" "$(digest 4)" "$(image "$work/a4.yaml" jobpilot-migrate)"
+
 cp "$fixture" "$work/b.yaml"
 refuses "rewrite refuses a short commit" sh "$bump" rewrite "$work/b.yaml" 8bd9629 "$(digest 2)" "$(digest 3)" "$(digest 4)"
 refuses "rewrite refuses an uppercase commit" sh "$bump" rewrite "$work/b.yaml" "$(hex40 1 | tr 0 A)" "$(digest 2)" "$(digest 3)" "$(digest 4)"
@@ -122,6 +128,8 @@ c5=$(commit_file apps/mcp/main.go "MCP only")
 c6=$(commit_file migrations/019_example.sql "A migration")
 c7=$(merge_branch api apps/api/handler.go 8 "$nasty")
 c8=$(commit_file apps/web/page.tsx "$plain")
+c9=$(commit_file migrations/020_example.sql "Another migration")
+c10=$(commit_file apps/web/page.tsx "Web change for the last PR")
 
 decide() { (cd "$repo" && sh "$bump" decide "$1" "$2"); }
 expect "decide: a docs-only commit is the same" same "$(decide "$c1" "$c2")"
@@ -157,8 +165,9 @@ main=$(git -C "$bare" rev-parse main)
 # The stub API logs each call as "METHOD URL" in $STUB/calls and keeps the JSON it was sent in
 # $STUB/data.<call number>. It keeps the open PR in $STUB_STATE/pr.json across runs (a closed one
 # moves to closed.json). A call matching $STUB_FAIL fails as curl --fail-with-body does, with
-# $STUB_FAIL_BODY and exit 22; one matching $STUB_ANSWER gets $STUB_ANSWER_BODY and exit 0; and
-# $STUB_ON_USER runs before the bot's user is looked up, between the branch fetch and the push.
+# $STUB_FAIL_BODY and exit 22; one matching $STUB_ANSWER gets $STUB_ANSWER_BODY and exit 0;
+# $STUB_ON_USER runs before the bot's user is looked up, between the branch fetch and the push; and
+# $STUB_ON_PATCH runs before a PATCH is answered.
 mkdir -p "$work/bin" "$work/state"
 cat > "$work/bin/curl" << 'EOF'
 #!/bin/sh
@@ -196,6 +205,9 @@ case $call in
     cat "$pr"
     ;;
   "PATCH "*/repos/owner/infra/pulls/9)
+    if [ -n "$STUB_ON_PATCH" ]; then sh -c "$STUB_ON_PATCH" > /dev/null 2>&1; fi
+    # GitHub edits a closed PR too, and reopens it on {"state": "open"}.
+    if [ ! -f "$pr" ] && [ -f "$STUB_STATE/closed.json" ]; then mv "$STUB_STATE/closed.json" "$pr"; fi
     [ -f "$pr" ] || { echo '{"message": "Not Found"}'; exit 22; }
     printf '%s' "$data" | jq -c --slurpfile old "$pr" '$old[0] + .' > "$pr.new"
     mv "$pr.new" "$pr"
@@ -206,7 +218,7 @@ esac
 EOF
 chmod +x "$work/bin/curl"
 
-normal() { fail_on='' fail_body='{"message": "Server Error"}' answer_on='' answer_body='' on_user=''; }
+normal() { fail_on='' fail_body='{"message": "Server Error"}' answer_on='' answer_body='' on_user='' on_patch=''; }
 normal
 open() { # SHA RUN: a fresh checkout of infra's main, as each CI run has; RUN numbers the digests
   rm -rf "$work/infra" "$work/api"
@@ -214,7 +226,7 @@ open() { # SHA RUN: a fresh checkout of infra's main, as each CI run has; RUN nu
   git clone -q "$bare" "$work/infra" 2> /dev/null
   (cd "$repo" && PATH="$work/bin:$PATH" STUB="$work/api" STUB_STATE="$work/state" \
     STUB_FAIL="$fail_on" STUB_FAIL_BODY="$fail_body" STUB_ANSWER="$answer_on" STUB_ANSWER_BODY="$answer_body" \
-    STUB_ON_USER="$on_user" GITHUB_API_URL=https://api.github.example \
+    STUB_ON_USER="$on_user" STUB_ON_PATCH="$on_patch" GITHUB_API_URL=https://api.github.example \
     SHA=$1 API_DIGEST="$(digest "${2}1")" WEB_DIGEST="$(digest "${2}2")" MIGRATE_DIGEST="$(digest "${2}3")" \
     GH_TOKEN=test-token APP_SLUG=jobpilot-bump INFRA_REPO=owner/infra JOBPILOT_REPO=owner/jobpilot \
     RUN_URL="https://github.example/owner/jobpilot/actions/runs/$2" sh "$bump" open "$work/infra")
@@ -263,6 +275,7 @@ expect "open: a first bump opens a PR" "1 0" "$(calls POST) $(calls PATCH)"
 expect "open: it looks the PR up by branch and base" 1 "$(grep -c '/repos/owner/infra/pulls?state=open&base=main&head=owner:bump/jobpilot$' "$work/api/calls")"
 expect "open: the PR goes from bump/jobpilot to main" "bump/jobpilot main" "$(last POST | jq -r '.head + " " + .base')"
 expect "open: the PR lists the jobpilot PRs it carries" 1 "$(last POST | jq -r .body | grep -c '^- owner/jobpilot#7 Show the web change$')"
+expect "open: the PR links the run that published the images" 1 "$(last POST | jq -r .body | grep -Fc '[this CI run](https://github.example/owner/jobpilot/actions/runs/1)')"
 described "open: the PR says what the branch proposes"
 expect "open: the branch pins the commit's images" "$(digest 11)" "$(proposed > /dev/null && image "$work/pinned.yaml" jobpilot-api)"
 expect "open: the branch is one commit on main" 1 "$(git -C "$bare" rev-list --count main..bump/jobpilot)"
@@ -280,6 +293,10 @@ answer_on='GET *pulls?state=open*' answer_body='[{}]'
 open_fails "open: so does a lookup answering something that is not a PR" "$c4" 2
 answer_body=''
 open_fails "open: so does an empty answer" "$c4" 2
+answer_body='   	 '
+open_fails "open: so does a blank answer" "$c4" 2
+answer_body='[] []'
+open_fails "open: so does an answer of two JSON documents" "$c4" 2
 normal
 expect "and nothing moved" "0 0 $c3" "$(calls PATCH) $(calls POST) $(proposed)"
 described "and the PR still says what the branch proposes"
@@ -295,6 +312,7 @@ normal
 opens "a rerun of the same commit" "$c4" 3
 expect "open: the rerun only describes the PR again" "1 0 $c4" "$(calls PATCH) $(calls POST) $(proposed)"
 described "open: the PR says what the branch proposes again"
+expect "open: with the run that published the branch's images" 1 "$(jq -r .body "$work/state/pr.json" | grep -Fc '[this CI run](https://github.example/owner/jobpilot/actions/runs/3)')"
 
 # 4. Someone pushes a newer proposal after this run looked at the branch: no overwriting it, and
 # the next run describes it.
@@ -306,6 +324,7 @@ expect "and the other push stays" "$(git -C "$work/hand" rev-parse HEAD)" "$(git
 opens "a later run deploying nothing beyond the branch" "$c5" 5
 expect "open: it describes the PR again from the branch" "1 0 $c6" "$(calls PATCH) $(calls POST) $(proposed)"
 described "open: the PR says what the other push proposes"
+expect "open: without a run it can't vouch for" "0 1" "$(jq -r .body "$work/state/pr.json" | grep -c 'this CI run') $(jq -r .body "$work/state/pr.json" | grep -c "the commit's page links the run")"
 
 # 5. An older commit, and one deploying nothing new, leave a well-described PR alone.
 opens "an older commit" "$c3" 6
@@ -322,29 +341,41 @@ expect "open: the PR body keeps a title exactly" 1 "$(jq -r .body "$work/state/p
 expect "open: so does the commit message" 1 "$(git -C "$bare" log -1 --format=%b bump/jobpilot | grep -Fxc -- "- owner/jobpilot#8 $nasty")"
 expect "open: main is still untouched" "$main" "$(git -C "$bare" rev-parse main)"
 
-# 7. main catches up by another route: the PR would deploy nothing, so it is closed.
-sh "$bump" rewrite "$work/seed/clusters/local/jobpilot.yaml" "$c7" "$(digest 71)" "$(digest 72)" "$(digest 73)"
-git -C "$work/seed" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam "By hand: the lab runs c7"
-git -C "$work/seed" push -q origin HEAD:main
-opens "a run after main caught up" "$c7" 8
+# 7. main catches up by another route, as a bump by hand would. A push to the branch while the PR
+# is being closed reopens it; once main runs the proposal or something newer, the PR is closed.
+main_runs() { # COMMIT RUN
+  sh "$bump" rewrite "$work/seed/clusters/local/jobpilot.yaml" "$1" "$(digest "${2}1")" "$(digest "${2}2")" "$(digest "${2}3")"
+  git -C "$work/seed" -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam "By hand: the lab runs $(short "$1")"
+  git -C "$work/seed" push -q origin HEAD:main
+}
+main_runs "$c7" 7
+rm -rf "$work/hand2"
+on_patch="[ -e '$work/hand2' ] || { git clone -q -b bump/jobpilot '$bare' '$work/hand2' && sh '$bump' rewrite '$work/hand2/clusters/local/jobpilot.yaml' $c8 $(digest 81) $(digest 82) $(digest 83) && git -C '$work/hand2' -c user.name=test -c user.email=test@example.com -c commit.gpgsign=false commit -qam 'By hand' && git -C '$work/hand2' push -q origin HEAD:bump/jobpilot; }"
+open_fails "open: a push while the PR is being closed stops the run" "$c7" 8
+normal
+expect "and the PR is open again, for the newer proposal" "open $c8" "$(pr_state) $(proposed)"
+opens "the run after it" "$c7" 8
+described "open: the run after it describes the newer proposal"
+expect "open: the PR body keeps a commit subject exactly" 1 "$(jq -r .body "$work/state/pr.json" | grep -Fxc -- "- $plain ($(short "$c8"))")"
+main_runs "$c9" 9
+opens "a run after main got ahead of the PR" "$c9" 9
 expect "open: it closes the PR" "none closed" "$(pr_state) $(jq -r .state "$work/state/closed.json")"
 expect "open: and says why" 1 "$(jq -r .body "$work/state/closed.json" | grep -c '^Closed by jobpilot')"
 
 # 8. With no open PR, a creation that fails after the push is redone by the next run.
 fail_on='POST *'
-open_fails "open: a failed PR creation stops the run" "$c8" 9
+open_fails "open: a failed PR creation stops the run" "$c10" 10
 normal
-expect "after the push" "none $c8" "$(pr_state) $(proposed)"
-opens "the next run" "$c8" 9
+expect "after the push" "none $c10" "$(pr_state) $(proposed)"
+opens "the next run" "$c10" 10
 expect "open: the next run opens the PR" "1 open" "$(calls POST) $(pr_state)"
 expect "open: the branch is one commit on the new main" 1 "$(git -C "$bare" rev-list --count main..bump/jobpilot)"
 described "open: the new PR says what the branch proposes"
-expect "open: the PR body keeps a commit subject exactly" 1 "$(jq -r .body "$work/state/pr.json" | grep -Fxc -- "- $plain ($(short "$c8"))")"
 
 rm -f "$work/api/calls"
 # shellcheck disable=SC2016 # the inner sh expands $1..$3
 refuses "open refuses to run without a token" env PATH="$work/bin:$PATH" STUB="$work/api" STUB_STATE="$work/state" \
-  STUB_FAIL='' STUB_FAIL_BODY='' STUB_ANSWER='' STUB_ANSWER_BODY='' STUB_ON_USER='' GITHUB_API_URL=https://api.github.example \
+  STUB_FAIL='' STUB_FAIL_BODY='' STUB_ANSWER='' STUB_ANSWER_BODY='' STUB_ON_USER='' STUB_ON_PATCH='' GITHUB_API_URL=https://api.github.example \
   SHA="$c8" API_DIGEST="$(digest 61)" WEB_DIGEST="$(digest 62)" MIGRATE_DIGEST="$(digest 63)" \
   GH_TOKEN='' APP_SLUG=jobpilot-bump INFRA_REPO=owner/infra JOBPILOT_REPO=owner/jobpilot RUN_URL=https://github.example/run \
   sh -c 'cd "$1" && sh "$2" open "$3"' sh "$repo" "$bump" "$work/infra"

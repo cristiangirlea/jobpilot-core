@@ -149,6 +149,12 @@ github() { # METHOD PATH [JSON]: the answer, never empty (jq -e reads no input a
   printf '%s' "$out"
 }
 
+# json PROGRAM ANSWER: PROGRAM's result on ANSWER, which must be exactly one JSON document. jq
+# alone reads blank or no input as success, and that must not pass for "no PR".
+json() {
+  printf '%s' "$2" | jq -ers "if length == 1 then .[0] | ($1) else error(\"expected one JSON document, got \(length)\") end"
+}
+
 # The open PR's number from the lookup's answer, or nothing when there is none; any other answer
 # fails the run, since reading it as "no PR" would open a second one or skip the checks below.
 OPEN_PR='if type != "array" then error("not a list of pull requests")
@@ -157,14 +163,32 @@ OPEN_PR='if type != "array" then error("not a list of pull requests")
          and (.number | floor) == .number and ((.body | type) == "string" or .body == null))
     then .[0].number | tostring
   else error("not a pull request: \(.[0])") end'
+PR_URL='.html_url | select(type == "string" and startswith("https://"))'
 
-# describe RUNNING PROPOSED: the PR's title and body for that proposal. The body ends in a marker
-# naming both commits, which is how a later run tells whether the description is still true.
+# run_of COMMIT: the CI run that published the images infra's COMMIT pins, as move_branch records
+# it in the commit message; nothing for a commit made another way, or naming another repository's run.
+run_of() {
+  url=$(git -C "$infra" log -1 --format=%B "$1" | sed -n 's/^Images published by //p' | tail -1)
+  runs="${RUN_URL%/*}/"
+  case $url in
+    "$runs"*)
+      case ${url#"$runs"} in '' | *[!0-9]*) ;; *) printf '%s' "$url" ;; esac
+      ;;
+  esac
+}
+
+# describe RUNNING PROPOSED [RUN]: the PR's title and body for that proposal. The body ends in a
+# marker naming both commits, which is how a later run tells whether the description is still true.
 describe() {
   list=$(cmd_changes "$1" "$2" "$JOBPILOT_REPO")
   title="JobPilot: run $(short "$2") on the lab"
   marker="<!-- infra-bump: running $1 proposed $2 -->"
-  body="Runs jobpilot [\`$(short "$2")\`](https://github.com/$JOBPILOT_REPO/commit/$2) on the lab: \`deploy/base\` at that commit and its three images by digest, which jobpilot's CI built and published for it (the commit's page links the run).
+  if [ -n "${3:-}" ]; then
+    published="built and published by [this CI run]($3)"
+  else
+    published="which jobpilot's CI built and published (the commit's page links the run)"
+  fi
+  body="Runs jobpilot [\`$(short "$2")\`](https://github.com/$JOBPILOT_REPO/commit/$2) on the lab: \`deploy/base\` at that commit and its three images by digest, $published.
 
 Since the commit the lab runs now (\`$(short "$1")\`):
 
@@ -190,9 +214,9 @@ cmd_open() {
   running=$(cmd_pinned "$infra/$INFRA_FILE")
   move=$(cmd_decide "$running" "$SHA")
   answer=$(github GET "/repos/$INFRA_REPO/pulls?state=open&base=$base&head=${INFRA_REPO%%/*}:$BRANCH")
-  number=$(printf '%s' "$answer" | jq -er "$OPEN_PR")
+  number=$(json "$OPEN_PR" "$answer")
   if [ -n "$number" ]; then
-    described=$(printf '%s' "$answer" | jq -r '.[0].body // ""')
+    described=$(json '.[0].body // ""' "$answer")
     git -C "$infra" fetch -q --depth=1 origin "refs/heads/$BRANCH"
     seen=$(git -C "$infra" rev-parse FETCH_HEAD)
     git -C "$infra" show "$seen:$INFRA_FILE" > "$work/open.yaml"
@@ -206,17 +230,17 @@ cmd_open() {
 
   if [ "$move" = bump ]; then
     move_branch
-    describe "$running" "$SHA"
+    describe "$running" "$SHA" "$RUN_URL"
     if [ -n "$number" ]; then
       answer=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" \
         "$(jq -n --arg title "$title" --arg body "$body" '{title: $title, body: $body}')")
-      url=$(pr_url "$answer")
+      url=$(json "$PR_URL" "$answer")
       say "moved $url to $(short "$SHA")"
     else
       answer=$(github POST "/repos/$INFRA_REPO/pulls" \
         "$(jq -n --arg title "$title" --arg body "$body" --arg head "$BRANCH" --arg base "$base" \
           '{title: $title, body: $body, head: $head, base: $base}')")
-      url=$(pr_url "$answer")
+      url=$(json "$PR_URL" "$answer")
       say "opened $url"
     fi
     if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
@@ -226,12 +250,14 @@ cmd_open() {
   fi
 
   if [ -z "$number" ]; then
+    # A branch without an open PR is nobody's proposal: the next commit that deploys something,
+    # or a rerun of the one whose PR failed to open, rebuilds it and opens the PR.
     say "the lab runs $(short "$running"), and $(short "$SHA") deploys nothing newer: no bump"
     return
   fi
   # The branch stays. What the PR says must match what the branch proposes now, whatever an earlier
   # run left half done or someone else pushed; and a PR the lab has caught up with is closed.
-  describe "$running" "$proposed"
+  describe "$running" "$proposed" "$(run_of "$seen")"
   ahead=$(cmd_decide "$running" "$proposed")
   if [ "$ahead" != bump ]; then
     body="$body
@@ -239,7 +265,16 @@ cmd_open() {
 Closed by jobpilot's CI: the lab already runs \`$(short "$running")\`, and this PR deploys nothing beyond it."
     answer=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" \
       "$(jq -n --arg body "$body" '{state: "closed", body: $body}')")
-    url=$(pr_url "$answer")
+    url=$(json "$PR_URL" "$answer")
+    # A push to the branch since this run read it may propose something newer: then the PR is
+    # reopened, and the next run describes it.
+    now=$(git -C "$infra" ls-remote origin "refs/heads/$BRANCH")
+    now=$(printf '%s' "$now" | cut -f1)
+    if [ "$now" != "$seen" ]; then
+      answer=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" '{"state": "open"}')
+      url=$(json "$PR_URL" "$answer")
+      die "$BRANCH moved while $url was being closed; reopened it for the next run to describe"
+    fi
     say "closed $url: the lab already runs $(short "$running")"
     return
   fi
@@ -250,7 +285,7 @@ Closed by jobpilot's CI: the lab already runs \`$(short "$running")\`, and this 
     *)
       answer=$(github PATCH "/repos/$INFRA_REPO/pulls/$number" \
         "$(jq -n --arg title "$title" --arg body "$body" '{title: $title, body: $body}')")
-      url=$(pr_url "$answer")
+      url=$(json "$PR_URL" "$answer")
       say "described $url again: it proposes $(short "$proposed")"
       ;;
   esac
@@ -262,7 +297,7 @@ Closed by jobpilot's CI: the lab already runs \`$(short "$running")\`, and this 
 # branch then proposes.
 move_branch() {
   answer=$(github GET "/users/$APP_SLUG%5Bbot%5D")
-  bot_id=$(printf '%s' "$answer" | jq -er '.id')
+  bot_id=$(json '.id' "$answer")
   bot="${APP_SLUG}[bot]"
   case $bot_id in '' | *[!0-9]*) die "no user id for $bot: $bot_id" ;; esac
   list=$(cmd_changes "$running" "$SHA" "$JOBPILOT_REPO")
@@ -271,10 +306,6 @@ move_branch() {
   git -C "$infra" -c "user.name=$bot" -c "user.email=$bot_id+$bot@users.noreply.github.com" \
     commit -q -m "JobPilot: run $(short "$SHA") on the lab" -m "$list" -m "Images published by $RUN_URL" -- "$INFRA_FILE"
   git -C "$infra" push -q --force-with-lease="refs/heads/$BRANCH:$seen" origin "HEAD:refs/heads/$BRANCH"
-}
-
-pr_url() { # ANSWER: the pull request's address, or a failed run
-  printf '%s' "$1" | jq -er '.html_url | select(type == "string" and startswith("https://"))'
 }
 
 [ $# -gt 0 ] || usage
