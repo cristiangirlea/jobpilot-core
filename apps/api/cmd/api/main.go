@@ -28,9 +28,11 @@ func main() {
 		os.Exit(1)
 	}
 	defer pool.Close()
-	if err := ats.ValidateGreenhouseBase(cfg.ATSGreenhouseURL); err != nil {
-		slog.Error("invalid configuration", "error", err)
-		os.Exit(1)
+	for _, err := range []error{ats.ValidateGreenhouseBase(cfg.ATSGreenhouseURL), ats.ValidateAshbyBase(cfg.ATSAshbyURL), ats.ValidateRecruiteeBase(cfg.ATSRecruiteeURL)} {
+		if err != nil {
+			slog.Error("invalid configuration", "error", err)
+			os.Exit(1)
+		}
 	}
 	dataStore := store.New(pool)
 	// Catalog upkeep for jobs stored before a feature existed runs in the
@@ -76,7 +78,7 @@ func main() {
 	discoveryService := discovery.NewService(dataStore)
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
 	go discoveryService.Start(ctx)
-	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: ats.NewReader().WithGreenhouseBase(cfg.ATSGreenhouseURL), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
 	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
 	drained := make(chan struct{})
@@ -95,4 +97,9 @@ func main() {
 		os.Exit(1)
 	}
 	<-drained
+}
+
+// formReader reads employer forms from the ATS origins the configuration names.
+func formReader(cfg config.Config) *ats.Reader {
+	return ats.NewReader().WithGreenhouseBase(cfg.ATSGreenhouseURL).WithAshbyBase(cfg.ATSAshbyURL).WithRecruiteeBase(cfg.ATSRecruiteeURL)
 }

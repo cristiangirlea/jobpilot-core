@@ -46,6 +46,8 @@ services:
       # Point at a fake (for example http://host.docker.internal:18999) to
       # run the MCP end-to-end flow's employer-form section locally.
       ATS_GREENHOUSE_URL: ${ATS_GREENHOUSE_URL:-https://boards-api.greenhouse.io}
+      ATS_ASHBY_URL: ${ATS_ASHBY_URL:-https://jobs.ashbyhq.com}
+      ATS_RECRUITEE_URL: ${ATS_RECRUITEE_URL:-}
       LLM_TIMEOUT_SECONDS: ${LLM_TIMEOUT_SECONDS:-90}
       LLM_CALLS_PER_HOUR: ${LLM_CALLS_PER_HOUR:-120}
     extra_hosts:

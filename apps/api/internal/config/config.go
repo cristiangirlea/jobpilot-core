@@ -16,8 +16,14 @@ type Config struct {
 	// reader and discovery's board listings. Tests point it at a fake so a
 	// discovery run and a composed application can be exercised end to end.
 	ATSGreenhouseURL string
-	TokenTTL         time.Duration
-	LLM              LLMConfig
+	// ATSAshbyURL is the origin of Ashby's public job pages, and
+	// ATSRecruiteeURL stands in for every Recruitee careers site; empty keeps
+	// each site's own host. They exist so the end-to-end test can serve those
+	// forms too.
+	ATSAshbyURL     string
+	ATSRecruiteeURL string
+	TokenTTL        time.Duration
+	LLM             LLMConfig
 }
 
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
@@ -40,6 +46,8 @@ func Load() Config {
 		JWTSecret:        env("JWT_SECRET", "development-only-change-me"),
 		FrontendURL:      env("FRONTEND_URL", "http://localhost:3000"),
 		ATSGreenhouseURL: env("ATS_GREENHOUSE_URL", "https://boards-api.greenhouse.io"),
+		ATSAshbyURL:      env("ATS_ASHBY_URL", "https://jobs.ashbyhq.com"),
+		ATSRecruiteeURL:  env("ATS_RECRUITEE_URL", ""),
 		TokenTTL:         time.Duration(hours) * time.Hour,
 		LLM:              loadLLM(),
 	}
