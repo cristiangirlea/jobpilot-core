@@ -97,7 +97,6 @@
     "ask": [
       "Bash(gh pr create *)",
       "Bash(gh issue create *)",
-      "Bash(git tag *)",
       "Bash(make dev *)",
       "Bash(make migrate *)",
       "Bash(make seed *)",
@@ -114,7 +113,6 @@
       "Bash(powershell -File scripts/agent-token.ps1 *)",
       "PowerShell(gh pr create *)",
       "PowerShell(gh issue create *)",
-      "PowerShell(git tag *)",
       "PowerShell(make dev *)",
       "PowerShell(make migrate *)",
       "PowerShell(make seed *)",
@@ -206,7 +204,11 @@
       "Bash(gh pr merge *--auto*)",
       "Bash(gh pr merge *--admin*)",
       "PowerShell(gh pr merge *--auto*)",
-      "PowerShell(gh pr merge *--admin*)"
+      "PowerShell(gh pr merge *--admin*)",
+      "Bash(git tag *)",
+      "PowerShell(git tag *)",
+      "Bash(git push *--follow-tags*)",
+      "PowerShell(git push *--follow-tags*)"
     ]
   },
   "hooks": {

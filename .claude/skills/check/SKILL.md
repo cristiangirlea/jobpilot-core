@@ -8,7 +8,7 @@ step's result in one line; on a failure, show the error text and fix it before r
 1. For `apps/api`, then `apps/mcp` (inside the module directory):
 
    ```bash
-   test -z "$(gofmt -l .)" || gofmt -l .
+   test -z "$(gofmt -l .)" || { gofmt -l .; false; }
    go mod tidy -diff
    go vet ./...
    go test -race ./...

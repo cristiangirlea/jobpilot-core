@@ -84,8 +84,9 @@ real profile, CV, applications and tokens.
 - Commit messages and PR text: plain sentences, optionally an area first (`Migrations: ...`,
   `CI: ...`). No conventional-commit prefixes, no emoji, no AI attribution lines. Commit as
   `maintainer@example.com` (check `git config user.email`).
-- CI runs on the lab cluster's runners (`vars.CI_RUNNER`); `publish` runs only there. Spend no
-  GitHub-hosted minutes: never add a hosted-runner job or fallback beyond what the workflow has.
+- CI runs only on the owner's runner (`vars.CI_RUNNER`, the lab cluster); `publish` runs only
+  there; without `CI_RUNNER` every job is skipped (jobpilot#71 removed the `ubuntu-latest`
+  fallbacks). Never add a GitHub-hosted runner or a fallback to one.
 - Keep the Makefile and `ci.yml` in step (the workflow's header says so).
 - Other sessions merge concurrently: migration and PR numbers can be taken between branch and merge.
   Check `ls migrations` and merge `master` into the branch before the checks that precede a merge.
