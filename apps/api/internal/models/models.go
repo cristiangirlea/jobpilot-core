@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"cmp"
+	"time"
+)
 
 type User struct {
 	ID        string    `json:"id"`
@@ -131,6 +134,23 @@ type Job struct {
 	// EmployerURL is the employer's own application page for a posting found
 	// through an aggregator, once the aggregator's redirect has been read.
 	EmployerURL string `json:"employer_url,omitempty"`
+	// PartnerApplyURL is an authorized partner's link to the posting. It is
+	// attribution, never served with the job: only the outbound endpoint
+	// returns it, as the place to apply.
+	PartnerApplyURL string `json:"-"`
+}
+
+// ApplyTarget is where a person applies: the partner link, else the
+// employer's own page, else the apply URL. It is empty for a job whose links
+// were withheld.
+func (j Job) ApplyTarget() string {
+	return cmp.Or(j.PartnerApplyURL, j.EmployerURL, j.ApplyURL)
+}
+
+// FormTarget is where the application form is read: the employer's own page,
+// else the apply URL. A partner link is attribution, never a form.
+func (j Job) FormTarget() string {
+	return cmp.Or(j.EmployerURL, j.ApplyURL)
 }
 
 type Evaluation struct {
@@ -311,6 +331,20 @@ type OutboxEntry struct {
 	ApprovedAt        *time.Time     `json:"approved_at,omitempty"`
 	SentAt            *time.Time     `json:"sent_at,omitempty"`
 	Job               *Job           `json:"job,omitempty"`
+	CV                *OutboxCV      `json:"cv,omitempty"`
+}
+
+// OutboxCV is the CV an outbox entry carries, read as it is now rather than as
+// it was when the entry was composed, so an approval given since shows. It is
+// absent when the CV was deleted. Alignment and Missing come from a tailored
+// CV's parse (parsed.tailored); Alignment is nil for a CV that was not tailored.
+type OutboxCV struct {
+	ID        string   `json:"id"`
+	Filename  string   `json:"filename"`
+	Kind      string   `json:"kind"`
+	Approved  bool     `json:"approved"`
+	Alignment *float64 `json:"alignment,omitempty"`
+	Missing   []string `json:"missing,omitempty"`
 }
 
 // AgentToken is a long-lived credential for an agent host or script. The

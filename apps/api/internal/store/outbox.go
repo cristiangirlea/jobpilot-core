@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -13,17 +15,42 @@ import (
 
 const outboxColumns = `id,job_id,application_id,status,channel,ats_provider,cv_document_id,cv_decision,cover_letter,cover_letter_source,form,answers,blockers,notices,needs_review,error,created_at,updated_at,approved_at,sent_at`
 
+// outboxSelect reads entries with the CV each one carries, in one join. The
+// join is scoped to the entry's user, so a CV id that is not theirs never
+// brings another user's CV along. Scan its rows with scanOutboxWithCV.
+var outboxSelect = `SELECT o.` + strings.ReplaceAll(outboxColumns, ",", ",o.") + `,` + outboxCVColumns + `
+	FROM application_outbox o LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=o.user_id`
+
+// outboxCVColumns are the CV summary the outbox shows: the coverage line comes
+// from a tailored CV's parse, so the whole document is never read for it. The
+// parse's shape is not enforced by the schema, so its values are read as raw
+// JSON and decoded in Go: a malformed one is left out, never fails the query.
+const outboxCVColumns = `c.id,c.filename,c.kind,c.approved,c.parsed->'tailored'->'alignment',c.parsed->'tailored'->'missing'`
+
 func scanOutbox(row pgx.Row) (models.OutboxEntry, error) {
+	return scanOutboxRow(row, false)
+}
+
+func scanOutboxWithCV(row pgx.Row) (models.OutboxEntry, error) {
+	return scanOutboxRow(row, true)
+}
+
+func scanOutboxRow(row pgx.Row, withCV bool) (models.OutboxEntry, error) {
 	var entry models.OutboxEntry
 	var application, cvDocument *string
 	var form, answers []byte
-	err := row.Scan(&entry.ID, &entry.JobID, &application, &entry.Status, &entry.Channel, &entry.ATSProvider,
+	dest := []any{&entry.ID, &entry.JobID, &application, &entry.Status, &entry.Channel, &entry.ATSProvider,
 		&cvDocument, &entry.CVDecision, &entry.CoverLetter, &entry.CoverLetterSource,
 		&form, &answers, &entry.Blockers, &entry.Notices, &entry.NeedsReview, &entry.Error,
-		&entry.CreatedAt, &entry.UpdatedAt, &entry.ApprovedAt, &entry.SentAt)
-	if err != nil {
+		&entry.CreatedAt, &entry.UpdatedAt, &entry.ApprovedAt, &entry.SentAt}
+	var cv cvSummary
+	if withCV {
+		dest = append(dest, cv.dest()...)
+	}
+	if err := row.Scan(dest...); err != nil {
 		return entry, err
 	}
+	entry.CV = cv.summary()
 	if application != nil {
 		entry.ApplicationID = *application
 	}
@@ -38,6 +65,50 @@ func scanOutbox(row pgx.Row) (models.OutboxEntry, error) {
 		_ = json.Unmarshal(answers, &entry.Answers)
 	}
 	return entry, nil
+}
+
+// cvSummary receives outboxCVColumns, every one nullable since the join may
+// find no CV.
+type cvSummary struct {
+	id, filename, kind *string
+	approved           *bool
+	alignment, missing []byte
+}
+
+func (c *cvSummary) dest() []any {
+	return []any{&c.id, &c.filename, &c.kind, &c.approved, &c.alignment, &c.missing}
+}
+
+// summary is nil when there was no CV to read: deleted, or not the user's.
+func (c *cvSummary) summary() *models.OutboxCV {
+	if c.id == nil {
+		return nil
+	}
+	cv := &models.OutboxCV{ID: *c.id}
+	if c.filename != nil {
+		cv.Filename = *c.filename
+	}
+	if c.kind != nil {
+		cv.Kind = *c.kind
+	}
+	if c.approved != nil {
+		cv.Approved = *c.approved
+	}
+	// Only a number is an alignment (JSON has no NaN or infinity), and only a
+	// list of strings is a missing list; anything else is left out. A pointer,
+	// because decoding JSON null succeeds and would otherwise read as zero.
+	var alignment *float64
+	if len(c.alignment) > 0 && json.Unmarshal(c.alignment, &alignment) == nil {
+		cv.Alignment = alignment
+	}
+	// Pointers again, so a null element is told apart from an empty string.
+	var missing []*string
+	if len(c.missing) > 0 && json.Unmarshal(c.missing, &missing) == nil && !slices.Contains(missing, nil) {
+		for _, technology := range missing {
+			cv.Missing = append(cv.Missing, *technology)
+		}
+	}
+	return cv
 }
 
 // ErrOutboxSent is returned when a caller tries to rebuild an entry that has
@@ -167,18 +238,21 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if err != nil {
 		return models.OutboxEntry{}, err
 	}
-	return saved, tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return models.OutboxEntry{}, err
+	}
+	return s.withCV(ctx, userID, saved), nil
 }
 
 // OutboxEntries lists the queue. status "" means every entry.
 func (s *Store) OutboxEntries(ctx context.Context, userID, status string) ([]models.OutboxEntry, error) {
-	query := `SELECT ` + outboxColumns + ` FROM application_outbox WHERE user_id=$1`
+	query := outboxSelect + ` WHERE o.user_id=$1`
 	args := []any{userID}
 	if status != "" {
-		query += ` AND status=$2`
+		query += ` AND o.status=$2`
 		args = append(args, status)
 	}
-	rows, err := s.DB.Query(ctx, query+` ORDER BY created_at DESC LIMIT 200`, args...)
+	rows, err := s.DB.Query(ctx, query+` ORDER BY o.created_at DESC LIMIT 200`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +260,7 @@ func (s *Store) OutboxEntries(ctx context.Context, userID, status string) ([]mod
 
 	out := []models.OutboxEntry{}
 	for rows.Next() {
-		entry, scanErr := scanOutbox(rows)
+		entry, scanErr := scanOutboxWithCV(rows)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -205,7 +279,7 @@ func (s *Store) OutboxEntries(ctx context.Context, userID, status string) ([]mod
 }
 
 func (s *Store) OutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
-	entry, err := scanOutbox(s.DB.QueryRow(ctx, `SELECT `+outboxColumns+` FROM application_outbox WHERE user_id=$1 AND id=$2`, userID, id))
+	entry, err := scanOutboxWithCV(s.DB.QueryRow(ctx, outboxSelect+` WHERE o.user_id=$1 AND o.id=$2`, userID, id))
 	if err != nil {
 		return entry, err
 	}
@@ -266,7 +340,7 @@ func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (mode
 		if err := tx.Rollback(ctx); err != nil {
 			return models.OutboxEntry{}, err
 		}
-		return s.withJob(ctx, entry), nil
+		return s.withJob(ctx, userID, entry), nil
 	case models.OutboxReady, models.OutboxNeedsReview:
 	case models.OutboxSent:
 		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
@@ -289,7 +363,7 @@ func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (mode
 	if err := tx.Commit(ctx); err != nil {
 		return models.OutboxEntry{}, err
 	}
-	return s.withJob(ctx, approved), nil
+	return s.withJob(ctx, userID, approved), nil
 }
 
 // approvalRefusal is the first reason the entry cannot be approved now, or "".
@@ -376,15 +450,36 @@ func (s *Store) CancelOutboxEntry(ctx context.Context, userID, id string) (model
 	if err != nil {
 		return models.OutboxEntry{}, err
 	}
-	return s.withJob(ctx, cancelled), nil
+	return s.withJob(ctx, userID, cancelled), nil
 }
 
 // withJob attaches the job an entry is for, since a queue entry is unreadable
-// without it.
-func (s *Store) withJob(ctx context.Context, entry models.OutboxEntry) models.OutboxEntry {
+// without it, and the summary of the CV it carries, as OutboxEntry reads them.
+func (s *Store) withJob(ctx context.Context, userID string, entry models.OutboxEntry) models.OutboxEntry {
 	if job, err := s.CatalogJob(ctx, entry.JobID); err == nil {
 		entry.Job = &job
 	}
+	return s.withCV(ctx, userID, entry)
+}
+
+// withCV attaches the summary of the CV an entry carries, as the outbox lists
+// read it. It runs after the write it reports on (a compose, an approval, a
+// cancellation) has happened, so a failed lookup leaves the summary out and is
+// logged, rather than turning that answer into an error.
+func (s *Store) withCV(ctx context.Context, userID string, entry models.OutboxEntry) models.OutboxEntry {
+	if entry.CVDocumentID == "" {
+		return entry
+	}
+	var cv cvSummary
+	err := s.DB.QueryRow(ctx, `SELECT `+outboxCVColumns+` FROM cv_documents c WHERE c.user_id=$1 AND c.id=$2`,
+		userID, entry.CVDocumentID).Scan(cv.dest()...)
+	switch {
+	case err == nil:
+		entry.CV = cv.summary()
+	case !errors.Is(err, pgx.ErrNoRows):
+		slog.Warn("could not read the CV summary of an outbox entry", "entry_id", entry.ID, "error", err)
+	}
+	// No row: the CV was deleted, or is not the user's, so no summary.
 	return entry
 }
 

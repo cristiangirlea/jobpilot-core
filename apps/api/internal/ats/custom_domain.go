@@ -16,12 +16,19 @@ import (
 // publishes its form.
 const greenhouseLegacy = "https://boards.greenhouse.io"
 
-var digitsOnly = regexp.MustCompile(`^\d+$`)
+// greenhouseJobIDDigits bounds the job id taken from a link. Greenhouse's ids
+// fit in an int64, which has at most 19 digits; a longer run of digits is not
+// a Greenhouse job, and refusing it keeps a pasted link from putting an
+// arbitrarily long request target on the lookup.
+const greenhouseJobIDDigits = 19
+
+var greenhouseJobIDPattern = regexp.MustCompile(fmt.Sprintf(`^\d{1,%d}$`, greenhouseJobIDDigits))
 
 // greenhouseJobID reports a Greenhouse job whose link names no board: one on
 // an employer's own domain, where Greenhouse's embed puts the job id in the
 // gh_jid parameter, or Greenhouse's own embed link carrying only the job's
-// token. Links that do name the board are left to Detect.
+// token. Links that do name the board are left to Detect. When the parameter
+// repeats, the first one is the job's, as url.Values.Get reads it.
 func greenhouseJobID(applyURL string) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(applyURL))
 	if err != nil || parsed.Hostname() == "" {
@@ -30,13 +37,13 @@ func greenhouseJobID(applyURL string) (string, bool) {
 	query := parsed.Query()
 	if greenhousePattern.MatchString(strings.ToLower(parsed.Hostname())) {
 		id := query.Get("token")
-		if strings.Contains(parsed.Path, "/embed/job_app") && query.Get("for") == "" && digitsOnly.MatchString(id) {
+		if strings.Contains(parsed.Path, "/embed/job_app") && query.Get("for") == "" && greenhouseJobIDPattern.MatchString(id) {
 			return id, true
 		}
 		return "", false
 	}
 	id := query.Get("gh_jid")
-	return id, digitsOnly.MatchString(id)
+	return id, greenhouseJobIDPattern.MatchString(id)
 }
 
 // GreenhouseLookup is the address at Greenhouse that answers for a job whose
@@ -49,6 +56,30 @@ func GreenhouseLookup(link string) (string, bool) {
 		return "", false
 	}
 	return greenhouseLegacy + "/embed/job_app?token=" + id, true
+}
+
+// GreenhouseBoard names the board of a Greenhouse job whose link names none,
+// such as a careers-site link carrying gh_jid. It asks only Greenhouse's own
+// origin, never the link's host, and returns ErrUnsupported without a request
+// when the link carries no Greenhouse job id.
+func (r *Reader) GreenhouseBoard(ctx context.Context, link string) (board, jobID string, err error) {
+	jobID, ok := greenhouseJobID(link)
+	if !ok {
+		return "", "", ErrUnsupported
+	}
+	board, err = r.greenhouseBoard(ctx, jobID)
+	if err != nil {
+		return "", jobID, err
+	}
+	return board, jobID, nil
+}
+
+// WithGreenhouseLegacyBase replaces the origin asked which board a job id is
+// on, so a test outside this package can answer for Greenhouse. An empty base
+// keeps the public host.
+func (r *Reader) WithGreenhouseLegacyBase(base string) *Reader {
+	r.greenhouseLegacyBase = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	return r
 }
 
 func (r *Reader) greenhouseLegacyOrigin() string {

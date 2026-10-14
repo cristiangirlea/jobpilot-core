@@ -42,7 +42,8 @@ and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and conc
 - Tests whose subject is SQL are named `...Postgres` and skip unless `JOBPILOT_TEST_DATABASE_URL`
   names a migrated database. A new SQL query gets one.
 - The MCP end-to-end test needs `-api <origin>` (or `JOBPILOT_E2E_API_URL`); its employer-form
-  section also needs `JOBPILOT_E2E_ATS_PORT` with the API's `ATS_GREENHOUSE_URL` pointing at it.
+  section also needs `JOBPILOT_E2E_ATS_PORT` with the API's `ATS_GREENHOUSE_URL`, `ATS_ASHBY_URL`
+  and `ATS_RECRUITEE_URL` pointing at it.
 - `make smoke-live` hits real job APIs and is deliberately not in CI.
 
 ## The owner's data

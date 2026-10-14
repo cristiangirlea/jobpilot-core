@@ -110,8 +110,9 @@ const greenhouseAPI = "https://boards-api.greenhouse.io"
 type Reader struct {
 	client         *http.Client
 	greenhouseBase string
-	// ashbyBase, greenhouseLegacyBase and recruiteeBase replace those origins
-	// in tests, and public replaces the guarded client for employer domains.
+	// ashbyBase and recruiteeBase replace those origins, from configuration
+	// or a test; greenhouseLegacyBase and personioBase only in tests, and
+	// public replaces the guarded client for employer domains.
 	ashbyBase            string
 	greenhouseLegacyBase string
 	recruiteeBase        string
@@ -139,17 +140,45 @@ func (r *Reader) WithGreenhouseBase(base string) *Reader {
 	return r
 }
 
+// WithAshbyBase replaces the Ashby job page origin the same way.
+func (r *Reader) WithAshbyBase(base string) *Reader {
+	r.ashbyBase = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	return r
+}
+
+// WithRecruiteeBase sends every Recruitee careers site's API requests to one
+// origin. Recruitee has no single public origin, so an empty base keeps each
+// site's own host.
+func (r *Reader) WithRecruiteeBase(base string) *Reader {
+	r.recruiteeBase = strings.TrimSuffix(strings.TrimSpace(base), "/")
+	return r
+}
+
 // ValidateGreenhouseBase rejects an origin the reader could not use, so a
 // configuration mistake fails at startup with its real cause instead of
 // surfacing later as an unreadable form on every composed application.
 func ValidateGreenhouseBase(base string) error {
+	return validateBase("ATS_GREENHOUSE_URL", greenhouseAPI, base)
+}
+
+// ValidateAshbyBase checks ATS_ASHBY_URL as ValidateGreenhouseBase does.
+func ValidateAshbyBase(base string) error {
+	return validateBase("ATS_ASHBY_URL", ashbyAPI, base)
+}
+
+// ValidateRecruiteeBase checks ATS_RECRUITEE_URL as ValidateGreenhouseBase does.
+func ValidateRecruiteeBase(base string) error {
+	return validateBase("ATS_RECRUITEE_URL", "https://acme.recruitee.com", base)
+}
+
+func validateBase(setting, example, base string) error {
 	base = strings.TrimSpace(base)
 	if base == "" {
 		return nil
 	}
 	u, err := url.Parse(base)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("ATS_GREENHOUSE_URL must be an http or https origin such as %s, not %q", greenhouseAPI, base)
+		return fmt.Errorf("%s must be an http or https origin such as %s, not %q", setting, example, base)
 	}
 	return nil
 }

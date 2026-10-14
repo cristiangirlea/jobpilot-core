@@ -42,7 +42,7 @@ func addPrompts(s *mcp.Server) {
 3. Tell me how this role fits before writing anything: the score, what matched, what is missing, and any warnings or red flags worth knowing.
 4. Call generate_documents to produce the recruiter message, cover letter, candidate summary and screening answers. Show me the cover letter in full.
 5. Call create_application to track it.
-6. Give me the employer_url (or the apply_url when there is none) and tell me to open it and submit the application myself. You cannot submit it, and you must never say or imply that it has been submitted.
+6. Give me the job's apply link and tell me to open it and submit the application myself. ` + applyLinkOrder + ` You cannot submit it, and you must never say or imply that it has been submitted.
 7. Once I confirm that I applied, call update_application_status with applied.
 
 Use only facts from get_profile, get_job and generate_documents. Never invent experience, skills, employers, dates or claims. If something needed for a strong application is missing from my profile, say so instead of filling the gap.`},

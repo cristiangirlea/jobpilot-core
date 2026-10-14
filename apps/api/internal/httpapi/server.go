@@ -37,7 +37,11 @@ import (
 //	3: approving an outbox entry needs a browser session (403 for agent
 //	   tokens), and re-checks the entry's status, its CV and its required
 //	   drafted answers at that moment, refusing with 409.
-const Contract = 3
+//	4: detecting a board resolves a careers-site link to a Greenhouse job
+//	   (gh_jid) by asking Greenhouse, instead of refusing it with 422.
+//	5: outbox entries carry cv, the summary of the CV they carry as it is now
+//	   (absent when it was deleted), and the web app relies on it.
+const Contract = 5
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."

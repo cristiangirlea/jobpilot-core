@@ -563,7 +563,7 @@ Two kinds of question are never answered automatically, and both are matched on 
 
 ### Finding boards
 
-A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. The Discovery page offers both.
+A board token is the company slug in a careers URL, which is a poor thing to have to know. `GET /api/discovery/suggestions` returns employer boards checked against the live API, and `POST /api/discovery/detect` reads the provider and token out of any posting or board link the user pastes. A careers-site link to a Greenhouse posting (`careers.example.com/?gh_jid=123`) names no board, so detection then makes the same single lookup the form reader makes (see above), at Greenhouse only and with a five-second limit; the pasted link is never fetched, and a failed lookup leaves the answer as it was. The Discovery page offers both, and the MCP `detect_board` tool uses detection too.
 
 ### Where the deterministic boundary sits
 
@@ -617,7 +617,7 @@ Application statuses are:
 
 Every status change creates an `application_events` history row.
 
-Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint returns a partner destination only when an authorized partner URL is configured; otherwise it returns the original employer apply URL. It is blocked for rejected jobs.
+Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint applies at the authorized partner link first, when one is configured; otherwise at the employer's own page (`employer_url`) when known, else the apply URL. It is blocked for rejected jobs. That order is decided in one place, `models.Job.ApplyTarget`. Composing and the MCP server use a different order with no partner link: the employer's page, else the apply URL. Composing reads the form at `models.Job.FormTarget` (a partner link is attribution, never a form), and the MCP server's `applyLinkOrder` sentence tells agents to give the user the `employer_url`, else the `apply_url` (it never sees a partner link).
 
 Click attribution alone does not create revenue. Monetization requires a real employer, affiliate, CPA, recruiting, or hiring-partner agreement plus suitable user disclosure. Do not create or guess third-party referral codes.
 
@@ -700,7 +700,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 | `POST` | `/api/cv/{id}/import` | Copy reviewed CV data into the profile |
 | `POST` | `/api/jobs/{id}/cv` | Decide which CV this job should carry: base, reused, or newly tailored |
 | `POST` | `/api/jobs/{id}/compose` | Compose a full application and queue it for approval; 409 for a closed posting |
-| `GET` | `/api/outbox` | The approval queue; `?status=` filters |
+| `GET` | `/api/outbox` | The approval queue; `?status=` filters. Each entry carries `cv`, a summary of its CV as it is now (id, filename, kind, approval, and a tailored CV's `alignment` and `missing`), absent once the CV is deleted |
 | `GET` | `/api/outbox/{id}` | One composed application in full |
 | `POST` | `/api/outbox/{id}/approve` | Release an application for sending; a browser session only (403 for agent tokens), and 409 with the reason while anything holds it back |
 | `POST` | `/api/outbox/{id}/cancel` | Drop an application from the queue |
@@ -833,7 +833,7 @@ cd apps/mcp && go test ./...   # unit tests against a fake API; no stack needed
 make smoke-mcp                 # builds the binary and drives it over stdio against http://localhost:8080
 ```
 
-The end-to-end flow has an optional section that serves a fake Greenhouse form itself and imports a job whose apply URL points at it. Composing prepares a tailored CV, since the test user has none, and holds the entry until that CV is approved; the flow approves it with `approve_cv`, composes again to get an entry with no blockers, approves that entry through the API as the user would in the web app, and proves that rebuilding it withdraws the approval and says so. It runs when `JOBPILOT_E2E_ATS_PORT` is set and the API under test has `ATS_GREENHOUSE_URL` pointing at that port; CI always does this. Locally, put `ATS_GREENHOUSE_URL=http://host.docker.internal:18999` in `.env` before `make dev` and run:
+The end-to-end flow has an optional section that serves a fake Greenhouse form itself and imports a job whose apply URL points at it. Composing prepares a tailored CV, since the test user has none, and holds the entry until that CV is approved; the flow approves it with `approve_cv`, composes again to get an entry with no blockers, approves that entry through the API as the user would in the web app, and proves that rebuilding it withdraws the approval and says so. The same server, told apart by path, fakes an Ashby and a Recruitee board: on each, composing reads the form, answers it from the profile, reports the required question nothing stored answers as a blocker, and refuses a posting the board says is gone. It runs when `JOBPILOT_E2E_ATS_PORT` is set and the API under test has `ATS_GREENHOUSE_URL`, `ATS_ASHBY_URL` and `ATS_RECRUITEE_URL` pointing at that port; CI always does this. Locally, set all three to `http://host.docker.internal:18999` in `.env` before `make dev` and run:
 
 ```bash
 cd apps/mcp && JOBPILOT_E2E_ATS_PORT=18999 go test -count=1 -run TestEndToEnd . -args -api http://localhost:8080
@@ -920,6 +920,8 @@ When changing schema:
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
+| `ATS_ASHBY_URL` | Origin of Ashby's public job pages, whose posting query the form reader calls; defaults to `https://jobs.ashbyhq.com`. Point it at a fake as above |
+| `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
 
 ### AI environment
 

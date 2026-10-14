@@ -8,7 +8,9 @@
 package boards
 
 import (
+	"context"
 	"strings"
+	"time"
 
 	"jobpilot/core/api/internal/ats"
 )
@@ -81,6 +83,29 @@ func Extract(rawURL string) (Detected, bool) {
 		return Detected{Provider: provider, Identifier: board, Supported: discoverable[provider]}, true
 	}
 	return Detected{}, false
+}
+
+// resolveTimeout bounds the one request Resolve may make, so a slow Greenhouse
+// costs the user a few seconds at most before detection answers as before. A
+// variable only so a test can shorten it.
+var resolveTimeout = 5 * time.Second
+
+// Resolve is Extract plus one lookup: a careers-site link such as
+// careers.example.com/?gh_jid=123 names a Greenhouse job but not its board, so
+// when Extract finds nothing the reader asks Greenhouse which board the job is
+// on. Only Greenhouse's origin is asked, never the pasted link's host. A failed
+// or empty lookup returns what Extract returned.
+func Resolve(ctx context.Context, reader *ats.Reader, rawURL string) (Detected, bool) {
+	if detected, ok := Extract(rawURL); ok || reader == nil {
+		return detected, ok
+	}
+	ctx, cancel := context.WithTimeout(ctx, resolveTimeout)
+	defer cancel()
+	board, jobID, err := reader.GreenhouseBoard(ctx, rawURL)
+	if err != nil || board == "" {
+		return Detected{}, false
+	}
+	return Detected{Provider: ats.ProviderGreenhouse, Identifier: board, JobID: jobID, Supported: discoverable[ats.ProviderGreenhouse]}, true
 }
 
 // detectBoardRoot handles the listing pages, which have no job id:

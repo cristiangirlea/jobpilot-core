@@ -31,13 +31,20 @@ var discoveryProviders = []string{"remotive", "greenhouse", "lever", "ashby", "s
 // A variable so tests can shorten it.
 var progressInterval = 5 * time.Second
 
+// applyLinkOrder names the link the agent gives the user to apply themselves:
+// the employer's own page, else the apply URL, as the API reads the form
+// (models.Job.FormTarget). The MCP server never sees a partner link; that is
+// the outbound endpoint's, in the web app. The instructions and the prompts
+// say it in these words.
+const applyLinkOrder = "The link to give the user is the job's employer_url, or its apply_url when it has none."
+
 // instructions is sent to the host once per session. It carries the product
 // invariants the tool descriptions cannot repeat on every call.
 const instructions = `JobPilot is the user's self-hosted job search assistant. It discovers jobs from public APIs, scores each one against the user's profile and filters, drafts factual application material, and tracks applications.
 
 Rules the API enforces and you must respect:
 - Jobs rejected by a hard rule (current or previous employer, excluded company, or an active filter) are visible for explanation only. Documents, applications, and the applied status are refused for them with a 409; do not retry.
-- Nothing here submits an application, opens a browser, or records an apply click. compose_application assembles a whole application into the outbox for the user to review; approving it, and any sending, happen only in the web app. For a job whose form cannot be read, give the user the employer_url (or the apply_url when there is none) and let them apply themselves, then record the outcome with update_application_status.
+- Nothing here submits an application, opens a browser, or records an apply click. compose_application assembles a whole application into the outbox for the user to review; approving it, and any sending, happen only in the web app. For a job whose form cannot be read, give the user its apply link and let them apply themselves, then record the outcome with update_application_status. ` + applyLinkOrder + `
 - Anything marked needs_review or unapproved, and every blocker, must be shown to the user in the exact words the tool returned. Never describe an application as approved, submitted, or sent.
 - When you write anything for the user, use only facts returned by get_profile, get_cv, get_job, and generate_documents. Never invent experience, skills, or claims. An answer or CV whose source is ai or template is a draft until the user reads it and approves it.
 - Listing tools return summaries without the job description; call get_job for the full text and the score breakdown.`

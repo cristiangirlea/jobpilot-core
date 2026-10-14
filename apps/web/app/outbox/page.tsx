@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {CVDocument,OutboxEntry} from "@/lib/types";
+import {OutboxEntry} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
@@ -162,17 +162,10 @@ const decisionLabel:Record<string,string>={
 
 // CVCard names the CV this application carries and how well it covers the
 // job, with a way to read it in full and, when it is still a draft, approve it.
+// The entry carries the CV's summary as it is now, so nothing more is fetched.
 function CVCard({entry,busy,done,onApprove}:{entry:OutboxEntry;busy:boolean;done:boolean;onApprove:(entry:OutboxEntry)=>void}){
-  const [cv,setCV]=useState<CVDocument|null>(null);
-  useEffect(()=>{
-    // A slower answer for the entry open before must not land on this one.
-    let current=true;
-    setCV(null);
-    api<CVDocument>(`/cv/${entry.cv_document_id}`).then(doc=>{if(current)setCV(doc)}).catch(()=>{});
-    return ()=>{current=false};
-  },[entry.cv_document_id,entry.updated_at]);
-  const tailored=cv?.parsed?.tailored;
-  const missing=tailored?.missing??[];
+  const cv=entry.cv;
+  const missing=cv?.missing??[];
   return <div className="rounded-xl border border-black/10 px-4 py-3">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
@@ -185,8 +178,8 @@ function CVCard({entry,busy,done,onApprove}:{entry:OutboxEntry;busy:boolean;done
         {cv&&!cv.approved&&!done&&<button className="btn-primary !py-2" disabled={busy} onClick={()=>onApprove(entry)}>Approve CV</button>}
       </div>
     </div>
-    {tailored&&<p className="muted mt-2 text-xs">
-      Covers {Math.round(tailored.alignment*100)}% of the job's technologies.
+    {cv?.alignment!==undefined&&<p className="muted mt-2 text-xs">
+      Covers {Math.round(cv.alignment*100)}% of the job's technologies.
       {missing.length>0&&` Not on your CV, so not added: ${missing.join(", ")}.`}</p>}
   </div>;
 }

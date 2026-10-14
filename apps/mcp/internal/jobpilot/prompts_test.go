@@ -65,6 +65,31 @@ func TestPromptsOnlyNameToolsThatExist(t *testing.T) {
 	}
 }
 
+// The host is told which link to give the user (the employer's page, else the
+// apply URL, as models.Job.FormTarget in apps/api reads the form), in one
+// sentence, wherever it hands out a link. The partner link is the outbound
+// endpoint's alone and never reaches the MCP server.
+func TestApplyLinkOrderIsStatedOnce(t *testing.T) {
+	employer, apply := strings.Index(applyLinkOrder, "employer_url"), strings.Index(applyLinkOrder, "apply_url")
+	if employer < 0 || apply < 0 || employer > apply {
+		t.Errorf("applyLinkOrder should name employer_url before apply_url: %q", applyLinkOrder)
+	}
+	if strings.Contains(strings.ToLower(applyLinkOrder), "partner") {
+		t.Errorf("applyLinkOrder should never mention a partner link: %q", applyLinkOrder)
+	}
+	if !strings.Contains(instructions, applyLinkOrder) {
+		t.Error("server instructions should state the apply link order")
+	}
+	cs, _ := session(t)
+	got, err := cs.GetPrompt(context.Background(), &mcp.GetPromptParams{Name: "prepare_application", Arguments: map[string]string{"job_id": "job-a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := got.Messages[0].Content.(*mcp.TextContent).Text; !strings.Contains(text, applyLinkOrder) {
+		t.Error("prepare_application should state the apply link order")
+	}
+}
+
 // Found in early use: the review asks whether the filters are too
 // narrow, but never had the model read them, so it could only guess.
 func TestWeeklyReviewReadsTheFilters(t *testing.T) {

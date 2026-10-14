@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -394,7 +395,7 @@ func TestEndToEnd(t *testing.T) {
 	if atsPort == "" {
 		t.Log("JOBPILOT_E2E_ATS_PORT not set; skipping the employer-form section, which CI runs")
 	} else {
-		fake := serveFakeGreenhouse(t, atsPort)
+		fake := serveFakeATS(t, atsPort)
 
 		out, text, isErr = call("import_job", map[string]any{
 			"title": "Senior Backend Engineer", "company": "Fake Greenhouse Co",
@@ -495,12 +496,15 @@ func TestEndToEnd(t *testing.T) {
 		if approval.Status != "approved" {
 			t.Fatalf("a rebuilt entry should be approvable again, got %+v", approval)
 		}
+
+		composeOtherBoards(t, call, fake, atsPort, email)
 	}
 
-	// The employer-form section imports one more job when it runs.
+	// The employer-form section imports five more jobs when it runs: the
+	// Greenhouse one, and an open and a gone posting on Ashby and Recruitee.
 	expectedJobs := float64(2)
 	if atsPort != "" {
-		expectedJobs++
+		expectedJobs += 5
 	}
 	out, text, isErr = call("get_dashboard", nil)
 	if isErr || out["applications_applied"] != float64(1) || out["jobs_imported"] != expectedJobs {
@@ -717,17 +721,132 @@ func discoveryShareAndCounters(t *testing.T, r *rest, call func(string, map[stri
 	}
 }
 
-// serveFakeGreenhouse answers the Greenhouse board API: a listing of five
-// postings for any board, and for any job one form of four required text
-// fields the profile can answer, so the composed entry carries no blockers. It listens on every interface, because
-// an API running in a container reaches it through host.docker.internal.
-func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
+// composeOtherBoards composes against the fake Ashby and Recruitee boards. On
+// each, the form is read from the fake and answered from the profile, a
+// required question nothing stored answers is reported as a blocker in the
+// API's words, and a posting the board reports gone is refused as closed.
+// Every posting's path carries a per-run token: the job fingerprint ignores
+// the query string, so a fixed path would reuse an earlier run's job, already
+// closed, against the same database without the fake ever being asked.
+func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool), fake *fakeATS, atsPort, email string) {
+	t.Helper()
+	run := fmt.Sprint(time.Now().UnixNano())
+	boards := []struct {
+		provider, setting, open, gone, openRequest, goneRequest string
+		// profile maps each field the profile answers to the value the test
+		// seeded; unanswered names the question nothing stored answers.
+		profile    map[string]string
+		unanswered string
+	}{
+		{
+			"ashby", "ATS_ASHBY_URL",
+			"https://jobs.ashbyhq.com/fakeco/ashby-open-" + run, "https://jobs.ashbyhq.com/fakeco/ashby-gone-" + run,
+			"ashby fakeco/ashby-open-" + run, "ashby fakeco/ashby-gone-" + run,
+			map[string]string{"_systemfield_name": "MCP Candidate", "_systemfield_email": email, "phone-1": "+400000000"}, "talk-1",
+		},
+		{
+			"recruitee", "ATS_RECRUITEE_URL",
+			"https://fakeco.recruitee.com/o/backend-engineer-" + run, "https://fakeco.recruitee.com/o/closed-role-" + run,
+			"/api/offers/backend-engineer-" + run, "/api/offers/closed-role-" + run,
+			map[string]string{"name": "MCP Candidate", "email": email, "phone": "+400000000"}, "question_1",
+		},
+	}
+	importJob := func(provider, applyURL string) string {
+		out, text, isErr := call("import_job", map[string]any{
+			"title": "Senior Backend Engineer", "company": "Fake " + provider + " Co",
+			"description": "Build reliable backend services with Go and PostgreSQL.",
+			"apply_url":   applyURL, "remote_type": "remote",
+			"location": "Bucharest, Romania", "employment_type": "full-time",
+			"salary_min": 95000, "salary_max": 120000, "currency": "EUR",
+			"posted_at": time.Now().UTC().Format(time.RFC3339),
+		})
+		if isErr {
+			t.Fatalf("import_job (%s): %s", provider, text)
+		}
+		if match, _ := out["match"].(map[string]any); match["rejected"] != false {
+			t.Fatalf("the %s job should be accepted: %s", provider, text)
+		}
+		job, _ := out["job"].(map[string]any)
+		id, _ := job["id"].(string)
+		return id
+	}
+	unanswered := fmt.Sprintf("A required question has no answer yet: %q", fakeUnansweredQuestion)
+	for _, board := range boards {
+		out, text, isErr := call("compose_application", map[string]any{"job_id": importJob(board.provider, board.open)})
+		if isErr {
+			t.Fatalf("compose_application (%s): %s", board.provider, text)
+		}
+		if out["ats_provider"] != board.provider || out["channel"] != "ats_form" {
+			t.Fatalf("the %s form was not read from the fake; is the API's %s pointing at port %s? %s", board.provider, board.setting, atsPort, text)
+		}
+		if !slices.Contains(fake.paths(), board.openRequest) {
+			t.Fatalf("the %s apply URL should route to %q on the fake, got %v", board.provider, board.openRequest, fake.paths())
+		}
+		// Name, email and phone come from the profile as the test seeded
+		// them, the CV upload takes the composed CV, and the last question
+		// is left for the user with no answer.
+		sources, seen := map[string]int{}, map[string]int{}
+		formAnswers, _ := out["answers"].([]any)
+		for _, a := range formAnswers {
+			m, _ := a.(map[string]any)
+			field := fmt.Sprint(m["field"])
+			sources[fmt.Sprint(m["source"])]++
+			seen[field]++
+			if want, ok := board.profile[field]; ok && (m["source"] != "profile" || m["answer"] != want) {
+				t.Fatalf("%s field %s should be answered from the profile with %q, got %v", board.provider, field, want, m)
+			}
+			if field == board.unanswered && (m["source"] != "unanswered" || m["answer"] != "") {
+				t.Fatalf("%s field %s should be left unanswered and empty, got %v", board.provider, field, m)
+			}
+		}
+		if len(formAnswers) != 5 || sources["profile"] != 3 || sources["cv"] != 1 || sources["unanswered"] != 1 {
+			t.Fatalf("expected three profile answers, the CV and one unanswered question on %s, got %v: %s", board.provider, sources, text)
+		}
+		// Each expected field exactly once, so a renamed or repeated field
+		// cannot keep the counts above while skipping the checks in the loop.
+		for field := range board.profile {
+			if seen[field] != 1 {
+				t.Fatalf("%s field %s should be answered exactly once, got %d: %s", board.provider, field, seen[field], text)
+			}
+		}
+		if seen[board.unanswered] != 1 {
+			t.Fatalf("%s field %s should appear exactly once, got %d: %s", board.provider, board.unanswered, seen[board.unanswered], text)
+		}
+		blockers, _ := out["blockers"].([]any)
+		if out["status"] != "needs_review" || !slices.Contains(blockers, any(unanswered)) {
+			t.Fatalf("the unanswered required question should block the %s entry, got status %v with blockers %v", board.provider, out["status"], blockers)
+		}
+
+		_, text, isErr = call("compose_application", map[string]any{"job_id": importJob(board.provider, board.gone)})
+		if !isErr || !strings.Contains(text, "This posting has closed: the employer's board no longer shows it.") {
+			t.Fatalf("a posting %s reports gone must be refused as closed: %s", board.provider, text)
+		}
+		if !slices.Contains(fake.paths(), board.goneRequest) {
+			t.Fatalf("the gone %s posting should be refused because the fake was asked for %q, got %v", board.provider, board.goneRequest, fake.paths())
+		}
+	}
+}
+
+// fakeUnansweredQuestion is a required question on the fake Ashby and
+// Recruitee forms that nothing in the profile answers.
+const fakeUnansweredQuestion = "Which conference talk did you enjoy most this year?"
+
+// serveFakeATS answers the Greenhouse board API: a listing of five postings
+// for any board, and for any job one form of four required text fields the
+// profile can answer, so the composed entry carries no blockers. On the same
+// port, told apart by path, it answers Ashby's posting query and Recruitee's
+// offer API: on board fakeco every posting whose id starts ashby-open- or
+// whose slug starts backend-engineer- is open, with a form holding one
+// required question the profile cannot answer, and every other posting is
+// gone. It listens on every interface, because an API running in a container
+// reaches it through host.docker.internal.
+func serveFakeATS(t *testing.T, port string) *fakeATS {
 	t.Helper()
 	ln, err := net.Listen("tcp", ":"+port)
 	if err != nil {
-		t.Fatalf("cannot listen on port %s for the fake Greenhouse; set JOBPILOT_E2E_ATS_PORT to a free port and the API's ATS_GREENHOUSE_URL to match: %v", port, err)
+		t.Fatalf("cannot listen on port %s for the fake ATS; set JOBPILOT_E2E_ATS_PORT to a free port and the API's ATS_GREENHOUSE_URL, ATS_ASHBY_URL and ATS_RECRUITEE_URL to match: %v", port, err)
 	}
-	fake := &fakeGreenhouse{}
+	fake := &fakeATS{}
 	mux := http.NewServeMux()
 	// Board listings for the discovery steps, in the shape of Greenhouse's
 	// jobs?content=true: five postings per board, except fair-c's repost.
@@ -756,9 +875,7 @@ func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 		_, _ = w.Write([]byte(`{"jobs":[` + strings.Join(jobs, ",") + `]}`))
 	})
 	mux.HandleFunc("GET /v1/boards/{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
-		fake.mu.Lock()
-		fake.requested = append(fake.requested, r.URL.Path)
-		fake.mu.Unlock()
+		fake.record(r.URL.Path)
 		if r.URL.Query().Get("questions") != "true" {
 			http.Error(w, "questions=true is required", http.StatusBadRequest)
 			return
@@ -770,20 +887,67 @@ func serveFakeGreenhouse(t *testing.T, port string) *fakeGreenhouse {
 			`{"label":"Email","required":true,"fields":[{"name":"email","type":"input_text","values":[]}]},` +
 			`{"label":"Phone","required":true,"fields":[{"name":"phone","type":"input_text","values":[]}]}]}`))
 	})
+	// Ashby's public job page reads a posting through one GraphQL query, and
+	// answers a posting it no longer has with null.
+	mux.HandleFunc("POST /api/non-user-graphql", func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Variables struct {
+				Board string `json:"organizationHostedJobsPageName"`
+				Job   string `json:"jobPostingId"`
+			} `json:"variables"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			http.Error(w, "unreadable query", http.StatusBadRequest)
+			return
+		}
+		fake.record("ashby " + request.Variables.Board + "/" + request.Variables.Job)
+		w.Header().Set("Content-Type", "application/json")
+		if request.Variables.Board != "fakeco" || !strings.HasPrefix(request.Variables.Job, "ashby-open-") {
+			_, _ = w.Write([]byte(`{"data":{"jobPosting":null}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"data":{"jobPosting":{"title":"Senior Backend Engineer","applicationForm":{"sections":[{"fieldEntries":[` +
+			`{"isRequired":true,"field":{"path":"_systemfield_name","title":"Name","type":"String"}},` +
+			`{"isRequired":true,"field":{"path":"_systemfield_email","title":"Email","type":"Email"}},` +
+			`{"isRequired":true,"field":{"path":"phone-1","title":"Phone number","type":"Phone"}},` +
+			`{"isRequired":true,"field":{"path":"_systemfield_resume","title":"Resume","type":"File"}},` +
+			`{"isRequired":true,"field":{"path":"talk-1","title":` + fmt.Sprintf("%q", fakeUnansweredQuestion) + `,"type":"LongText"}}` +
+			`]}]},"surveyForms":[]}}}`))
+	})
+	// Recruitee serves each careers site's offers beside its pages, and
+	// answers an offer it no longer has with 404.
+	mux.HandleFunc("GET /api/offers/{slug}", func(w http.ResponseWriter, r *http.Request) {
+		fake.record(r.URL.Path)
+		slug := r.PathValue("slug")
+		if !strings.HasPrefix(slug, "backend-engineer-") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"offer":{"id":101,"slug":` + fmt.Sprintf("%q", slug) + `,"title":"Senior Backend Engineer","company_name":"Fake recruitee Co",` +
+			`"options_cv":"required","options_cover_letter":"off","options_phone":"required","options_photo":"off","options_salutation":"off","options_title":"off",` +
+			`"open_questions":[{"id":1,"kind":"text","required":true,"body":` + fmt.Sprintf("%q", fakeUnansweredQuestion) + `,"position":1,"open_question_options":[]}]}}`))
+	})
 	srv := &http.Server{Handler: mux}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
 	return fake
 }
 
-// fakeGreenhouse remembers which forms were requested, so the flow can prove
-// the apply URL was routed to the right board and job, not merely to a form.
-type fakeGreenhouse struct {
+// fakeATS remembers which forms were requested, so the flow can prove the
+// apply URL was routed to the right board and job, not merely to a form.
+type fakeATS struct {
 	mu        sync.Mutex
 	requested []string
 }
 
-func (f *fakeGreenhouse) paths() []string {
+func (f *fakeATS) record(path string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requested = append(f.requested, path)
+}
+
+func (f *fakeATS) paths() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.requested...)

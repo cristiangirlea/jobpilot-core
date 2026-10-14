@@ -3,7 +3,9 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -376,4 +378,218 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	refuses("an entry for a closed posting", closing, "This posting has closed: the employer removed the posting")
+}
+
+// An outbox entry carries a summary of its CV, read as the CV is now, so the
+// outbox never needs the whole document. A deleted CV leaves no summary, and a
+// CV id that is not the user's never brings that CV along.
+func TestOutboxCVSummaryAgainstPostgres(t *testing.T) {
+	url := os.Getenv("JOBPILOT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set JOBPILOT_TEST_DATABASE_URL to a migrated database to run this")
+	}
+	ctx := context.Background()
+	pool, err := database.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	st := New(pool)
+
+	run := time.Now().Format("20060102150405.000000")
+	ana, err := st.CreateUser(ctx, "summary-ana-"+run+"@example.test", "not a real hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	bob, err := st.CreateUser(ctx, "summary-bob-"+run+"@example.test", "not a real hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveApprovedCV := func(userID, name, kind string, parsed map[string]any, approved bool) models.CVDocument {
+		doc, err := st.SaveCV(ctx, userID, models.CVDocument{
+			Kind: kind, Filename: name + ".pdf", Format: "pdf", Parsed: parsed, Approved: approved, Fingerprint: "summary-" + name + "-" + run,
+		}, []byte("%PDF-1.4 test"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	saveCV := func(userID, name, kind string, parsed map[string]any) models.CVDocument {
+		return saveApprovedCV(userID, name, kind, parsed, false)
+	}
+	compose := func(name, cvID string) models.OutboxEntry {
+		in := models.JobInput{Title: "Backend Engineer", Company: "Summary Test " + run, Description: "Build services.", ApplyURL: "https://example.test/" + name + "-" + run}
+		job, err := st.CreateDiscoveredJob(ctx, ana.ID, "", "", "", "", "summary-"+name+"-"+run, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := st.SaveOutboxEntry(ctx, ana.ID, models.OutboxEntry{
+			JobID: job.ID, Status: models.OutboxReady, Channel: models.ChannelManual, CVDocumentID: cvID,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return entry
+	}
+	// read returns the entry as the detail and the list both see it, after
+	// checking they agree.
+	read := func(id string) models.OutboxEntry {
+		t.Helper()
+		entry, err := st.OutboxEntry(ctx, ana.ID, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		list, err := st.OutboxEntries(ctx, ana.ID, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, listed := range list {
+			if listed.ID == id {
+				if !sameOutboxCV(listed.CV, entry.CV) {
+					t.Fatalf("the list and the detail disagree on the CV: %s vs %s", describeOutboxCV(listed.CV), describeOutboxCV(entry.CV))
+				}
+				return entry
+			}
+		}
+		t.Fatalf("entry %s missing from the list", id)
+		return entry
+	}
+
+	// A tailored CV: the summary names it and carries its coverage.
+	tailored := saveCV(ana.ID, "tailored", "tailored", map[string]any{
+		"tailored": map[string]any{"alignment": 0.62, "missing": []string{"Rust", "Kafka"}},
+	})
+	entry := compose("tailored", tailored.ID)
+	cv := read(entry.ID).CV
+	if cv == nil || cv.ID != tailored.ID || cv.Filename != "tailored.pdf" || cv.Kind != "tailored" || cv.Approved {
+		t.Fatalf("expected the unapproved tailored CV's summary, got %+v", cv)
+	}
+	if cv.Alignment == nil || *cv.Alignment != 0.62 || strings.Join(cv.Missing, ",") != "Rust,Kafka" {
+		t.Fatalf("expected the tailored coverage, got alignment %v missing %v", cv.Alignment, cv.Missing)
+	}
+	// Composing answers with the same summary the outbox then shows.
+	if !sameOutboxCV(entry.CV, cv) {
+		t.Fatalf("the composed entry must carry the summary %s, got %s", describeOutboxCV(cv), describeOutboxCV(entry.CV))
+	}
+
+	// Approved after compose: the entry shows the CV as it is now.
+	if _, err := st.SetCVApproval(ctx, ana.ID, tailored.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	approvedCV := read(entry.ID).CV
+	if approvedCV == nil || !approvedCV.Approved {
+		t.Fatalf("a CV approved after compose must show approved, got %+v", approvedCV)
+	}
+
+	// The entry an approval returns carries the full summary, the first time
+	// and when the entry was already approved.
+	for _, step := range []string{"the first approval", "an approval of an approved entry"} {
+		approved, err := st.ApproveOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if !sameOutboxCV(approved.CV, approvedCV) || approved.CV.Alignment == nil || len(approved.CV.Missing) != 2 {
+			t.Fatalf("%s must carry the CV's full summary %s, got %s", step, describeOutboxCV(approvedCV), describeOutboxCV(approved.CV))
+		}
+	}
+
+	// A base CV has no coverage line, and the entry a cancellation returns
+	// carries the summary too.
+	base := saveCV(ana.ID, "base", "base", nil)
+	baseEntry := compose("base", base.ID)
+	if cv := read(baseEntry.ID).CV; cv == nil || cv.Kind != "base" || cv.Alignment != nil || cv.Missing != nil {
+		t.Fatalf("expected a base CV's summary without coverage, got %+v", cv)
+	}
+	cancelled, err := st.CancelOutboxEntry(ctx, ana.ID, baseEntry.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cancelled.CV == nil || cancelled.CV.ID != base.ID || cancelled.CV.Filename != "base.pdf" || cancelled.CV.Kind != "base" {
+		t.Fatalf("the cancelled entry must carry its CV's summary, got %s", describeOutboxCV(cancelled.CV))
+	}
+
+	// A deleted CV leaves the entry without a summary.
+	if err := st.DeleteCV(ctx, ana.ID, base.ID); err != nil {
+		t.Fatal(err)
+	}
+	if gone := read(baseEntry.ID); gone.CV != nil || gone.CVDocumentID != "" {
+		t.Fatalf("an entry whose CV was deleted must have no summary, got %+v", gone.CV)
+	}
+
+	// Another user's CV never leaks, whatever id the entry holds.
+	theirs := saveCV(bob.ID, "theirs", "tailored", map[string]any{
+		"tailored": map[string]any{"alignment": 0.9, "missing": []string{"Secret"}},
+	})
+	foreign := compose("foreign", theirs.ID)
+	if cv := read(foreign.ID).CV; cv != nil {
+		t.Fatalf("another user's CV leaked into the outbox: %+v", cv)
+	}
+	if cancelled, err := st.CancelOutboxEntry(ctx, ana.ID, foreign.ID); err != nil || cancelled.CV != nil {
+		t.Fatalf("another user's CV leaked through a cancellation: %+v, %v", cancelled.CV, err)
+	}
+
+	// The schema does not enforce the parse's shape. A coverage value that is
+	// not what the summary expects is left out of it; it never fails the list,
+	// the detail, an approval or a cancellation, and the rest of the summary
+	// stays.
+	zero, half := 0.0, 0.5
+	for _, c := range []struct {
+		name               string
+		alignment, missing any
+		wantAlignment      *float64
+		wantMissing        []string
+	}{
+		{"a string", "unknown", "Rust", nil, nil},
+		{"a boolean", true, []any{"Rust", 1}, nil, nil},
+		{"an object", map[string]any{"score": 0.5}, map[string]any{"Rust": true}, nil, nil},
+		{"null", nil, nil, nil, nil},
+		{"a numeric string", "0.5", []any{1, 2}, nil, nil},
+		{"a null technology", 0.5, []any{nil}, &half, nil},
+		{"a null among technologies", 0.5, []any{"Rust", nil}, &half, nil},
+		{"zero", 0, []string{"Go"}, &zero, []string{"Go"}},
+	} {
+		name := "malformed-" + strings.ReplaceAll(c.name, " ", "-")
+		doc := saveApprovedCV(ana.ID, name, "tailored", map[string]any{
+			"tailored": map[string]any{"alignment": c.alignment, "missing": c.missing},
+		}, true)
+		entry := compose(name, doc.ID)
+		want := &models.OutboxCV{ID: doc.ID, Filename: name + ".pdf", Kind: "tailored", Approved: true, Alignment: c.wantAlignment, Missing: c.wantMissing}
+		if !sameOutboxCV(entry.CV, want) {
+			t.Fatalf("%s: composing must answer with the summary %s, got %s", c.name, describeOutboxCV(want), describeOutboxCV(entry.CV))
+		}
+		if cv := read(entry.ID).CV; !sameOutboxCV(cv, want) {
+			t.Fatalf("%s: expected the summary %s, got %s", c.name, describeOutboxCV(want), describeOutboxCV(cv))
+		}
+		approved, err := st.ApproveOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil || !sameOutboxCV(approved.CV, want) {
+			t.Fatalf("%s: the approval must carry %s, got %s, %v", c.name, describeOutboxCV(want), describeOutboxCV(approved.CV), err)
+		}
+		cancelled, err := st.CancelOutboxEntry(ctx, ana.ID, entry.ID)
+		if err != nil || !sameOutboxCV(cancelled.CV, want) {
+			t.Fatalf("%s: the cancellation must carry %s, got %s, %v", c.name, describeOutboxCV(want), describeOutboxCV(cancelled.CV), err)
+		}
+	}
+}
+
+// sameOutboxCV compares two CV summaries field by field.
+func sameOutboxCV(a, b *models.OutboxCV) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if (a.Alignment == nil) != (b.Alignment == nil) || (a.Alignment != nil && *a.Alignment != *b.Alignment) {
+		return false
+	}
+	return a.ID == b.ID && a.Filename == b.Filename && a.Kind == b.Kind && a.Approved == b.Approved &&
+		slices.Equal(a.Missing, b.Missing)
+}
+
+func describeOutboxCV(cv *models.OutboxCV) string {
+	if cv == nil {
+		return "no summary"
+	}
+	alignment := "none"
+	if cv.Alignment != nil {
+		alignment = fmt.Sprint(*cv.Alignment)
+	}
+	return fmt.Sprintf("{id %s, filename %q, kind %s, approved %t, alignment %s, missing %q}", cv.ID, cv.Filename, cv.Kind, cv.Approved, alignment, cv.Missing)
 }
