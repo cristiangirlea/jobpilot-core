@@ -537,12 +537,14 @@ func (s *Server) deleteFilter(w http.ResponseWriter, r *http.Request) {
 // goes away: a page reload mid-request would otherwise leave every match scored
 // against the old profile.
 func (s *Server) reevaluateJobs(r *http.Request) error {
+	// After the change is stored and before reading it back, so a catalog
+	// pass that read the old exclusions cannot save after this one. The
+	// deadline starts once the lock is held, so waiting for a long pass
+	// cannot leave this repair without time to run.
+	defer s.Discovery.LockMatching(auth.UserID(r.Context()))()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
 	defer cancel()
 	uid := auth.UserID(ctx)
-	// After the change is stored and before reading it back, so a catalog
-	// pass that read the old exclusions cannot save after this one.
-	defer s.Discovery.LockMatching(uid)()
 	profile, err := s.Store.Profile(ctx, uid)
 	if err != nil {
 		return err
