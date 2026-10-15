@@ -8,6 +8,7 @@ import (
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/httpapi"
 	"jobpilot/core/api/internal/llm"
+	"jobpilot/core/api/internal/sender"
 	"jobpilot/core/api/internal/store"
 	"log/slog"
 	"net/http"
@@ -78,7 +79,14 @@ func main() {
 	discoveryService := discovery.NewService(dataStore)
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
 	go discoveryService.Start(ctx)
-	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}
+	if cfg.OutboxSending {
+		outboxSender := sender.New(dataStore, sender.NewGreenhouse(cfg.ATSGreenhouseURL), cfg.OutboxSendDelay)
+		go outboxSender.Start(ctx)
+		api.Sender = outboxSender
+		slog.Info("sending approved applications through employers' forms", "delay", cfg.OutboxSendDelay)
+	}
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
 	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
 	drained := make(chan struct{})

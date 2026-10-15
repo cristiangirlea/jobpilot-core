@@ -44,7 +44,11 @@ import (
 //	6: answers carry scope (global, role_family or job) and job_id, which
 //	   POST and PATCH /api/answers honour; resolving prefers the narrowest
 //	   scope. An older API ignores them and keeps every answer per role family.
-const Contract = 6
+//	7: where the server sends (health reports sending: true), an approved
+//	   outbox entry goes to the employer's form and ends sent or failed, with
+//	   the reason in error; while it is sending, composing it, approving it
+//	   and cancelling it are refused with 409.
+const Contract = 7
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -57,12 +61,14 @@ type Server struct {
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
+	// Sender sends approved outbox entries; nil when sending is off.
+	Sender interface{ Kick() }
 }
 
 func (s *Server) Handler() http.Handler {
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"status": "ok", "contract": Contract})
+		write(w, 200, map[string]any{"status": "ok", "contract": Contract, "sending": s.Sender != nil})
 	})
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
