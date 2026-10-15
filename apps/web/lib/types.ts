@@ -13,6 +13,7 @@ export type Application={id:string;job_id:string;status:string;notes:string;crea
 export type Documents={recruiter_message:string;cover_letter:string;candidate_summary:string;answers:Record<string,string>};
 export type DiscoverySettings={enabled:boolean;interval_minutes:number;auto_prepare:boolean;min_score:number;max_jobs_per_run:number;last_run_at?:string;next_run_at?:string};
 export type DiscoverySource={id?:string;provider:'remotive'|'greenhouse'|'lever'|'ashby'|'smartrecruiters'|'arbeitnow';name:string;identifier:string;search_query:string;excluded_search_query:string;active:boolean;last_crawled_at?:string;last_error?:string;created_at?:string};
+export type CatalogSummary={last_job_at?:string|null;jobs_last_24h:number;jobs_last_7d:number;open_jobs:number;open_matches:number};
 export type DiscoveryRun={id:string;status:string;jobs_seen:number;jobs_added:number;jobs_rejected:number;applications_prepared:number;duplicates_skipped:number;error_message?:string;started_at:string;completed_at?:string};
 export type ParsedCV={name:string;email:string;phone:string;location:string;linkedin:string;github:string;portfolio:string;current_title:string;summary:string;years_experience:number;skills:Skill[];experiences:Experience[];education:string[];languages:string[];certifications:string[];warnings:string[];text?:string};
 export type TailoredRole={title:string;company:string;period:string;context?:string;bullets:string[]};

@@ -136,6 +136,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("PUT /api/filters/{id}", w(s.saveFilter))
 	m.Handle("DELETE /api/filters/{id}", w(s.deleteFilter))
 	m.Handle("GET /api/jobs", p(s.listJobs))
+	m.Handle("POST /api/jobs/find", w(s.findJobs))
+	m.Handle("GET /api/catalog/summary", p(s.catalogSummary))
 	m.Handle("POST /api/jobs", w(s.importJob))
 	m.Handle("GET /api/jobs/{id}", p(s.getJob))
 	m.Handle("POST /api/jobs/{id}/report", w(s.reportJob))
