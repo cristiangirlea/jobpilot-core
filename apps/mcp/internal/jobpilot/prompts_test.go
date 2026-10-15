@@ -15,6 +15,7 @@ import (
 // name that no longer exists.
 var argumentNames = map[string]bool{
 	"job_id": true, "min_score": true, "apply_url": true, "employer_url": true, "needs_review": true,
+	"how_to_resolve": true, "open": true, "next": true, "after": true,
 }
 
 var snakeCase = regexp.MustCompile(`\b[a-z]+(?:_[a-z]+)+\b`)

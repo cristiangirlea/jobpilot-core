@@ -222,6 +222,7 @@ A SHA-256 fingerprint deduplicates a job using normalized company, normalized ti
 - `discovery_sources`
 - `discovery_runs`
 - `outbound_clicks`
+- `notifications`
 
 Every job visible to a user is reached through that user's `job_matches` row. Profiles, filters, match explanations, documents, applications, and history are always scoped by `user_id` in the store layer.
 
@@ -232,6 +233,7 @@ Every job visible to a user is reached through that user's `job_matches` row. Pr
 | `/register` | Create an account |
 | `/login` | Authenticate |
 | `/dashboard` | Completeness, catalog and application metrics, top recommendations, next actions |
+| `/notifications` | Everything waiting for the user's decision, with a badge in the navigation; history of what was resolved |
 | `/profile` | Profile overview |
 | `/profile/setup` | Contact, job preferences, seniorities, authorization, compensation, notice |
 | `/profile/experience` | Current and previous employers and work history |
@@ -605,6 +607,12 @@ Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancell
 
 Measured against a real Greenhouse posting with a 17-field form, 14 fields resolved without a single model call: 10 from stored profile facts, 2 from the answer bank, plus the CV and the cover letter.
 
+## Notifications
+
+One list per user of everything that waits for the user's decision: unapproved answers (`answer`), unapproved CVs (`cv`), and outbox entries in `needs_review` or `ready` (`outbox`). A row opens when an item starts waiting and is resolved, not deleted, once it stops, so the list keeps a history; an item that waits again opens a new row. The web app shows the open count as a badge and the list at `/notifications`; agents read it with `list_pending_decisions` and the `review_pending_decisions` prompt.
+
+Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed changes nothing; pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
+
 ## Applications and referral attribution
 
 Application statuses are:
@@ -731,6 +739,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 
 `PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
 | `GET` | `/api/dashboard` | User-specific metrics and recommendations |
+| `GET` | `/api/notifications` | What waits for the user (`state=open`, the default, oldest first, or `all` with the history, newest first; `limit` 1 to 200, default 50; `after`, the previous page's `next`) and `open`, the count of open items |
 
 ### Agent token endpoints
 
@@ -786,6 +795,7 @@ The catalog an agent host downloads at the start of every session is about 27 KB
 | `get_profile` | read | Candidate facts the agent may use when writing |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
+| `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history, and `after` the following page |
 | `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
@@ -837,8 +847,9 @@ Server instructions tell the host that composing does not send, that blockers an
 |---|---|---|
 | `prepare_application` | `job_id` (required) | Walk one job from its match explanation to a tracked application, stopping at a rejection and leaving the submission to the user |
 | `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next; reads the filter to name the rule behind the strongest rejections |
+| `review_pending_decisions` | none | Go through what waits for the user one item at a time, show each in the exact words returned, and approve an answer or CV only on the user's word; applications are approved in the web app |
 
-Both encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
+All three encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
 
 ### Verification
 
@@ -900,7 +911,8 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
 | `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
-| `020_invites.sql` | Single-use sign-up invite codes, stored as digests |
+| `020_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
+| `021_invites.sql` | Single-use sign-up invite codes, stored as digests |
 
 Core entities:
 

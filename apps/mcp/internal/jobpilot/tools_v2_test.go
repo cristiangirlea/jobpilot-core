@@ -203,8 +203,8 @@ func TestPromptsCarryTheWorkflowRules(t *testing.T) {
 	for _, p := range list.Prompts {
 		names[p.Name] = p
 	}
-	if len(names) != 2 || names["prepare_application"] == nil || names["weekly_review"] == nil {
-		t.Fatalf("expected both prompts, got %d", len(list.Prompts))
+	if len(names) != 3 || names["prepare_application"] == nil || names["weekly_review"] == nil || names["review_pending_decisions"] == nil {
+		t.Fatalf("expected the three prompts, got %d", len(list.Prompts))
 	}
 	if args := names["prepare_application"].Arguments; len(args) != 1 || args[0].Name != "job_id" || !args[0].Required {
 		t.Fatalf("prepare_application needs a required job_id argument, got %+v", args)
@@ -232,6 +232,25 @@ func TestPromptsCarryTheWorkflowRules(t *testing.T) {
 	}
 	if _, err = cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "weekly_review"}); err != nil {
 		t.Fatalf("weekly_review takes no arguments: %v", err)
+	}
+
+	// The walk through pending decisions goes one item at a time and keeps
+	// approval of applications in the web app.
+	got, err = cs.GetPrompt(ctx, &mcp.GetPromptParams{Name: "review_pending_decisions"})
+	if err != nil {
+		t.Fatalf("review_pending_decisions takes no arguments: %v", err)
+	}
+	text.Reset()
+	for _, msg := range got.Messages {
+		if tc, ok := msg.Content.(*mcp.TextContent); ok {
+			text.WriteString(tc.Text)
+		}
+	}
+	body = strings.ToLower(text.String())
+	for _, want := range []string{"list_pending_decisions", "one at a time", "exact words", "explicit word", "only in the web app", "never invent"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("review_pending_decisions should mention %q", want)
+		}
 	}
 }
 

@@ -32,3 +32,5 @@ export type AgentTokenCreated={token:string;agent_token:AgentToken};
 export type Invite={id:string;note:string;code_prefix:string;created_at:string;expires_at:string;used_at?:string};
 export type InviteCreated={code:string;invite:Invite};
 export type RegistrationMode="invite"|"open"|"closed";
+export type Notification={id:string;kind:string;subject_id:string;title:string;detail:Record<string,unknown>;created_at:string;updated_at:string;resolved_at?:string};
+export type NotificationFeed={open:number;items:Notification[];next?:string};

@@ -192,7 +192,7 @@ func TestEndToEnd(t *testing.T) {
 		"approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
-		"report_job_unavailable": true, "set_filters": true,
+		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
 	}
 	for _, tool := range tools.Tools {
 		if !want[tool.Name] {
@@ -203,8 +203,8 @@ func TestEndToEnd(t *testing.T) {
 	for name := range want {
 		t.Errorf("missing tool %q", name)
 	}
-	if prompts, err := cs.ListPrompts(ctx, nil); err != nil || len(prompts.Prompts) != 2 {
-		t.Fatalf("expected both prompts, got %v (%v)", prompts, err)
+	if prompts, err := cs.ListPrompts(ctx, nil); err != nil || len(prompts.Prompts) != 3 {
+		t.Fatalf("expected the three prompts, got %v (%v)", prompts, err)
 	}
 
 	call := func(name string, args map[string]any) (map[string]any, string, bool) {
@@ -377,9 +377,53 @@ func TestEndToEnd(t *testing.T) {
 		}
 	}
 
+	// The notification feed: the held entry waits for the user, a drafted
+	// answer joins it, and each leaves the list once resolved.
+	pending := func(kind, subject string) map[string]any {
+		t.Helper()
+		out, text, isErr := call("list_pending_decisions", nil)
+		if isErr {
+			t.Fatalf("list_pending_decisions: %s", text)
+		}
+		items, _ := out["items"].([]any)
+		if open, _ := out["open"].(float64); int(open) < len(items) {
+			t.Fatalf("open must count every open item: %s", text)
+		}
+		for _, item := range items {
+			m, _ := item.(map[string]any)
+			if m["kind"] == kind && m["subject_id"] == subject {
+				return m
+			}
+		}
+		return nil
+	}
+	if item := pending("outbox", outboxID); item == nil || !strings.Contains(fmt.Sprint(item["how_to_resolve"]), "only in the web app") {
+		t.Fatalf("the held entry should wait for the user, with approval left to the web app: %v", item)
+	}
+	out, text, isErr = call("save_answer", map[string]any{"question_text": "What is your notice period?", "answer": "One month."})
+	if isErr || out["approved"] != false {
+		t.Fatalf("save_answer: %s", text)
+	}
+	draftID, _ := out["id"].(string)
+	if item := pending("answer", draftID); item == nil || !strings.Contains(fmt.Sprint(item["how_to_resolve"]), "approve_answer") {
+		t.Fatalf("an unapproved answer should wait for the user: %v", item)
+	}
+	if out, text, isErr = call("approve_answer", map[string]any{"answer_id": draftID}); isErr || out["approved"] != true {
+		t.Fatalf("approve_answer: %s", text)
+	}
+	if item := pending("answer", draftID); item != nil {
+		t.Fatalf("an approved answer must leave the list: %v", item)
+	}
+
 	_, text, isErr = call("cancel_outbox_entry", map[string]any{"outbox_id": outboxID})
 	if isErr {
 		t.Fatalf("cancel_outbox_entry: %s", text)
+	}
+	if item := pending("outbox", outboxID); item != nil {
+		t.Fatalf("a cancelled entry must leave the list: %v", item)
+	}
+	if out, text, isErr = call("list_pending_decisions", map[string]any{"include_resolved": true}); isErr || !strings.Contains(text, draftID) {
+		t.Fatalf("the resolved answer should stay in the history: %s", text)
 	}
 
 	out, text, isErr = call("detect_board", map[string]any{"url": "https://job-boards.greenhouse.io/grafanalabs"})
@@ -435,8 +479,14 @@ func TestEndToEnd(t *testing.T) {
 		if ghCV == "" {
 			t.Fatalf("the prepared CV should be referenced: %s", text)
 		}
+		if item := pending("cv", ghCV); item == nil || !strings.Contains(fmt.Sprint(item["how_to_resolve"]), "approve_cv") {
+			t.Fatalf("the prepared CV should wait for the user: %v", item)
+		}
 		if out, text, isErr = call("approve_cv", map[string]any{"cv_id": ghCV}); isErr || out["approved"] != true {
 			t.Fatalf("approve_cv: %s", text)
+		}
+		if item := pending("cv", ghCV); item != nil {
+			t.Fatalf("an approved CV must leave the list: %v", item)
 		}
 
 		// With the CV approved, a rebuild reuses it and nothing blocks.
@@ -546,6 +596,9 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if !writeRes.IsError || !strings.Contains(refusal.String(), "scope") {
 		t.Fatalf("a read token must be refused a write tool with a scope message: %s", refusal.String())
+	}
+	if res, err := limitedSession.CallTool(ctx, &mcp.CallToolParams{Name: "list_pending_decisions"}); err != nil || res.IsError {
+		t.Fatalf("a read token must read what waits for the user: %v", err)
 	}
 
 	out, text, isErr = call("get_filters", nil)
