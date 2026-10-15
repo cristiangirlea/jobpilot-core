@@ -2,11 +2,17 @@
 
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {AnswerEntry} from "@/lib/types";
+import {AnswerEntry,AnswerScope} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
 const sourceLabel:Record<string,string>={human:"you wrote this",ai:"drafted by AI",deterministic:"from your profile"};
+
+// Where an approved answer is reused. The narrowest one that matches a job wins.
+const scopeLabel=(item:AnswerEntry,scope:AnswerScope=item.scope)=>
+  scope==="global"?"every job"
+  :scope==="job"?"this job only"
+  :item.role_family&&item.role_family!=="general"?`${item.role_family} roles`:"any role";
 
 export default function AnswersPage(){
   const [items,setItems]=useState<AnswerEntry[]>([]);
@@ -55,14 +61,17 @@ export default function AnswersPage(){
 function Row({item,onChanged,onError}:{item:AnswerEntry;onChanged:(message:string)=>void;onError:(message:string)=>void}){
   const [editing,setEditing]=useState(false);
   const [draft,setDraft]=useState(item.answer);
+  const [scope,setScope]=useState<AnswerScope>(item.scope||"role_family");
   const [busy,setBusy]=useState(false);
+  // "This job only" needs the job the answer was written for.
+  const scopes:AnswerScope[]=item.job_id?["job","role_family","global"]:["role_family","global"];
 
   const save=async(approved:boolean)=>{
     setBusy(true);
     try{
-      await api(`/answers/${item.id}`,{method:"PATCH",body:JSON.stringify({answer:draft,approved})});
+      await api(`/answers/${item.id}`,{method:"PATCH",body:JSON.stringify({answer:draft,approved,scope})});
       setEditing(false);
-      onChanged(approved?"Approved. It will be reused for this question on similar roles.":"Saved without approving.");
+      onChanged(approved?`Approved. It will be reused for this question on ${scopeLabel(item,scope)}.`:"Saved without approving.");
     }catch(e){onError((e as Error).message)}finally{setBusy(false)}
   };
 
@@ -77,7 +86,7 @@ function Row({item,onChanged,onError}:{item:AnswerEntry;onChanged:(message:strin
       <div className="min-w-0 flex-1">
         <p className="text-sm font-semibold">{item.question_text}</p>
         <p className="muted mt-0.5 text-xs">
-          {item.role_family&&item.role_family!=="general"?`${item.role_family} roles`:"any role"}
+          {scopeLabel(item)}
           {" · "}{sourceLabel[item.source]||item.source}
           {item.usage_count>0&&` · used ${item.usage_count}×`}
           {item.technologies?.length>0&&` · ${item.technologies.slice(0,5).join(", ")}`}
@@ -87,13 +96,18 @@ function Row({item,onChanged,onError}:{item:AnswerEntry;onChanged:(message:strin
         {item.approved?"APPROVED":"NEEDS REVIEW"}</span>
     </div>
 
+    {(editing||!item.approved)&&<label className="mt-2 flex items-center gap-2 text-xs">Reuse for
+      <select className="!w-auto !py-1 text-xs" value={scope} onChange={e=>setScope(e.target.value as AnswerScope)}>
+        {scopes.map(name=><option key={name} value={name}>{scopeLabel(item,name)}</option>)}
+      </select></label>}
+
     {editing
       ? <div className="mt-3">
           <textarea rows={5} value={draft} onChange={e=>setDraft(e.target.value)}/>
           <div className="mt-2 flex flex-wrap gap-2">
             <button className="btn-primary !py-2" disabled={busy} onClick={()=>save(true)}>Save and approve</button>
             <button className="btn-secondary !py-2" disabled={busy} onClick={()=>save(false)}>Save only</button>
-            <button className="btn-secondary !py-2" disabled={busy} onClick={()=>{setDraft(item.answer);setEditing(false)}}>Cancel</button>
+            <button className="btn-secondary !py-2" disabled={busy} onClick={()=>{setDraft(item.answer);setScope(item.scope||"role_family");setEditing(false)}}>Cancel</button>
           </div>
         </div>
       : <div className="mt-2">
@@ -110,14 +124,15 @@ function Row({item,onChanged,onError}:{item:AnswerEntry;onChanged:(message:strin
 function Editor({onSaved,onCancel,onError}:{onSaved:(message:string)=>void;onCancel:()=>void;onError:(message:string)=>void}){
   const [question,setQuestion]=useState("");
   const [answer,setAnswer]=useState("");
+  // No role family: a hand-written answer is filed under "general", which
+  // serves any role after the role's own answers; "every job" comes last.
+  const [scope,setScope]=useState<AnswerScope>("role_family");
   const [busy,setBusy]=useState(false);
 
   const save=async()=>{
     setBusy(true);
     try{
-      // No role family: a hand-written answer applies to any role unless the
-      // user later narrows it.
-      await api("/answers",{method:"POST",body:JSON.stringify({question_text:question,answer,approved:true})});
+      await api("/answers",{method:"POST",body:JSON.stringify({question_text:question,answer,approved:true,scope})});
       onSaved("Saved and approved.");
     }catch(e){onError((e as Error).message)}finally{setBusy(false)}
   };
@@ -130,6 +145,11 @@ function Editor({onSaved,onCancel,onError}:{onSaved:(message:string)=>void;onCan
         <input value={question} onChange={e=>setQuestion(e.target.value)} placeholder="Why do you want to work here?"/></div>
       <div><label>Your answer</label>
         <textarea rows={5} value={answer} onChange={e=>setAnswer(e.target.value)}/></div>
+      <div><label>Reuse for</label>
+        <select value={scope} onChange={e=>setScope(e.target.value as AnswerScope)}>
+          <option value="role_family">any role, after answers for that kind of role</option>
+          <option value="global">every job</option>
+        </select></div>
       <div className="flex gap-2">
         <button className="btn-primary !py-2" disabled={busy||!question.trim()||!answer.trim()} onClick={save}>Save and approve</button>
         <button className="btn-secondary !py-2" onClick={onCancel}>Cancel</button>

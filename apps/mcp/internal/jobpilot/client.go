@@ -23,6 +23,9 @@ const (
 	// Validating a source fetches from the provider, so it needs more than
 	// the default timeout but far less than a whole discovery run.
 	validateTimeout = 90 * time.Second
+	// Saving a filter preset re-scores every job before the API answers,
+	// which it allows a minute for.
+	rescoreTimeout = 90 * time.Second
 	// The list endpoints are not paginated and carry full descriptions, so
 	// the cap is generous; exceeding it is reported, never silently cut.
 	maxResponseBytes = 32 << 20
@@ -46,6 +49,11 @@ type Options struct {
 // see httpapi.Contract in apps/api for what each number guarantees. The
 // server tolerates a newer API and warns about an older one.
 const requiredContract = 1
+
+// scopesContract is the API contract from which an answer carries a scope. An
+// older API ignores the field and keeps the answer for the whole role family,
+// which is wider than the user chose, so a narrower scope is refused there.
+const scopesContract = 6
 
 // contractUnknown means no health check has succeeded yet. Unknown counts as
 // compatible: an API that is unreachable at startup must not disable tools
@@ -156,10 +164,28 @@ func (c *Client) CheckContract(ctx context.Context) (Health, error) {
 
 // PredatesContract reports whether the API was seen to be older than this
 // server expects. Only a successful check can say yes.
-func (c *Client) PredatesContract() bool {
+func (c *Client) PredatesContract() bool { return c.predates(requiredContract) }
+
+// supports reports whether the API is known to meet version. With no
+// successful check yet it checks now, and an API it still cannot check counts
+// as not supporting it.
+func (c *Client) supports(ctx context.Context, version int) bool {
+	c.mu.Lock()
+	known := c.contract != contractUnknown
+	c.mu.Unlock()
+	if !known {
+		if _, err := c.CheckContract(ctx); err != nil {
+			return false
+		}
+	}
+	return !c.predates(version)
+}
+
+// predates reports whether the API was seen to be older than version.
+func (c *Client) predates(version int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.contract != contractUnknown && c.contract < requiredContract
+	return c.contract != contractUnknown && c.contract < version
 }
 
 func (c *Client) canLogin() bool { return c.email != "" && c.password != "" }
@@ -408,6 +434,16 @@ func (c *Client) ImportJob(ctx context.Context, in JobInput) (JobWithMatch, erro
 func (c *Client) Filters(ctx context.Context) ([]FilterPreset, error) {
 	var out []FilterPreset
 	return out, c.get(ctx, "/api/filters", &out)
+}
+
+// SaveFilter creates a preset when it has no id and replaces the stored one
+// otherwise. The API re-scores every job before it answers.
+func (c *Client) SaveFilter(ctx context.Context, in FilterPreset) (FilterPreset, error) {
+	var out FilterPreset
+	if in.ID == "" {
+		return out, c.do(ctx, http.MethodPost, "/api/filters", in, &out, rescoreTimeout)
+	}
+	return out, c.do(ctx, http.MethodPut, "/api/filters/"+url.PathEscape(in.ID), in, &out, rescoreTimeout)
 }
 
 func (c *Client) DiscoverySources(ctx context.Context) ([]DiscoverySource, error) {

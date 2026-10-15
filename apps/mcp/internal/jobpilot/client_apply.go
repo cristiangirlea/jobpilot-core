@@ -30,6 +30,8 @@ type answerWrite struct {
 	QuestionText string   `json:"question_text"`
 	Answer       string   `json:"answer"`
 	RoleFamily   string   `json:"role_family,omitempty"`
+	Scope        string   `json:"scope,omitempty"`
+	JobID        string   `json:"job_id,omitempty"`
 	Technologies []string `json:"technologies,omitempty"`
 	Approved     *bool    `json:"approved"`
 }
@@ -42,6 +44,8 @@ func (c *Client) SaveAnswer(ctx context.Context, in answerWrite) (AnswerEntry, e
 type answerPatch struct {
 	Answer   string `json:"answer"`
 	Approved *bool  `json:"approved"`
+	Scope    string `json:"scope,omitempty"`
+	JobID    string `json:"job_id,omitempty"`
 }
 
 func (c *Client) UpdateAnswer(ctx context.Context, id string, in answerPatch) (AnswerEntry, error) {

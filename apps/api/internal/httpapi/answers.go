@@ -29,8 +29,53 @@ type answerWrite struct {
 	QuestionText string   `json:"question_text"`
 	Answer       string   `json:"answer"`
 	RoleFamily   string   `json:"role_family"`
+	Scope        string   `json:"scope"`
+	JobID        string   `json:"job_id"`
 	Technologies []string `json:"technologies"`
 	Approved     *bool    `json:"approved"`
+}
+
+// answerScope checks a requested scope and resolves its job. An empty scope is
+// returned as is, for the caller's default. A job is looked up through the
+// user's own matches, so a job they cannot see cannot be named; the answer
+// then stores the job's id even when the caller gave its slug. ok is false
+// once a problem has been written.
+func (s *Server) answerScope(w http.ResponseWriter, r *http.Request, scope, jobRef string) (string, string, bool) {
+	scope = strings.TrimSpace(scope)
+	switch scope {
+	case "", models.AnswerScopeGlobal, models.AnswerScopeRoleFamily, models.AnswerScopeJob:
+	default:
+		problem(w, 400, "scope must be global, role_family or job.")
+		return "", "", false
+	}
+	jobRef = strings.TrimSpace(jobRef)
+	if jobRef == "" {
+		return scope, "", true
+	}
+	job, err := s.Store.Job(r.Context(), auth.UserID(r.Context()), jobRef)
+	if errors.Is(err, pgx.ErrNoRows) {
+		problem(w, 404, "Job not found.")
+		return "", "", false
+	}
+	if err != nil {
+		internal(w, err)
+		return "", "", false
+	}
+	return scope, job.Job.ID, true
+}
+
+// answerProblem writes the answer bank's own refusals in its words.
+func answerProblem(w http.ResponseWriter, v any, err error, created bool) {
+	switch {
+	case errors.Is(err, store.ErrAnswerScopeNeedsJob):
+		problem(w, 400, err.Error())
+	case errors.Is(err, store.ErrAnswerScopeTaken):
+		problem(w, 409, err.Error())
+	case created:
+		respondCreated(w, v, err)
+	default:
+		respond(w, v, err)
+	}
 }
 
 // saveAnswer stores an answer the user wrote themselves. A hand-written answer
@@ -59,42 +104,55 @@ func (s *Server) saveAnswer(w http.ResponseWriter, r *http.Request) {
 	if family == "" {
 		family = "general"
 	}
+	scope, jobID, ok := s.answerScope(w, r, body.Scope, body.JobID)
+	if !ok {
+		return
+	}
 	entry := models.AnswerEntry{
 		QuestionKey:        answers.Classify(question),
 		QuestionText:       question,
 		QuestionNormalized: answers.Normalize(question),
 		Answer:             answer,
 		RoleFamily:         family,
+		Scope:              scope,
+		JobID:              jobID,
 		Technologies:       body.Technologies,
 		Source:             "human",
 		Approved:           approved,
 	}
 	x, e := s.Store.SaveAnswer(r.Context(), auth.UserID(r.Context()), entry)
-	respondCreated(w, x, e)
+	answerProblem(w, x, e, true)
 }
 
 type answerPatch struct {
 	Answer   string `json:"answer"`
 	Approved *bool  `json:"approved"`
+	Scope    string `json:"scope"`
+	JobID    string `json:"job_id"`
 }
 
-// updateAnswer is the review action: edit the wording, approve it, or both.
-// Approving is what makes an entry reusable for future applications.
+// updateAnswer is the review action: edit the wording, approve it, choose
+// where it is reused, or all of these. Approving is what makes an entry
+// reusable for future applications.
 func (s *Server) updateAnswer(w http.ResponseWriter, r *http.Request) {
 	var body answerPatch
 	if !decode(w, r, &body) {
 		return
 	}
-	if body.Approved == nil && strings.TrimSpace(body.Answer) == "" {
-		problem(w, 400, "Provide an answer, an approval decision, or both.")
+	if body.Approved == nil && strings.TrimSpace(body.Answer) == "" && strings.TrimSpace(body.Scope) == "" {
+		problem(w, 400, "Provide an answer, an approval decision, a scope, or any of them.")
+		return
+	}
+	scope, jobID, ok := s.answerScope(w, r, body.Scope, body.JobID)
+	if !ok {
 		return
 	}
 	approved := true
 	if body.Approved != nil {
 		approved = *body.Approved
 	}
-	x, e := s.Store.UpdateAnswer(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), strings.TrimSpace(body.Answer), approved)
-	respond(w, x, e)
+	x, e := s.Store.UpdateAnswer(r.Context(), auth.UserID(r.Context()), r.PathValue("id"), strings.TrimSpace(body.Answer), approved, scope, jobID)
+	answerProblem(w, x, e, false)
 }
 
 func (s *Server) deleteAnswer(w http.ResponseWriter, r *http.Request) {

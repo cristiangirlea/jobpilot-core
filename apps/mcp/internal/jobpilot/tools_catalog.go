@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,6 +35,98 @@ type sourceInput struct {
 	SearchQuery         string `json:"search_query,omitempty" jsonschema:"Positive OR terms; required for remotive. On an employer board, only titles containing one are kept"`
 	ExcludedSearchQuery string `json:"excluded_search_query,omitempty" jsonschema:"Negative NOT terms: arbeitnow checks whole postings, employer boards check titles; ignored for remotive"`
 	Active              *bool  `json:"active,omitempty" jsonschema:"Whether the scheduler runs this source; defaults to true"`
+}
+
+// setFiltersInput changes only what it names: a missing list or value keeps
+// the stored one, and an empty list clears that rule.
+type setFiltersInput struct {
+	ID                   string   `json:"id,omitempty" jsonschema:"The preset to change; leave out to create one"`
+	Name                 *string  `json:"name,omitempty" jsonschema:"Required when creating"`
+	Active               *bool    `json:"active,omitempty" jsonschema:"true makes this the only active preset; a new one is inactive unless set"`
+	IncludedTitles       []string `json:"included_titles,omitempty" jsonschema:"OR: the title should match one"`
+	ExcludedTitleWords   []string `json:"excluded_title_words,omitempty" jsonschema:"NOT: any in the title rejects"`
+	IncludedTechnologies []string `json:"included_technologies,omitempty" jsonschema:"OR: the posting must mention one"`
+	ExcludedTechnologies []string `json:"excluded_technologies,omitempty" jsonschema:"NOT: any mentioned rejects"`
+	RequiredSkills       []string `json:"required_skills,omitempty"`
+	Locations            []string `json:"locations,omitempty"`
+	RemoteTypes          []string `json:"remote_types,omitempty" jsonschema:"remote, hybrid, onsite"`
+	EmploymentTypes      []string `json:"employment_types,omitempty" jsonschema:"for example full-time, contract"`
+	ExcludedIndustries   []string `json:"excluded_industries,omitempty"`
+	MinSalary            *float64 `json:"min_salary,omitempty" jsonschema:"Known pay below this rejects; 0 turns it off"`
+	Currency             *string  `json:"currency,omitempty"`
+	MaxAgeDays           *int     `json:"max_age_days,omitempty" jsonschema:"Older postings are rejected; 0 turns it off"`
+}
+
+var remoteTypes = []string{"remote", "hybrid", "onsite"}
+
+// applyFilterChanges lays the named changes over a stored preset (or an empty
+// one when creating) and checks the result the way the API would, so a bad
+// value is explained before anything is saved. Remote types are checked
+// against the values discovery stores, since any other word would reject
+// every job that states its arrangement.
+func applyFilterChanges(base FilterPreset, in setFiltersInput) (FilterPreset, error) {
+	out := base
+	if in.Name != nil {
+		out.Name = strings.TrimSpace(*in.Name)
+	}
+	if in.Active != nil {
+		out.Active = *in.Active
+	}
+	for _, field := range []struct {
+		change []string
+		stored *[]string
+	}{
+		{in.IncludedTitles, &out.IncludedTitles}, {in.ExcludedTitleWords, &out.ExcludedTitleWords},
+		{in.IncludedTechnologies, &out.IncludedTechnologies}, {in.ExcludedTechnologies, &out.ExcludedTechnologies},
+		{in.RequiredSkills, &out.RequiredSkills}, {in.Locations, &out.Locations},
+		{in.RemoteTypes, &out.RemoteTypes}, {in.EmploymentTypes, &out.EmploymentTypes},
+		{in.ExcludedIndustries, &out.ExcludedIndustries},
+	} {
+		if field.change != nil {
+			*field.stored = cleanTerms(field.change)
+		}
+		if *field.stored == nil {
+			*field.stored = []string{}
+		}
+	}
+	if in.MinSalary != nil {
+		out.MinSalary = *in.MinSalary
+	}
+	if in.Currency != nil {
+		out.Currency = strings.ToUpper(strings.TrimSpace(*in.Currency))
+	}
+	if in.MaxAgeDays != nil {
+		out.MaxAgeDays = *in.MaxAgeDays
+	}
+	if out.Name == "" {
+		return out, errors.New("a filter preset needs a name")
+	}
+	if out.MinSalary < 0 || out.MaxAgeDays < 0 {
+		return out, errors.New("min_salary and max_age_days cannot be negative; 0 turns the rule off")
+	}
+	// Only a new list is checked: one saved in the web app is free text and
+	// must not block an unrelated change.
+	if in.RemoteTypes != nil {
+		for i, r := range out.RemoteTypes {
+			out.RemoteTypes[i] = strings.ToLower(r)
+			if !slices.Contains(remoteTypes, out.RemoteTypes[i]) {
+				return out, fmt.Errorf("remote_types takes %s, not %q", strings.Join(remoteTypes, ", "), r)
+			}
+		}
+	}
+	return out, nil
+}
+
+// cleanTerms trims each term and drops empty ones, so a stray comma cannot
+// become a rule that matches everything.
+func cleanTerms(terms []string) []string {
+	out := make([]string, 0, len(terms))
+	for _, t := range terms {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // addCatalogTools registers the tools that shape what the catalog contains:
@@ -105,6 +198,43 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 			filters = []FilterPreset{}
 		}
 		return nil, FilterList{Filters: filters}, nil
+	})
+
+	addTool(s, &mcp.Tool{
+		Name:  "set_filters",
+		Title: "Create or change a filter preset",
+		Description: "Create a filter preset, or change one from get_filters by its id. Fields left out keep their value; an empty list clears a rule. " +
+			"active true makes it the only active preset. Every save re-scores the user's jobs, so tell the user what changed. " +
+			"Seniority is a profile setting and minimum score a list_jobs option; neither belongs to a preset.",
+		Annotations: writeTool("Create or change a filter preset", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFiltersInput) (*mcp.CallToolResult, FilterPreset, error) {
+		base := FilterPreset{}
+		if id := strings.TrimSpace(in.ID); id != "" {
+			// Only the caller's own presets are listed, so an id that is not
+			// there is someone else's or gone, and nothing is sent.
+			filters, err := c.Filters(ctx)
+			if err != nil {
+				return nil, FilterPreset{}, toolError(err)
+			}
+			found := false
+			for _, f := range filters {
+				if f.ID == id {
+					base, found = f, true
+				}
+			}
+			if !found {
+				return nil, FilterPreset{}, fmt.Errorf("no filter preset has id %q; call get_filters for the ids, or leave id out to create one", id)
+			}
+		}
+		preset, err := applyFilterChanges(base, in)
+		if err != nil {
+			return nil, FilterPreset{}, err
+		}
+		out, err := c.SaveFilter(ctx, preset)
+		if err != nil {
+			return nil, FilterPreset{}, toolError(err)
+		}
+		return nil, out, nil
 	})
 
 	addTool(s, &mcp.Tool{
