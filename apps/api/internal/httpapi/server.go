@@ -61,6 +61,11 @@ type Server struct {
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
+	// Google is nil unless sign-in with Google is configured. GoogleSignup
+	// lets it create an account for someone who has none.
+	Google       *auth.OIDC
+	GoogleSignup bool
+	handoff      *auth.Handoff
 	// Sender sends approved outbox entries; nil when sending is off.
 	Sender interface{ Kick() }
 }
@@ -72,6 +77,11 @@ func (s *Server) Handler() http.Handler {
 	})
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
+	s.handoff = auth.NewHandoff()
+	m.HandleFunc("GET /api/auth/providers", s.authProviders)
+	m.HandleFunc("GET /api/auth/google/start", s.googleStart)
+	m.HandleFunc("GET /api/auth/google/callback", s.googleCallback)
+	m.HandleFunc("POST /api/auth/google/exchange", s.googleExchange)
 	// p: any authenticated caller. w: agent tokens need the write scope.
 	// session: browser logins only, so a leaked agent token cannot mint
 	// siblings or revoke itself. consent: browser logins only too, because
@@ -155,6 +165,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.createToken))
 	m.Handle("DELETE /api/tokens/{id}", session(s.revokeToken))
+	m.Handle("POST /api/auth/google/link", session(s.googleLink))
 	return s.cors(m)
 }
 
@@ -166,6 +177,12 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		// The web job list reads how many jobs match from this header.
 		w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
 		w.Header().Set("Vary", "Origin")
+		// Redeeming a Google handoff code needs its binding cookie, so the
+		// web app sends these two with credentials. No other route reads a
+		// cookie.
+		if r.URL.Path == "/api/auth/google/exchange" || r.URL.Path == "/api/auth/google/link" {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
 			return

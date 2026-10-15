@@ -24,6 +24,7 @@ type Config struct {
 	ATSRecruiteeURL string
 	TokenTTL        time.Duration
 	LLM             LLMConfig
+	Google          GoogleConfig
 	// OutboxSending turns on sending approved outbox entries through the
 	// employer's form (OUTBOX_SENDER_ENABLED=true). It is off unless asked
 	// for, so an instance whose approvals predate sending never sends them
@@ -32,6 +33,18 @@ type Config struct {
 	OutboxSending   bool
 	OutboxSendDelay time.Duration
 }
+
+// GoogleConfig turns on "Sign in with Google". With no client id it is off;
+// AllowSignup lets a Google account with no JobPilot account create one, and
+// is off unless GOOGLE_ALLOW_SIGNUP is "true".
+type GoogleConfig struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	AllowSignup  bool
+}
+
+func (g GoogleConfig) Enabled() bool { return g.ClientID != "" }
 
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
 // product fully deterministic, which is the supported default.
@@ -61,8 +74,14 @@ func Load() Config {
 		ATSRecruiteeURL:  env("ATS_RECRUITEE_URL", ""),
 		TokenTTL:         time.Duration(hours) * time.Hour,
 		LLM:              loadLLM(),
-		OutboxSending:    env("OUTBOX_SENDER_ENABLED", "false") == "true",
-		OutboxSendDelay:  time.Duration(delay) * time.Second,
+		Google: GoogleConfig{
+			ClientID:     env("GOOGLE_CLIENT_ID", ""),
+			ClientSecret: env("GOOGLE_CLIENT_SECRET", ""),
+			RedirectURL:  env("GOOGLE_REDIRECT_URL", ""),
+			AllowSignup:  env("GOOGLE_ALLOW_SIGNUP", "") == "true",
+		},
+		OutboxSending:   env("OUTBOX_SENDER_ENABLED", "false") == "true",
+		OutboxSendDelay: time.Duration(delay) * time.Second,
 	}
 }
 

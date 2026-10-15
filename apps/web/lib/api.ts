@@ -1,4 +1,4 @@
-const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8080/api";
+export const API=process.env.NEXT_PUBLIC_API_URL||"http://localhost:8080/api";
 export function token(){return typeof window!=="undefined"?localStorage.getItem("jobpilot_token"):null}
 async function send(path:string,options:RequestInit={}){
   const headers=new Headers(options.headers);headers.set("Content-Type","application/json");const t=token();if(t)headers.set("Authorization",`Bearer ${t}`);
