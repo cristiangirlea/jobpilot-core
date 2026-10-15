@@ -8,8 +8,9 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// addPrompts registers the two workflows worth encoding: preparing one
-// application, and the weekly look at the pipeline. They exist so the rules
+// addPrompts registers the workflows worth encoding: preparing one
+// application, the weekly look at the pipeline, and going through what waits
+// for the user. They exist so the rules
 // that matter (stop at a rejection, never claim to have applied, invent
 // nothing) travel with the workflow instead of relying on the model to
 // remember them from the server instructions.
@@ -74,6 +75,28 @@ Then tell me, briefly:
 - The two or three things worth doing next.
 
 Do not change any application status without asking me first, and do not describe anything as submitted.`},
+			}},
+		}, nil
+	})
+
+	s.AddPrompt(&mcp.Prompt{
+		Name:        "review_pending_decisions",
+		Title:       "Go through what waits for me",
+		Description: "Walk the user through every draft and application waiting for their decision, one at a time, and act only on their word.",
+	}, func(_ context.Context, _ *mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+		return &mcp.GetPromptResult{
+			Description: "Go through what waits for the user",
+			Messages: []*mcp.PromptMessage{{
+				Role: "user",
+				Content: &mcp.TextContent{Text: `Go through what is waiting for my decision in JobPilot.
+
+1. Call list_pending_decisions. If nothing is open, say so and stop. Otherwise tell me how many items wait (open), then take them one at a time, oldest first. When a page is done and next is set, call list_pending_decisions again with after set to next for the following page, until next is empty.
+2. For each item, follow its how_to_resolve: fetch what it names, show me the item in the exact words returned (every unapproved draft, every needs_review field, every blocker), and ask me how to proceed. Wait for my answer before moving on.
+3. Act only on my explicit word: call approve_answer or approve_cv only when I approve that exact text, and pass my edited wording if I change it. If I say skip, leave the item as it is and go to the next one.
+4. Approving or sending an application happens only in the web app: for those, read it with get_outbox_entry, tell me what still blocks it and that I approve it on the Outbox page. Never say or imply that an application was approved, submitted or sent.
+5. When every page has been seen, call list_pending_decisions again without after and tell me what is still open.
+
+Use only facts from my profile, CV and the jobs; never invent experience, skills or claims, and never write an answer for me without showing it first.`},
 			}},
 		}, nil
 	})

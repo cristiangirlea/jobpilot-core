@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
+	m.Handle("GET /api/notifications", p(s.listNotifications))
 	m.Handle("GET /api/discovery/settings", p(s.discoverySettings))
 	m.Handle("PUT /api/discovery/settings", w(s.saveDiscoverySettings))
 	m.Handle("GET /api/discovery/sources", p(s.discoverySources))

@@ -374,3 +374,26 @@ type AgentToken struct {
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
 }
+
+// Notification is one thing that waits, or waited, for the user. Kind names
+// what it is (answer, cv, outbox, and kinds added later) and SubjectID the
+// thing in its own table; Detail holds what a reader needs to show it,
+// including href, the web page where it is resolved.
+type Notification struct {
+	ID         string         `json:"id"`
+	Kind       string         `json:"kind"`
+	SubjectID  string         `json:"subject_id"`
+	Title      string         `json:"title"`
+	Detail     map[string]any `json:"detail"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ResolvedAt *time.Time     `json:"resolved_at,omitempty"`
+}
+
+// NotificationFeed is a page of notifications and how many are open in all.
+// Next, when set, is the after value for the following page.
+type NotificationFeed struct {
+	Open  int            `json:"open"`
+	Items []Notification `json:"items"`
+	Next  string         `json:"next,omitempty"`
+}
