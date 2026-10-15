@@ -3,9 +3,11 @@ package cv
 import (
 	"bytes"
 	"fmt"
+	"math"
 	"regexp"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ledongthuc/pdf"
 )
@@ -26,6 +28,12 @@ import (
 // count as a word break. Roughly a third of an em sits comfortably between
 // normal inter-glyph kerning and a real space in the templates seen so far.
 const spaceRatio = 0.33
+
+// blankRatio is the word-break threshold where both runs' widths are known,
+// so the gap is the true blank between them: a space is 0.22 to 0.28 em in
+// common fonts, kerning a few hundredths, and a TJ offset that moves a word
+// along (as TeX writes its spaces) a quarter of an em or more.
+const blankRatio = 0.15
 
 // lineRatio is how far apart two glyph baselines may be and still be one line.
 const lineRatio = 0.55
@@ -91,72 +99,69 @@ func hasPageGeometry(chunks []chunk) bool {
 
 // collectChunks flattens a page into positioned glyph runs.
 func collectChunks(page pdf.Page) []chunk {
-	rows, err := page.GetTextByRow()
-	if err != nil {
+	runs, ok := walkText(page)
+	if !ok {
 		return nil
 	}
-	var out []chunk
-	for _, row := range rows {
-		for _, text := range row.Content {
-			if text.S == "" {
-				continue
-			}
-			// Spaces the document already encodes are the most reliable word
-			// breaks available, but they are frequently emitted as their own run
-			// with no position of their own. Left standing they would sort to the
-			// front of the line and fuse every word behind them, so each is
-			// folded into the run it follows and travels with it.
-			if strings.TrimSpace(text.S) == "" {
-				if len(out) > 0 {
-					out[len(out)-1].s += " "
-				}
-				continue
-			}
-			size := text.FontSize
-			if size <= 0 {
-				size = 10
-			}
-			out = append(out, chunk{x: text.X, y: text.Y, w: text.W, size: size, s: text.S})
+	// A matrix can put text at an infinite or undefined position; such text
+	// cannot be placed in reading order and would upset every comparison.
+	placed := runs[:0]
+	for _, run := range runs {
+		if !finite(run.x, run.y, run.w, run.size) {
+			continue
 		}
+		if run.size <= 0 {
+			run.size = 10
+		}
+		placed = append(placed, run)
 	}
-	return out
+	// Runs without positions all "touch"; joined, the page would be one line.
+	if !hasPageGeometry(placed) {
+		return placed
+	}
+	return joinRuns(placed)
 }
 
 // splitColumns separates a page into vertical columns by finding a blank band
 // that runs the full height of the text area. Returns one column unchanged when
 // the page is a single block, which is the common case.
 func splitColumns(chunks []chunk) [][]chunk {
-	minX, maxX := chunks[0].x, chunks[0].x+chunks[0].w
+	minX, maxX := chunks[0].x, chunks[0].x+extent(chunks[0])
 	for _, c := range chunks {
 		if c.x < minX {
 			minX = c.x
 		}
-		if right := c.x + c.w; right > maxX {
+		if right := c.x + extent(c); right > maxX {
 			maxX = right
 		}
 	}
 	width := maxX - minX
-	if width <= 0 || len(chunks) < 40 {
+	// Touching runs are already joined, so a chunk is roughly a line of one
+	// column; a sparse second page of a two-column CV has a few dozen.
+	if width <= 0 || len(chunks) < 20 {
 		return [][]chunk{chunks}
 	}
 
-	// Mark which horizontal slices of the page carry any glyph at all.
+	// Count how many chunks cross each horizontal slice of the page.
 	const bins = 240
-	occupied := make([]bool, bins)
+	occupied := make([]int, bins)
 	for _, c := range chunks {
 		from := int((c.x - minX) / width * bins)
-		to := int((c.x + c.w - minX) / width * bins)
+		to := int((c.x + extent(c) - minX) / width * bins)
 		for b := from; b <= to && b < bins; b++ {
 			if b >= 0 {
-				occupied[b] = true
+				occupied[b]++
 			}
 		}
 	}
+	// A name, contact line or footer may run across the gutter, so a band
+	// that only a couple of lines cross still counts as blank.
+	allowance := max(2, len(chunks)/50)
 
 	// The widest empty band in the middle of the page is the gutter.
 	bestStart, bestLength, start := -1, 0, -1
 	for b := 0; b <= bins; b++ {
-		if b < bins && !occupied[b] {
+		if b < bins && occupied[b] <= allowance {
 			if start < 0 {
 				start = b
 			}
@@ -178,7 +183,7 @@ func splitColumns(chunks []chunk) [][]chunk {
 	boundary := minX + (float64(bestStart)+float64(bestLength)/2)/bins*width
 	var left, right []chunk
 	for _, c := range chunks {
-		if c.x+c.w/2 < boundary {
+		if c.x+extent(c)/2 < boundary {
 			left = append(left, c)
 			continue
 		}
@@ -264,10 +269,25 @@ func renderLine(line []chunk) string {
 	}
 	threshold := adaptiveThreshold(gaps, sorted[0].size)
 
+	// A letter-spaced heading ("S K I L L S" drawn a glyph at a time) has
+	// blanks as wide as a space between its letters; only the adaptive
+	// threshold keeps it one word.
+	letters := 0
+	for _, c := range sorted {
+		if utf8.RuneCountInString(strings.TrimSpace(c.s)) == 1 {
+			letters++
+		}
+	}
+	letterSpaced := letters*2 > len(sorted)
+
 	var b strings.Builder
 	for i, c := range sorted {
+		limit := threshold
+		if i > 0 && sorted[i-1].w > 0 && c.w > 0 && !letterSpaced {
+			limit = sorted[i-1].size * blankRatio
+		}
 		// Never double up on a space the document already provides.
-		if i > 0 && gaps[i-1] > threshold && !endsWithSpace(b.String()) && !startsWithSpace(c.s) {
+		if i > 0 && gaps[i-1] > limit && !endsWithSpace(b.String()) && !startsWithSpace(c.s) {
 			b.WriteByte(' ')
 		}
 		b.WriteString(c.s)
@@ -320,6 +340,16 @@ func adaptiveThreshold(gaps []float64, size float64) float64 {
 		return median * 1.2
 	}
 	return floor
+}
+
+// finite reports whether every value is an ordinary number.
+func finite(values ...float64) bool {
+	for _, v := range values {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return false
+		}
+	}
+	return true
 }
 
 func absolute(v float64) float64 {

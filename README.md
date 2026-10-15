@@ -503,10 +503,12 @@ Supported uploads: PDF, DOCX, Markdown, and plain text, up to 12 MB. Format is d
 
 PDF text needs genuine reconstruction, because a PDF stores glyphs at coordinates rather than words in reading order:
 
-- Columns are separated by locating the blank vertical gutter, so a sidebar does not interleave with the main column.
-- Word breaks come from the document's own space runs where it has them. Those runs frequently carry no position, so each is folded into the run it follows; left standing they sort to the front of a line and fuse every word behind them.
-- Where a generator emits no spaces at all, breaks are inferred from glyph gaps, with the threshold adapting to whether that file reports real glyph advances.
+- Text runs are placed by walking the page's content stream with the full text state (`cm`, `Td`, `TL`/`T*`, `TJ` offsets, and glyph widths from the font, including composite fonts), because the PDF library's row reader ignores everything but `Tm` and reports no widths: ReportLab paragraphs fused into one line and Word's separately drawn hyphens read as word breaks (#144). Runs that touch on a line are joined back into words.
+- Columns are separated by locating the vertical gutter that almost no text crosses (a name or contact line running across it is allowed), so a sidebar does not interleave with the main column.
+- Word breaks come from the document's own spaces where it has them; a space drawn as a run of its own is folded into the run it follows. Where a generator emits no spaces, breaks are inferred from the blank between runs, against a threshold that adapts to whether the font gives widths.
 - A final repair pass fixes only unambiguous over-splits.
+
+The location is the place named on the contact line ("Lisbon | Remote | +351 ... | me@example.com") when there is one, since a wrapped skills line can read like "City, Country"; a "City, Country" line near the top is used otherwise, or when it spells out the contact line's place in full.
 
 Work experience is read from the whole document rather than the experience section alone, because a two-column CV places a page-two sidebar heading in the middle of the role list. A dated line must also carry a title to start a role, which is what keeps education entries from becoming jobs.
 
