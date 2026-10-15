@@ -361,6 +361,17 @@ type OutboxCV struct {
 	Missing   []string `json:"missing,omitempty"`
 }
 
+// Invite is a single-use sign-up code an admin created. The code itself is
+// returned once at creation; CodePrefix tells two invites apart.
+type Invite struct {
+	ID         string     `json:"id"`
+	Note       string     `json:"note"`
+	CodePrefix string     `json:"code_prefix"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	UsedAt     *time.Time `json:"used_at,omitempty"`
+}
+
 // AgentToken is a long-lived credential for an agent host or script. The
 // token itself is returned once at creation and never again; everything here
 // is safe to list.

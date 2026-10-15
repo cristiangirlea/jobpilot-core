@@ -18,3 +18,45 @@ func TestTokenRoundTrip(t *testing.T) {
 		t.Fatal("expected signature failure")
 	}
 }
+
+// An unknown email must cost the same bcrypt work as a wrong password, or the
+// response time tells an attacker which emails have accounts. Compared as the
+// fastest of a few runs each, so a busy machine slows both sides alike.
+func TestCheckLoginDoesTheSameWorkWithoutAnAccount(t *testing.T) {
+	PrepareLogin()
+	hash, err := Hash("right password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fastest := func(found bool) time.Duration {
+		best := time.Duration(1 << 62)
+		for range 3 {
+			start := time.Now()
+			if CheckLogin(hash, found, "wrong password") {
+				t.Fatal("a wrong password must not pass")
+			}
+			best = min(best, time.Since(start))
+		}
+		return best
+	}
+	known, unknown := fastest(true), fastest(false)
+	if unknown < known/2 {
+		t.Fatalf("an unknown email answered in %v against %v for a wrong password; it should run bcrypt too", unknown, known)
+	}
+	// An account without a password (signed up through Google) has an empty
+	// hash; it must cost the same and never pass, not even with the dummy's
+	// own password.
+	start := time.Now()
+	if CheckLogin("", true, "jobpilot: no account has this password") {
+		t.Fatal("an account without a password must not pass")
+	}
+	if noPassword := time.Since(start); noPassword < known/2 {
+		t.Fatalf("an account without a password answered in %v against %v; it should run bcrypt too", noPassword, known)
+	}
+	if CheckLogin(dummyHash(), false, "jobpilot: no account has this password") {
+		t.Fatal("without an account the answer is always no, even for the dummy's own password")
+	}
+	if !CheckLogin(hash, true, "right password") {
+		t.Fatal("the right password for an existing account passes")
+	}
+}

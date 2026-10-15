@@ -85,7 +85,7 @@ On first startup, Compose builds the API and web images, waits for PostgreSQL, a
 
 ### First-use workflow
 
-1. Register a user.
+1. Register a user. The Compose stack allows open sign-up; before anyone else can reach the server, name your account in `ADMIN_EMAILS`, set `REGISTRATION=invite` and restart (see "Accounts and sign-up").
 2. Complete **Profile > Basics**, including desired titles and one or more seniority levels.
 3. Add current and previous employers under **Experience**. These employers are automatically excluded.
 4. Add skills and projects. These are used for scoring and generated text.
@@ -653,8 +653,24 @@ Authorization: Bearer <token>
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/health` | Health check; reports the API `contract` version a client may rely on |
-| `POST` | `/api/auth/register` | Create user and return token |
+| `POST` | `/api/auth/register` | Create user and return token; needs `invite` unless `REGISTRATION=open` |
 | `POST` | `/api/auth/login` | Authenticate and return token |
+| `GET` | `/api/auth/registration` | The sign-up mode: `invite`, `open` or `closed` |
+| `GET` | `/api/auth/providers` | Which other sign-in methods are on (`{"google": true}`) |
+| `GET` | `/api/auth/google/start` | Redirect to Google (404 when Google is off) |
+| `GET` | `/api/auth/google/callback` | Google's redirect back; ends on the web app's `/login/google?code=...` (with a binding cookie) or `/login?error=...` |
+| `POST` | `/api/auth/google/exchange` | Exchange the single-use code from the callback for a token; needs the binding cookie |
+| `POST` | `/api/auth/google/link` | Link the Google account from a `?link=1` flow to the signed-in account (browser session only; needs the binding cookie) |
+
+### Invite endpoints
+
+Browser sessions of the accounts in `ADMIN_EMAILS` only; agent tokens are refused.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/invites` | List the invites you created; never returns codes |
+| `POST` | `/api/invites` | Create a single-use code (`note`, `expires_in_days` 1-90, default 14) and return it once |
+| `DELETE` | `/api/invites/{id}` | Withdraw an unused invite |
 
 ### Profile endpoints
 
@@ -875,6 +891,15 @@ A browser login returns a token that expires after `TOKEN_TTL_HOURS` and cannot 
 
 A browser session holds both scopes and no token id, which is exactly what those two rules key on.
 
+## Accounts and sign-up
+
+JobPilot's own login is the only gate in front of it, so sign-up and login are guarded in the API.
+
+- **Sign-up mode.** `REGISTRATION=invite` (the default) needs a single-use invite code; `open` lets anyone register; `closed` refuses every sign-up. An unknown value stops the API at startup. A new server has no admin and no invites yet: start it with `open`, register the owner's account, name it in `ADMIN_EMAILS`, then restart with `invite`. Every way of creating an account goes through one gate, `checkSignUp` (then `createAccount` for the form) in `internal/httpapi/accounts.go`; Google sign-up asks it without an invite, so it creates accounts only while sign-up is open.
+- **Invites.** An account listed in `ADMIN_EMAILS` creates them under **Settings > Invites**, or with `POST /api/invites`. A code (`jpi_` prefix) is shown once, stored only as its SHA-256 digest, lasts 1 to 90 days (14 by default), and is claimed in the same transaction that creates the account, so it works once and a refused sign-up does not spend it. A missing, unknown, used or expired code all get the same 403. Fifty open invites per admin. The register page reads `?invite=` from its address, so a link can carry the code.
+- **Rate limits.** Login: 30 attempts per client address and 10 per email in 15 minutes; a successful login clears the email's count. Sign-up: 10 per address and 5 per email an hour. Past a limit the answer is 429 with `Retry-After`, before any database or bcrypt work. Emails are counted by their SHA-256 digest, so the table's size does not depend on what a caller sends. Counts are kept in memory (`internal/ratelimit`), which suits the single API replica; a restart forgets them. The address is the connection's unless `CLIENT_IP_HEADER` names a header the proxy in front overwrites (`CF-Connecting-IP` behind a Cloudflare Tunnel); IPv6 addresses count by their /64.
+- **Equal answers.** A login for an unknown email runs a bcrypt comparison against a fixed hash of the same cost and gets the same 401 text as a wrong password, so neither the time nor the text tells whether an account exists.
+
 ## Database and migrations
 
 PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrations/migrate.sh` (the `migrate` service, and the `jobpilot-migrate` image built from `migrations/`) applies each file once, in order. It runs in one psql session behind an advisory lock, so runners started together take turns, and it records applied files in `schema_migrations` in the same transaction as the file. A file that fails is rolled back and retried on the next run. `MIGRATE_LOCK_TIMEOUT` (default 30s) bounds how long a migration waits on a busy table, and so how long queries queue behind it, before it fails and is retried. It connects directly to PostgreSQL, never through a transaction-mode pooler, which would hand the advisory lock's connection to other clients. A migration file must not `BEGIN` or `COMMIT` itself; the script rejects one that does. A database migrated before `schema_migrations` existed gets every file once more on its first run, then only new files.
@@ -902,6 +927,8 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
 | `020_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
 | `021_outbox_sending.sql` | When an outbox entry was posted to the employer, so it is never sent twice |
+| `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
+| `023_invites.sql` | Single-use sign-up invite codes, stored as digests |
 
 Core entities:
 
@@ -924,6 +951,7 @@ discovery_sources
 discovery_runs
 outbound_clicks
 agent_tokens
+user_identities
 ```
 
 When changing schema:
@@ -945,8 +973,13 @@ When changing schema:
 | `JWT_SECRET` | Required secret; set it in `.env` |
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
+| `REGISTRATION` | `invite` (default), `open` or `closed`; Compose defaults to `open` for local development. See "Accounts and sign-up" |
+| `ADMIN_EMAILS` | Comma-separated accounts that may create invites |
+| `CLIENT_IP_HEADER` | Header holding the caller's address, set by the proxy in front (`CF-Connecting-IP` behind a Cloudflare Tunnel); empty uses the connection's address |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
 | `ATS_ASHBY_URL` | Origin of Ashby's public job pages, whose posting query the form reader calls; defaults to `https://jobs.ashbyhq.com`. Point it at a fake as above |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL` | Sign-in with Google; off while `GOOGLE_CLIENT_ID` is unset; with it set, the API refuses to start without the other two. The redirect URL is the API's `/api/auth/google/callback`, registered in the Google OAuth client. The web app and the API must be on the same site (the same host, or subdomains of one domain; `localhost` ports count as one site), because the handoff's binding cookie is `SameSite=Lax` |
+| `GOOGLE_ALLOW_SIGNUP` | `true` lets a Google account create a JobPilot account when no account has its email and `REGISTRATION=open`; unset, Google signs in only accounts it was linked to under Settings |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
 | `OUTBOX_SENDER_ENABLED` | `true` sends approved outbox entries through the employer's form ("Sending approved applications"); anything else, the default, leaves them queued. `GET /api/health` reports it as `sending` |
 | `OUTBOX_SEND_DELAY_SECONDS` | How long an approval waits before it is sent, so it can still be removed; defaults to `120` |
@@ -1111,6 +1144,7 @@ CI runs all of the above on every pull request and every merge to master, plus b
 Implemented safeguards:
 
 - bcrypt password hashing.
+- Optional sign-in with Google through OpenID Connect: the authorization-code flow with PKCE, state and nonce held in a signed, HttpOnly, ten-minute cookie, and an ID token checked for signature, issuer, audience, expiry and a verified email before it is trusted. A Google identity is never joined to an existing account by email, because sign-up does not verify addresses and the account may have been registered by someone else: the account's owner links Google from Settings while signed in. Google creates an account only when `GOOGLE_ALLOW_SIGNUP=true`, sign-up is open (`REGISTRATION=open`; the callback cannot carry an invite, so with invites an invited person registers with the code and then links Google), and no account has its email; an account created that way has no password. The callback hands the web app a single-use code that lasts a minute instead of the token, so a session token never appears in a URL, and the code works only with a binding cookie set in the browser that finished the flow, so a code sent to someone else cannot sign them into the sender's account. The codes are held in memory, which assumes one API instance like the scheduler lock.
 - Signed, expiring JWT bearer tokens.
 - Protected routes and user-scoped SQL access.
 - Strict JSON parsing and request size limits.
@@ -1177,6 +1211,7 @@ Preserve these rules when extending the product:
 - Keep PostgreSQL as the source of truth; introduce another service only for a demonstrated need.
 - The MCP server is a client of the REST API: it never reads the database, never bypasses the API's authorization, and never exposes outbound attribution or any submission action.
 - Every mutating route is registered with the `w(` wrapper so it requires the write scope; `apps/api/internal/httpapi/routes_test.go` reads the router and fails otherwise. Only `validate` and `detect` are reachable with `read`, because they change nothing.
+- Every way of creating an account asks `checkSignUp` first, so the registration mode and invites apply to all of them: the sign-up form then creates the account with `createAccount`, and Google, which cannot carry an invite, creates one only when the gate passes without one. A login for an unknown email, or for an account without a password, does the same bcrypt work and gets the same answer as a wrong password.
 - Raise `httpapi.Contract` when a change alters what an existing request does, and say what the new number guarantees in its comment. The MCP server's `requiredContract` names the version it was written against.
 - Adding an MCP tool means three edits: the registration, the expected-name set in `apps/mcp/e2e_test.go`, and the tools table in this README. Register it through `addTool`, never `mcp.AddTool` directly, so the output-schema policy applies.
 - The MCP server's `blockedMessage` copies `store.ErrApplicationBlocked` word for word because the modules cannot import each other; a test pins them and both must change together.

@@ -1,6 +1,21 @@
-"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {api} from "@/lib/api";import type {AgentToken,AgentTokenCreated} from "@/lib/types";
+"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
 
 function when(value?:string){return value?new Date(value).toLocaleDateString():"—"}
+
+// GoogleLink links a Google account to this one, after which it can sign in
+// with Google. It shows only when the API has Google configured.
+function GoogleLink(){
+  const [enabled,setEnabled]=useState(false);
+  const [linked,setLinked]=useState(false);
+  useEffect(()=>{api<{google:boolean}>("/auth/providers").then(p=>setEnabled(p.google)).catch(()=>setEnabled(false));setLinked(new URLSearchParams(window.location.search).get("google")==="linked")},[]);
+  if(!enabled)return null;
+  return <section className="card md:col-span-2">
+    <h2 className="font-semibold">Sign in with Google</h2>
+    <p className="muted mt-2 mb-4">Link a Google account to sign in with it from now on. Your password keeps working.</p>
+    {linked&&<p className="mb-4 text-sm font-semibold text-moss">Google account linked.</p>}
+    <a className="btn-secondary inline-flex" href={`${API}/auth/google/start?link=1`}>Link a Google account</a>
+  </section>;
+}
 
 function Tokens(){
   const [tokens,setTokens]=useState<AgentToken[]>([]);
@@ -51,6 +66,49 @@ function Tokens(){
   </section>;
 }
 
+// Invites shows only for the accounts the server names as admins; anyone
+// else gets a 403 with this text, and the section stays hidden.
+const notAdmin="Only an admin of this server can manage invites.";
+
+function Invites(){
+  const [invites,setInvites]=useState<Invite[]|null>(null);
+  const [note,setNote]=useState("");
+  const [days,setDays]=useState(14);
+  const [created,setCreated]=useState<InviteCreated|null>(null);
+  const [error,setError]=useState("");
+  const load=()=>api<Invite[]>("/invites").then(setInvites).catch(e=>{if(e.message!==notAdmin)setError(e.message)});
+  useEffect(()=>{load()},[]);
+  const create=async()=>{
+    setError("");
+    try{const made=await api<InviteCreated>("/invites",{method:"POST",body:JSON.stringify({note,expires_in_days:days})});setCreated(made);setNote("");load()}catch(e){setError((e as Error).message)}
+  };
+  const remove=async(x:Invite)=>{
+    if(!confirm("Withdraw this invite? Its code stops working at once."))return;
+    setError("");
+    try{await api(`/invites/${x.id}`,{method:"DELETE"});load()}catch(e){setError((e as Error).message)}
+  };
+  if(invites===null&&!error)return null;
+  const link=created?`${window.location.origin}/register?invite=${encodeURIComponent(created.code)}`:"";
+  return <section className="card md:col-span-2">
+    <h2 className="font-semibold">Invites</h2>
+    <p className="muted mt-2 mb-4">Sign-up on this server needs an invite. Each code creates one account and expires on its own.</p>
+    <ErrorMessage message={error}/>
+    {created&&<div className="mb-4 rounded-xl bg-amber-50 p-4">
+      <p className="text-sm font-semibold">Copy this invite link now. The code is not stored and cannot be shown again.</p>
+      <div className="mt-2 flex items-center gap-2"><code className="flex-1 overflow-x-auto rounded-lg bg-white px-3 py-2 text-xs">{link}</code><CopyButton text={link}/></div>
+    </div>}
+    <div className="grid gap-3 md:grid-cols-[1fr_auto_auto] md:items-end">
+      <Field label="Who it is for (only you see this)"><input value={note} maxLength={200} onChange={e=>setNote(e.target.value)}/></Field>
+      <Field label="Expires after"><select value={days} onChange={e=>setDays(Number(e.target.value))}><option value={1}>1 day</option><option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={90}>90 days</option></select></Field>
+      <button className="btn-primary" onClick={create}>Create invite</button>
+    </div>
+    {invites&&invites.length>0&&<table className="mt-5 w-full text-sm"><thead><tr className="text-left text-xs uppercase tracking-wide text-ink/45"><th className="pb-2">For</th><th className="pb-2">Code</th><th className="pb-2">Created</th><th className="pb-2">Status</th><th className="pb-2"></th></tr></thead><tbody>
+      {invites.map(x=><tr key={x.id} className="border-t border-black/5"><td className="py-2">{x.note||"—"}</td><td className="py-2"><code className="text-xs">jpi_{x.code_prefix}…</code></td><td className="py-2">{when(x.created_at)}</td><td className="py-2">{x.used_at?`Used ${when(x.used_at)}`:new Date(x.expires_at)<new Date()?"Expired":`Open until ${when(x.expires_at)}`}</td><td className="py-2 text-right">{!x.used_at&&<button className="btn-secondary !px-3 !py-1.5 text-xs" onClick={()=>remove(x)}>Withdraw</button>}</td></tr>)}
+    </tbody></table>}
+    {invites&&invites.length===0&&<p className="muted mt-4 text-sm">No invites yet.</p>}
+  </section>;
+}
+
 export default function Settings(){
   const r=useRouter();
   return <Shell>
@@ -58,7 +116,9 @@ export default function Settings(){
     <div className="grid gap-5 md:grid-cols-2">
       <section className="card"><h2 className="font-semibold">Generation mode</h2><p className="muted mt-2">Deterministic templates are active. They use only profile, experience, skill, and project data—no API key required.</p><span className="mt-4 inline-block rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">OFFLINE-SAFE</span></section>
       <section className="card"><h2 className="font-semibold">Safety boundaries</h2><p className="muted mt-2">This product never submits applications, bypasses CAPTCHA, or automates job boards. Apply links always open for manual review.</p></section>
+      <GoogleLink/>
       <Tokens/>
+      <Invites/>
       <section className="card md:col-span-2"><h2 className="font-semibold">Session</h2><p className="muted mt-2 mb-4">Signing out removes the local access token from this browser.</p><button className="btn-secondary" onClick={()=>{localStorage.removeItem('jobpilot_token');r.push('/login')}}>Sign out</button></section>
     </div>
   </Shell>;

@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -28,6 +29,33 @@ func Hash(password string) (string, error) {
 }
 func Verify(hash, password string) bool {
 	return bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) == nil
+}
+
+// dummyHash is compared against when a login names no account, at the same
+// cost as a real hash. Built once, on first use; PrepareLogin builds it at
+// startup so the first unknown email is not the slow one.
+var dummyHash = sync.OnceValue(func() string {
+	h, err := Hash("jobpilot: no account has this password")
+	if err != nil {
+		panic(err)
+	}
+	return h
+})
+
+func PrepareLogin() { dummyHash() }
+
+// CheckLogin verifies a password for an account that may not exist. Without
+// an account it still runs one bcrypt comparison, against dummyHash, so the
+// answer takes as long as a wrong password and timing does not tell whether
+// an email is registered. An account with no password (created through
+// Google, empty hash) is answered the same way: bcrypt would refuse the
+// empty hash at once, and that speed would tell.
+func CheckLogin(hash string, found bool, password string) bool {
+	if !found || hash == "" {
+		Verify(dummyHash(), password)
+		return false
+	}
+	return Verify(hash, password)
 }
 func Token(userID, email, secret string, ttl time.Duration) (string, error) {
 	c := claims{userID, email, time.Now().Add(ttl).Unix()}
