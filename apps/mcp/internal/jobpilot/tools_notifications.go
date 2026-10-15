@@ -44,7 +44,7 @@ type PendingDecisions struct {
 }
 
 type pendingDecisionsInput struct {
-	IncludeResolved bool   `json:"include_resolved,omitempty" jsonschema:"Also return items already resolved, newest first after the open ones"`
+	IncludeResolved bool   `json:"include_resolved,omitempty" jsonschema:"Also return items already resolved: every item, open or resolved, newest first"`
 	Limit           int    `json:"limit,omitempty" jsonschema:"Maximum items to return: default 20, maximum 100. open always counts every open item"`
 	After           string `json:"after,omitempty" jsonschema:"The next value from the previous call, to fetch the following page"`
 }

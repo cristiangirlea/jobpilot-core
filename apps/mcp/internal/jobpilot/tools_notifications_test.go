@@ -8,7 +8,9 @@ import (
 
 // notificationRoutes adds the notification feed to the fake API: three open
 // items of the kinds the API derives, one of a kind this server does not
-// know, and, for state=all, one resolved item.
+// know, and, for state=all, one resolved item (the API orders state=all
+// newest first; the fixture keeps one order for both so the assertions stay
+// simple).
 func (f *fakeAPI) notificationRoutes(m *http.ServeMux, send func(http.ResponseWriter, int, string)) {
 	m.HandleFunc("GET /api/notifications", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()

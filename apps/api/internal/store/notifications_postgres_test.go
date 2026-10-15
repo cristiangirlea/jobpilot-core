@@ -218,10 +218,19 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 
 	// Pages follow on by position: the open list oldest first, the history
 	// newest first, neither repeating nor skipping a row.
+	// They open in one transaction, as several items changed by one write
+	// do, so they share created_at and only the id breaks the tie.
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 3; i++ {
-		if err := OpenNotification(ctx, pool, ana.ID, "proposal", fmt.Sprintf("page-%d-%s", i, run), "Review a proposed profile change", nil); err != nil {
+		if err := OpenNotification(ctx, tx, ana.ID, "proposal", fmt.Sprintf("page-%d-%s", i, run), "Review a proposed profile change", nil); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
 	}
 	for _, state := range []string{"", "all"} {
 		whole := feed(ana.ID, state)
