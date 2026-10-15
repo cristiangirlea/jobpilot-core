@@ -764,7 +764,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 25 KB for 32 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
+The catalog an agent host downloads at the start of every session is about 27 KB for 33 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
 
 ### Tools
 
@@ -775,6 +775,7 @@ The catalog an agent host downloads at the start of every session is about 25 KB
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
 | `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
+| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
