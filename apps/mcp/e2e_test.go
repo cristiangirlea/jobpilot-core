@@ -192,7 +192,7 @@ func TestEndToEnd(t *testing.T) {
 		"approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
-		"report_job_unavailable": true, "list_pending_decisions": true,
+		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
 	}
 	for _, tool := range tools.Tools {
 		if !want[tool.Name] {
@@ -663,6 +663,84 @@ func TestEndToEnd(t *testing.T) {
 		boardTermsChooseTitles(t, call)
 		discoveryShareAndCounters(t, r, call)
 		discoveryRecognisesReposts(t, r, call)
+	}
+	filterPresetsFromTheAgent(t, call, accepted.Job.ID)
+}
+
+// filterPresetsFromTheAgent creates a preset, changes one rule of it, and
+// activates it, which re-scores the user's jobs: the job accepted at the
+// start mentions PostgreSQL, which the new preset excludes. It runs last, so
+// the stricter filter cannot change what the earlier steps see.
+func filterPresetsFromTheAgent(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool), acceptedID string) {
+	activeName := func() string {
+		out, text, isErr := call("get_filters", nil)
+		if isErr {
+			t.Fatalf("get_filters: %s", text)
+		}
+		name := ""
+		filters, _ := out["filters"].([]any)
+		for _, raw := range filters {
+			if f, _ := raw.(map[string]any); f["active"] == true {
+				if name != "" {
+					t.Fatalf("more than one preset is active: %s", text)
+				}
+				name, _ = f["name"].(string)
+			}
+		}
+		return name
+	}
+	rejectedFor := func() (bool, string) {
+		out, text, isErr := call("get_job", map[string]any{"job_id": acceptedID})
+		if isErr {
+			t.Fatalf("get_job: %s", text)
+		}
+		match, _ := out["match"].(map[string]any)
+		return match["rejected"] == true, text
+	}
+
+	out, text, isErr := call("set_filters", map[string]any{
+		"name": "Agent draft", "included_titles": []string{"Backend Engineer"}, "remote_types": []string{"remote"},
+		"excluded_technologies": []string{"PHP"},
+	})
+	if isErr || out["active"] != false {
+		t.Fatalf("set_filters should create an inactive preset: %s", text)
+	}
+	id, _ := out["id"].(string)
+	if id == "" || activeName() != "MCP filter" {
+		t.Fatalf("creating a preset must not change the active one: %s", text)
+	}
+
+	out, text, isErr = call("set_filters", map[string]any{"id": id, "name": "Agent strict", "excluded_technologies": []string{"PostgreSQL"}})
+	if isErr || out["name"] != "Agent strict" {
+		t.Fatalf("set_filters should update the preset: %s", text)
+	}
+	if titles, _ := out["included_titles"].([]any); len(titles) != 1 {
+		t.Fatalf("an update must keep the rules it does not name: %s", text)
+	}
+	if rejected, text := rejectedFor(); rejected {
+		t.Fatalf("an inactive preset must not reject anything: %s", text)
+	}
+
+	out, text, isErr = call("set_filters", map[string]any{"id": id, "active": true})
+	if isErr || out["active"] != true || activeName() != "Agent strict" {
+		t.Fatalf("set_filters should activate the preset: %s", text)
+	}
+	rejected, text := rejectedFor()
+	if !rejected || !strings.Contains(text, "excluded technology: PostgreSQL") {
+		t.Fatalf("activating the preset must re-score the jobs: %s", text)
+	}
+
+	for _, bad := range []map[string]any{
+		{"id": id, "remote_types": []string{"anywhere"}},
+		{"id": "00000000-0000-0000-0000-000000000000", "active": true},
+		{"active": true},
+	} {
+		if _, text, isErr = call("set_filters", bad); !isErr {
+			t.Fatalf("set_filters should refuse %v: %s", bad, text)
+		}
+	}
+	if activeName() != "Agent strict" {
+		t.Fatal("a refused change must leave the active preset alone")
 	}
 }
 

@@ -23,6 +23,9 @@ const (
 	// Validating a source fetches from the provider, so it needs more than
 	// the default timeout but far less than a whole discovery run.
 	validateTimeout = 90 * time.Second
+	// Saving a filter preset re-scores every job before the API answers,
+	// which it allows a minute for.
+	rescoreTimeout = 90 * time.Second
 	// The list endpoints are not paginated and carry full descriptions, so
 	// the cap is generous; exceeding it is reported, never silently cut.
 	maxResponseBytes = 32 << 20
@@ -408,6 +411,16 @@ func (c *Client) ImportJob(ctx context.Context, in JobInput) (JobWithMatch, erro
 func (c *Client) Filters(ctx context.Context) ([]FilterPreset, error) {
 	var out []FilterPreset
 	return out, c.get(ctx, "/api/filters", &out)
+}
+
+// SaveFilter creates a preset when it has no id and replaces the stored one
+// otherwise. The API re-scores every job before it answers.
+func (c *Client) SaveFilter(ctx context.Context, in FilterPreset) (FilterPreset, error) {
+	var out FilterPreset
+	if in.ID == "" {
+		return out, c.do(ctx, http.MethodPost, "/api/filters", in, &out, rescoreTimeout)
+	}
+	return out, c.do(ctx, http.MethodPut, "/api/filters/"+url.PathEscape(in.ID), in, &out, rescoreTimeout)
 }
 
 func (c *Client) DiscoverySources(ctx context.Context) ([]DiscoverySource, error) {
