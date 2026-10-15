@@ -29,10 +29,15 @@ fi
 
 cleanup() {
 	if [ -n "$windows" ]; then
-		# Git Bash's $! is a bash stub, not api.exe: stop the process by its unique path.
-		powershell -NoProfile -Command "Get-Process | Where-Object { \$_.Path -eq '$exe_path' } | Stop-Process -Force" 2> /dev/null || true
+		# Git Bash's $! is a bash stub, not api.exe: stop the process by its unique path, passed in
+		# the environment so no character in it can break the PowerShell source.
+		CHECK_API_EXE="$exe_path" powershell -NoProfile -Command 'Get-Process | Where-Object { $_.Path -eq $env:CHECK_API_EXE } | Stop-Process -Force' 2> /dev/null || true
 	fi
-	if [ -n "$api_pid" ]; then kill "$api_pid" 2> /dev/null || true; fi
+	if [ -n "$api_pid" ]; then
+		kill "$api_pid" 2> /dev/null || true
+		wait "$api_pid" 2> /dev/null || true
+	fi
+	rm -f "$exe" # the log stays for reading; the binary would pile up run after run
 	docker rm -f "$pg" > /dev/null 2>&1 || true
 	echo "check-integration: stopped; API log at $run/api.log"
 }
@@ -129,7 +134,7 @@ ours() {
 	[ -n "$l" ] && [ "$(printf '%s\n' "$l" | wc -l)" -eq 1 ] &&
 		[ "$(lower "${l#* }")" = "$(lower "$exe_path")" ] &&
 		grep -q "JobPilot API listening.*addr=127.0.0.1:$api_port" "$run/api.log" &&
-		curl -fs "http://127.0.0.1:$api_port/api/health" > /dev/null
+		curl -fs --connect-timeout 2 --max-time 5 "http://127.0.0.1:$api_port/api/health" > /dev/null
 }
 for _ in $(seq 1 30); do
 	ours && break
