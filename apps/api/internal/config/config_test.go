@@ -24,6 +24,26 @@ func TestATSOriginsAreReadFromTheEnvironment(t *testing.T) {
 	}
 }
 
+// Sign-up is invite-only unless the environment says otherwise, and a mode
+// the API does not know stops it at startup rather than opening sign-up.
+func TestRegistrationDefaultsToInviteAndRefusesUnknownModes(t *testing.T) {
+	t.Setenv("REGISTRATION", "")
+	t.Setenv("ADMIN_EMAILS", " Owner@Example.test, ,second@example.test ")
+	cfg := Load()
+	if cfg.Registration != RegistrationInvite || cfg.Validate() != nil {
+		t.Fatalf("expected invite by default, got %q (%v)", cfg.Registration, cfg.Validate())
+	}
+	if len(cfg.AdminEmails) != 2 || cfg.AdminEmails[0] != "owner@example.test" || cfg.AdminEmails[1] != "second@example.test" {
+		t.Fatalf("admin emails should be trimmed and lowercased: %q", cfg.AdminEmails)
+	}
+	for mode, valid := range map[string]bool{"Open": true, "closed": true, "invite": true, "public": false} {
+		t.Setenv("REGISTRATION", mode)
+		if err := Load().Validate(); (err == nil) != valid {
+			t.Errorf("REGISTRATION=%s: valid=%v, err=%v", mode, valid, err)
+		}
+	}
+}
+
 // Google sign-in is off unless a client id is set, and sign-up through it is
 // off unless GOOGLE_ALLOW_SIGNUP is exactly "true".
 func TestGoogleSignInIsOffByDefault(t *testing.T) {

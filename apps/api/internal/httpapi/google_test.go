@@ -13,6 +13,7 @@ import (
 
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/auth/oidctest"
+	"jobpilot/core/api/internal/config"
 	database "jobpilot/core/api/internal/db"
 	"jobpilot/core/api/internal/store"
 )
@@ -23,7 +24,9 @@ const (
 	googleFrontend = "http://web.example.test"
 )
 
-func googleServer(t *testing.T, p *oidctest.Provider, st *store.Store, signup bool) http.Handler {
+// googleServer runs with open registration unless one is given, so signup
+// alone decides whether Google may create accounts.
+func googleServer(t *testing.T, p *oidctest.Provider, st *store.Store, signup bool, registration ...string) http.Handler {
 	t.Helper()
 	o, err := auth.NewOIDC(context.Background(), auth.OIDCConfig{
 		Provider:  "google",
@@ -33,7 +36,11 @@ func googleServer(t *testing.T, p *oidctest.Provider, st *store.Store, signup bo
 	if err != nil {
 		t.Fatal(err)
 	}
-	return (&Server{Store: st, Google: o, GoogleSignup: signup, Secret: googleSecret, TokenTTL: time.Hour, FrontendURL: googleFrontend}).Handler()
+	mode := config.RegistrationOpen
+	if len(registration) > 0 {
+		mode = registration[0]
+	}
+	return (&Server{Store: st, Google: o, GoogleSignup: signup, Registration: mode, Secret: googleSecret, TokenTTL: time.Hour, FrontendURL: googleFrontend}).Handler()
 }
 
 func get(h http.Handler, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -237,5 +244,17 @@ func TestGoogleSignInAgainstPostgres(t *testing.T) {
 	}
 	if id, err := auth.Parse(body.Token, googleSecret); err != nil || id == "" || id == user.ID {
 		t.Fatalf("sign-up token is for %q (%v)", id, err)
+	}
+
+	// Google sign-up goes through the same gate as the sign-up form: with
+	// invite-only or closed registration it creates nobody, even with
+	// GOOGLE_ALLOW_SIGNUP on, while linked accounts still sign in.
+	for _, mode := range []string{config.RegistrationInvite, config.RegistrationClosed} {
+		h = googleServer(t, p, st, true, mode)
+		refused := flow("/api/auth/google/start", "sub-uninvited-"+mode+"-"+run, "uninvited-"+mode+"-"+run+"@example.test")
+		if refused.Header().Get("Location") != googleFrontend+"/login?error=google_no_account" {
+			t.Fatalf("REGISTRATION=%s: Google created an account past the gate: %q", mode, refused.Header().Get("Location"))
+		}
+		codeOf(flow("/api/auth/google/start", "sub-"+run, email), googleFrontend+"/login/google?code=")
 	}
 }

@@ -21,6 +21,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	// SIGTERM is how Kubernetes and docker stop a container; it starts the same drain as Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,7 +89,7 @@ func main() {
 		slog.Error("invalid Google sign-in configuration", "error", err)
 		os.Exit(1)
 	}
-	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup}
+	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader}
 	if cfg.OutboxSending {
 		outboxSender := sender.New(dataStore, sender.NewGreenhouse(cfg.ATSGreenhouseURL), cfg.OutboxSendDelay)
 		go outboxSender.Start(ctx)
@@ -105,7 +109,7 @@ func main() {
 			slog.Error("shutdown did not finish draining", "error", err)
 		}
 	}()
-	slog.Info("JobPilot API listening", "addr", cfg.Addr)
+	slog.Info("JobPilot API listening", "addr", cfg.Addr, "registration", cfg.Registration, "admins", len(cfg.AdminEmails))
 	if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)

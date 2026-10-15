@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -43,7 +44,7 @@ func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
 	if link {
 		grant.Identity = id
 	} else {
-		u, err := s.Store.SignInWithIdentity(r.Context(), id.Provider, id.Subject, id.Email, s.GoogleSignup)
+		u, err := s.Store.SignInWithIdentity(r.Context(), id.Provider, id.Subject, id.Email, s.googleMayCreate(r.Context()))
 		switch {
 		case errors.Is(err, store.ErrNoAccount):
 			s.toFrontend(w, r, "/login", url.Values{"error": {"google_no_account"}})
@@ -69,6 +70,14 @@ func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
 		q.Set("link", "1")
 	}
 	s.toFrontend(w, r, "/login/google", q)
+}
+
+// googleMayCreate reports whether Google may create an account here: only
+// with GOOGLE_ALLOW_SIGNUP on and sign-up open to anyone. The callback has no
+// invite to show, so with invite-only or closed registration an invited
+// person signs up with the code and links Google afterwards.
+func (s *Server) googleMayCreate(ctx context.Context) bool {
+	return s.GoogleSignup && s.checkSignUp(ctx, "") == nil
 }
 
 func (s *Server) toFrontend(w http.ResponseWriter, r *http.Request, path string, q url.Values) {

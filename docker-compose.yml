@@ -35,6 +35,12 @@ services:
       JWT_SECRET: ${JWT_SECRET:-local-development-secret-change-before-sharing}
       FRONTEND_URL: http://localhost:3000
       TOKEN_TTL_HOURS: 168
+      # The API defaults to invite-only sign-up. This local stack defaults to
+      # open so make smoke can create its accounts; set REGISTRATION=invite
+      # (and ADMIN_EMAILS) before sharing it with anyone.
+      REGISTRATION: ${REGISTRATION:-open}
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
       # Optional sign-in with Google, off while GOOGLE_CLIENT_ID is empty.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
