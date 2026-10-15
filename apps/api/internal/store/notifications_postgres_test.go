@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
@@ -14,7 +15,8 @@ import (
 // The notification feed lists what waits for each user and nobody else's:
 // unapproved answers and CVs, and outbox entries to review or approve. An
 // item that stops waiting is resolved, not deleted; one that starts waiting
-// again opens a new row; kinds opened by other code survive reconciliation.
+// again opens a new row, whether or not anyone read the feed in between;
+// kinds opened by other code are resolved by that code; pages follow on.
 // This runs on a migrated database named by JOBPILOT_TEST_DATABASE_URL, and
 // is skipped without one; CI's integration job provides it.
 func TestNotificationsAgainstPostgres(t *testing.T) {
@@ -51,7 +53,7 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 	}
 	feed := func(userID, state string) models.NotificationFeed {
 		t.Helper()
-		f, err := st.Notifications(ctx, userID, state, 0)
+		f, err := st.Notifications(ctx, userID, state, "", 0)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -170,8 +172,26 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 		t.Fatalf("a cancelled entry waits for nothing: %+v", left)
 	}
 
-	// Kinds opened by their own code are left alone by reconciliation and
-	// resolved by that code, per user.
+	// Transitions are recorded as they happen, not when the feed is read:
+	// an answer drafted, approved, withdrawn and approved again with no read
+	// in between leaves two resolved rows, each with its own times.
+	quick := draft(ana.ID, "What is your notice period?")
+	for _, approved := range []bool{true, false, true} {
+		if _, err := st.UpdateAnswer(ctx, ana.ID, quick.ID, "", approved); err != nil {
+			t.Fatal(err)
+		}
+	}
+	history := find(feed(ana.ID, "all"), NotificationAnswer, quick.ID)
+	if len(history) != 2 || history[0].ResolvedAt == nil || history[1].ResolvedAt == nil || history[0].ID == history[1].ID {
+		t.Fatalf("each wait should leave its own resolved row: %+v", history)
+	}
+	for _, n := range history {
+		if n.ResolvedAt.Before(n.CreatedAt) {
+			t.Fatalf("a row cannot resolve before it opened: %+v", n)
+		}
+	}
+
+	// Kinds opened by their own code are resolved by that code, per user.
 	if err := OpenNotification(ctx, pool, ana.ID, "proposal", "p-"+run, "Review a proposed profile change", map[string]any{"href": "/profile"}); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +216,48 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 		t.Fatalf("a resolved proposal leaves the open list: %+v", left)
 	}
 
+	// Pages follow on by position: the open list oldest first, the history
+	// newest first, neither repeating nor skipping a row.
+	for i := 0; i < 3; i++ {
+		if err := OpenNotification(ctx, pool, ana.ID, "proposal", fmt.Sprintf("page-%d-%s", i, run), "Review a proposed profile change", nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, state := range []string{"", "all"} {
+		whole := feed(ana.ID, state)
+		var paged []string
+		after := ""
+		for {
+			page, err := st.Notifications(ctx, ana.ID, state, after, 2)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, n := range page.Items {
+				paged = append(paged, n.ID)
+			}
+			if page.Next == "" {
+				break
+			}
+			after = page.Next
+		}
+		if len(paged) != len(whole.Items) {
+			t.Fatalf("state %q: paging returned %d rows, the whole list has %d", state, len(paged), len(whole.Items))
+		}
+		for i, n := range whole.Items {
+			if paged[i] != n.ID {
+				t.Fatalf("state %q: row %d differs between paging and the whole list", state, i)
+			}
+		}
+	}
+	if page, err := st.Notifications(ctx, bob.ID, "", whole0(t, st, ctx, ana.ID), 50); err != nil || len(page.Items) != 0 {
+		t.Fatalf("a cursor from another user's list must return nothing: %+v %v", page, err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := ResolveNotification(ctx, pool, ana.ID, "proposal", fmt.Sprintf("page-%d-%s", i, run)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
 	// Deleting a waiting thing resolves its item too.
 	if err := st.DeleteAnswer(ctx, ana.ID, answer.ID); err != nil {
 		t.Fatal(err)
@@ -203,4 +265,14 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 	if f = feed(ana.ID, ""); f.Open != 0 || len(f.Items) != 0 {
 		t.Fatalf("nothing should wait for Ana now, got open=%d %+v", f.Open, f.Items)
 	}
+}
+
+// whole0 is the id of the first open item in the user's list.
+func whole0(t *testing.T, st *Store, ctx context.Context, userID string) string {
+	t.Helper()
+	f, err := st.Notifications(ctx, userID, "", "", 1)
+	if err != nil || len(f.Items) == 0 {
+		t.Fatalf("expected an open item: %+v %v", f, err)
+	}
+	return f.Items[0].ID
 }

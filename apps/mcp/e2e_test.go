@@ -479,8 +479,14 @@ func TestEndToEnd(t *testing.T) {
 		if ghCV == "" {
 			t.Fatalf("the prepared CV should be referenced: %s", text)
 		}
+		if item := pending("cv", ghCV); item == nil || !strings.Contains(fmt.Sprint(item["how_to_resolve"]), "approve_cv") {
+			t.Fatalf("the prepared CV should wait for the user: %v", item)
+		}
 		if out, text, isErr = call("approve_cv", map[string]any{"cv_id": ghCV}); isErr || out["approved"] != true {
 			t.Fatalf("approve_cv: %s", text)
+		}
+		if item := pending("cv", ghCV); item != nil {
+			t.Fatalf("an approved CV must leave the list: %v", item)
 		}
 
 		// With the CV approved, a rebuild reuses it and nothing blocks.
@@ -590,6 +596,9 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if !writeRes.IsError || !strings.Contains(refusal.String(), "scope") {
 		t.Fatalf("a read token must be refused a write tool with a scope message: %s", refusal.String())
+	}
+	if res, err := limitedSession.CallTool(ctx, &mcp.CallToolParams{Name: "list_pending_decisions"}); err != nil || res.IsError {
+		t.Fatalf("a read token must read what waits for the user: %v", err)
 	}
 
 	out, text, isErr = call("get_filters", nil)

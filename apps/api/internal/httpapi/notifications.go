@@ -8,8 +8,9 @@ import (
 )
 
 // listNotifications returns what waits for the user: state "all" adds the
-// resolved history, limit caps the page (default 50, at most 200), and open
-// always counts every open item, which is the web app's badge.
+// resolved history, limit caps the page (default 50, at most 200), after
+// continues from the previous page's next, and open always counts every open
+// item, which is the web app's badge.
 func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	state := q.Get("state")
@@ -26,6 +27,6 @@ func (s *Server) listNotifications(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = n
 	}
-	feed, err := s.Store.Notifications(r.Context(), auth.UserID(r.Context()), state, limit)
+	feed, err := s.Store.Notifications(r.Context(), auth.UserID(r.Context()), state, q.Get("after"), limit)
 	respond(w, feed, err)
 }

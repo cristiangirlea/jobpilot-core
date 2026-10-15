@@ -16,8 +16,12 @@ export default function NotificationsPage(){
   const [feed,setFeed]=useState<NotificationFeed|null>(null);
   const [state,setState]=useState<"open"|"all">("open");
   const [error,setError]=useState("");
+  const [loadingMore,setLoadingMore]=useState(false);
 
-  useEffect(()=>{setError("");api<NotificationFeed>(`/notifications?state=${state}&limit=200`).then(setFeed).catch(e=>setError((e as Error).message))},[state]);
+  // A response for a filter no longer selected is dropped, so switching fast
+  // cannot leave one filter's rows under the other.
+  useEffect(()=>{let current=true;setError("");setFeed(null);api<NotificationFeed>(`/notifications?state=${state}&limit=100`).then(f=>{if(current)setFeed(f)}).catch(e=>{if(current)setError((e as Error).message)});return ()=>{current=false}},[state]);
+  const more=async()=>{if(!feed?.next)return;setLoadingMore(true);try{const page=await api<NotificationFeed>(`/notifications?state=${state}&limit=100&after=${encodeURIComponent(feed.next)}`);setFeed(f=>f&&{...page,items:[...f.items,...page.items]})}catch(e){setError((e as Error).message)}finally{setLoadingMore(false)}};
 
   return <Shell>
     <Header eyebrow="Inbox" title="Waiting for you"
@@ -25,7 +29,7 @@ export default function NotificationsPage(){
     <ErrorMessage message={error}/>
     <div className="mb-4 flex gap-2">
       {(["open","all"] as const).map(name=>
-        <button key={name} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${state===name?"bg-ink text-white":"bg-black/5"}`} onClick={()=>setState(name)}>
+        <button key={name} disabled={loadingMore} className={`rounded-lg px-3 py-1.5 text-xs font-semibold ${state===name?"bg-ink text-white":"bg-black/5"}`} onClick={()=>setState(name)}>
           {name==="open"?`Open${feed?` (${feed.open})`:""}`:"History"}
         </button>)}
     </div>
@@ -39,6 +43,6 @@ export default function NotificationsPage(){
           <p className="mt-1 text-xs text-ink/50">Waiting since {new Date(n.created_at).toLocaleString()}{n.resolved_at?` · resolved ${new Date(n.resolved_at).toLocaleString()}`:""}</p>
         </div>
         {href&&!n.resolved_at&&<Link className="btn-secondary !px-3 !py-1.5 text-xs" href={href}>Open</Link>}
-      </div>})}</div>}
+      </div>})}{feed.next&&<button className="btn-secondary w-full" disabled={loadingMore} onClick={more}>{loadingMore?"Loading…":"Show more"}</button>}</div>}
   </Shell>
 }

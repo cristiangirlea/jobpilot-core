@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -26,6 +27,7 @@ type Notification struct {
 type NotificationFeed struct {
 	Open  int            `json:"open"`
 	Items []Notification `json:"items"`
+	Next  string         `json:"next,omitempty"`
 }
 
 // PendingDecision is a notification with the way an agent may help resolve it.
@@ -37,16 +39,23 @@ type PendingDecision struct {
 type PendingDecisions struct {
 	Open  int               `json:"open"`
 	Items []PendingDecision `json:"items"`
+	// Next, when set, is the after value that fetches the following page.
+	Next string `json:"next,omitempty"`
 }
 
 type pendingDecisionsInput struct {
-	IncludeResolved bool `json:"include_resolved,omitempty" jsonschema:"Also return items already resolved, newest first after the open ones"`
-	Limit           int  `json:"limit,omitempty" jsonschema:"Maximum items to return: default 20, maximum 100. open always counts every open item"`
+	IncludeResolved bool   `json:"include_resolved,omitempty" jsonschema:"Also return items already resolved, newest first after the open ones"`
+	Limit           int    `json:"limit,omitempty" jsonschema:"Maximum items to return: default 20, maximum 100. open always counts every open item"`
+	After           string `json:"after,omitempty" jsonschema:"The next value from the previous call, to fetch the following page"`
 }
 
-// Notifications reads the feed. state is open or all.
-func (c *Client) Notifications(ctx context.Context, state string, limit int) (NotificationFeed, error) {
+// Notifications reads one page of the feed. state is open or all; after is the
+// previous page's next, or empty for the first page.
+func (c *Client) Notifications(ctx context.Context, state, after string, limit int) (NotificationFeed, error) {
 	q := url.Values{"state": {state}, "limit": {strconv.Itoa(limit)}}
+	if after != "" {
+		q.Set("after", after)
+	}
 	var out NotificationFeed
 	return out, c.get(ctx, "/api/notifications?"+q.Encode(), &out)
 }
@@ -77,18 +86,18 @@ func addNotificationTools(s *mcp.Server, c *Client) {
 		Title: "List what waits for the user",
 		Description: "Return everything waiting for the user's decision, oldest first: unapproved answers and CVs, and composed applications to review or approve. " +
 			"Each item has a kind, a title, detail, and how_to_resolve, which says what you may do about it. Ask the user about one item at a time, show unapproved text and blockers in the exact words returned, and never approve anything without the user's explicit word. " +
-			"Items resolve on their own once the underlying thing is approved, cancelled or deleted.",
+			"Items resolve on their own once the underlying thing is approved, cancelled or deleted. When next is set, more items follow: call again with after set to it.",
 		Annotations: readOnly("List what waits for the user"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in pendingDecisionsInput) (*mcp.CallToolResult, PendingDecisions, error) {
 		state := "open"
 		if in.IncludeResolved {
 			state = "all"
 		}
-		feed, err := c.Notifications(ctx, state, pageSize(in.Limit))
+		feed, err := c.Notifications(ctx, state, strings.TrimSpace(in.After), pageSize(in.Limit))
 		if err != nil {
 			return nil, PendingDecisions{}, toolError(err)
 		}
-		out := PendingDecisions{Open: feed.Open, Items: make([]PendingDecision, 0, len(feed.Items))}
+		out := PendingDecisions{Open: feed.Open, Next: feed.Next, Items: make([]PendingDecision, 0, len(feed.Items))}
 		for _, n := range feed.Items {
 			out.Items = append(out.Items, PendingDecision{Notification: n, HowToResolve: howToResolve(n)})
 		}

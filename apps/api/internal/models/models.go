@@ -377,7 +377,9 @@ type Notification struct {
 }
 
 // NotificationFeed is a page of notifications and how many are open in all.
+// Next, when set, is the after value for the following page.
 type NotificationFeed struct {
 	Open  int            `json:"open"`
 	Items []Notification `json:"items"`
+	Next  string         `json:"next,omitempty"`
 }

@@ -609,7 +609,7 @@ Measured against a real Greenhouse posting with a 17-field form, 14 fields resol
 
 One list per user of everything that waits for the user's decision: unapproved answers (`answer`), unapproved CVs (`cv`), and outbox entries in `needs_review` or `ready` (`outbox`). A row opens when an item starts waiting and is resolved, not deleted, once it stops, so the list keeps a history; an item that waits again opens a new row. The web app shows the open count as a badge and the list at `/notifications`; agents read it with `list_pending_decisions` and the `review_pending_decisions` prompt.
 
-These three kinds are reconciled against their own tables on every read of `GET /api/notifications` (one transaction, serialised per user), so no write path that changes an approval or an outbox status can leave the list wrong. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: either one more derived query in `store/notifications.go`, or `store.OpenNotification` and `store.ResolveNotification` from the code that owns the item, inside its own transaction. Reconciliation resolves only the kinds it derives. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
+Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed changes nothing; pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
 
 ## Applications and referral attribution
 
@@ -726,7 +726,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 
 `PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
 | `GET` | `/api/dashboard` | User-specific metrics and recommendations |
-| `GET` | `/api/notifications` | What waits for the user (`state=open`, the default, or `all` with the history; `limit` 1 to 200, default 50) and `open`, the count of open items |
+| `GET` | `/api/notifications` | What waits for the user (`state=open`, the default, oldest first, or `all` with the history, newest first; `limit` 1 to 200, default 50; `after`, the previous page's `next`) and `open`, the count of open items |
 
 ### Agent token endpoints
 
@@ -782,7 +782,7 @@ The catalog an agent host downloads at the start of every session is about 25 KB
 | `get_profile` | read | Candidate facts the agent may use when writing |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
-| `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history |
+| `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history, and `after` the following page |
 | `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
@@ -887,7 +887,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
-| `019_notifications.sql` | The per-user notification feed: what waits for the user, open or resolved |
+| `019_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
 
 Core entities:
 

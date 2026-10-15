@@ -12,6 +12,10 @@ import (
 func (f *fakeAPI) notificationRoutes(m *http.ServeMux, send func(http.ResponseWriter, int, string)) {
 	m.HandleFunc("GET /api/notifications", func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
+		if q.Get("after") == "n-4" {
+			send(w, 200, `{"open":5,"items":[{"id":"n-5","kind":"cv","subject_id":"cv-3","title":"Approve the CV: base","detail":{},"created_at":"2026-10-05T00:00:00Z","updated_at":"2026-10-05T00:00:00Z"}]}`)
+			return
+		}
 		if q.Get("limit") != "20" || (q.Get("state") != "open" && q.Get("state") != "all") {
 			send(w, 400, `{"error":"unexpected query `+r.URL.RawQuery+`"}`)
 			return
@@ -25,7 +29,7 @@ func (f *fakeAPI) notificationRoutes(m *http.ServeMux, send func(http.ResponseWr
 		if q.Get("state") == "all" {
 			items = append(items, `{"id":"n-0","kind":"answer","subject_id":"a-1","title":"Approve the answer to: Notice period?","detail":{},"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-02T00:00:00Z","resolved_at":"2026-09-02T00:00:00Z"}`)
 		}
-		send(w, 200, `{"open":4,"items":[`+strings.Join(items, ",")+`]}`)
+		send(w, 200, `{"open":5,"next":"n-4","items":[`+strings.Join(items, ",")+`]}`)
 	})
 }
 
@@ -37,8 +41,8 @@ func TestListPendingDecisions(t *testing.T) {
 		t.Fatal(text)
 	}
 	got := structured[PendingDecisions](t, res)
-	if got.Open != 4 || len(got.Items) != 4 {
-		t.Fatalf("expected four open items, got %+v", got)
+	if got.Open != 5 || len(got.Items) != 4 || got.Next != "n-4" {
+		t.Fatalf("expected the first page of four with next n-4, got %+v", got)
 	}
 	want := map[string][]string{
 		"n-1": {"approve_answer", "a-2", "word for word", "only when the user approves"},
@@ -60,6 +64,15 @@ func TestListPendingDecisions(t *testing.T) {
 	}
 	if got.Items[0].Detail["answer"] != "Draft text." {
 		t.Fatalf("the detail must pass through unchanged: %+v", got.Items[0].Detail)
+	}
+
+	// after fetches the following page, and the last page has no next.
+	res, text = call(t, cs, "list_pending_decisions", map[string]any{"after": "n-4"})
+	if res.IsError {
+		t.Fatal(text)
+	}
+	if page := structured[PendingDecisions](t, res); len(page.Items) != 1 || page.Items[0].ID != "n-5" || page.Next != "" {
+		t.Fatalf("after should fetch the following page: %+v", page)
 	}
 
 	res, text = call(t, cs, "list_pending_decisions", map[string]any{"include_resolved": true})

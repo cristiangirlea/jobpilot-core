@@ -90,11 +90,11 @@ Do not change any application status without asking me first, and do not describ
 				Role: "user",
 				Content: &mcp.TextContent{Text: `Go through what is waiting for my decision in JobPilot.
 
-1. Call list_pending_decisions. If nothing is open, say so and stop. Otherwise tell me how many items wait, then take them one at a time, oldest first.
+1. Call list_pending_decisions. If nothing is open, say so and stop. Otherwise tell me how many items wait (open), then take them one at a time, oldest first. When a page is done and next is set, call list_pending_decisions again with after set to next for the following page, until next is empty.
 2. For each item, follow its how_to_resolve: fetch what it names, show me the item in the exact words returned (every unapproved draft, every needs_review field, every blocker), and ask me how to proceed. Wait for my answer before moving on.
 3. Act only on my explicit word: call approve_answer or approve_cv only when I approve that exact text, and pass my edited wording if I change it. If I say skip, leave the item as it is and go to the next one.
 4. Approving or sending an application happens only in the web app: for those, read it with get_outbox_entry, tell me what still blocks it and that I approve it on the Outbox page. Never say or imply that an application was approved, submitted or sent.
-5. When every item has been seen, call list_pending_decisions again and tell me what is still open.
+5. When every page has been seen, call list_pending_decisions again without after and tell me what is still open.
 
 Use only facts from my profile, CV and the jobs; never invent experience, skills or claims, and never write an answer for me without showing it first.`},
 			}},
