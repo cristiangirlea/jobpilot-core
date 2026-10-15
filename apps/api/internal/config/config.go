@@ -34,6 +34,14 @@ type Config struct {
 	// behind a Cloudflare Tunnel). Empty uses the connection's address. Never
 	// name a header the client can set unchecked, such as X-Forwarded-For.
 	ClientIPHeader string
+	Google         GoogleConfig
+	// OutboxSending turns on sending approved outbox entries through the
+	// employer's form (OUTBOX_SENDER_ENABLED=true). It is off unless asked
+	// for, so an instance whose approvals predate sending never sends them
+	// on upgrade. OutboxSendDelay is how long an approval waits before it
+	// goes, so the user can still withdraw it.
+	OutboxSending   bool
+	OutboxSendDelay time.Duration
 }
 
 // Registration modes.
@@ -53,6 +61,18 @@ func (c Config) Validate() error {
 	return fmt.Errorf("REGISTRATION must be invite, open or closed, not %q", c.Registration)
 }
 
+// GoogleConfig turns on "Sign in with Google". With no client id it is off;
+// AllowSignup lets a Google account with no JobPilot account create one, and
+// is off unless GOOGLE_ALLOW_SIGNUP is "true".
+type GoogleConfig struct {
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
+	AllowSignup  bool
+}
+
+func (g GoogleConfig) Enabled() bool { return g.ClientID != "" }
+
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
 // product fully deterministic, which is the supported default.
 type LLMConfig struct {
@@ -67,6 +87,10 @@ type LLMConfig struct {
 
 func Load() Config {
 	hours, _ := strconv.Atoi(env("TOKEN_TTL_HOURS", "168"))
+	delay, err := strconv.Atoi(env("OUTBOX_SEND_DELAY_SECONDS", "120"))
+	if err != nil || delay < 0 {
+		delay = 120
+	}
 	return Config{
 		Addr:             env("API_ADDR", ":8080"),
 		DatabaseURL:      env("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable"),
@@ -80,6 +104,14 @@ func Load() Config {
 		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
 		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
+		Google: GoogleConfig{
+			ClientID:     env("GOOGLE_CLIENT_ID", ""),
+			ClientSecret: env("GOOGLE_CLIENT_SECRET", ""),
+			RedirectURL:  env("GOOGLE_REDIRECT_URL", ""),
+			AllowSignup:  env("GOOGLE_ALLOW_SIGNUP", "") == "true",
+		},
+		OutboxSending:   env("OUTBOX_SENDER_ENABLED", "false") == "true",
+		OutboxSendDelay: time.Duration(delay) * time.Second,
 	}
 }
 

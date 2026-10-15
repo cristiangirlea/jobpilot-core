@@ -1,6 +1,21 @@
-"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {api} from "@/lib/api";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
+"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
 
 function when(value?:string){return value?new Date(value).toLocaleDateString():"—"}
+
+// GoogleLink links a Google account to this one, after which it can sign in
+// with Google. It shows only when the API has Google configured.
+function GoogleLink(){
+  const [enabled,setEnabled]=useState(false);
+  const [linked,setLinked]=useState(false);
+  useEffect(()=>{api<{google:boolean}>("/auth/providers").then(p=>setEnabled(p.google)).catch(()=>setEnabled(false));setLinked(new URLSearchParams(window.location.search).get("google")==="linked")},[]);
+  if(!enabled)return null;
+  return <section className="card md:col-span-2">
+    <h2 className="font-semibold">Sign in with Google</h2>
+    <p className="muted mt-2 mb-4">Link a Google account to sign in with it from now on. Your password keeps working.</p>
+    {linked&&<p className="mb-4 text-sm font-semibold text-moss">Google account linked.</p>}
+    <a className="btn-secondary inline-flex" href={`${API}/auth/google/start?link=1`}>Link a Google account</a>
+  </section>;
+}
 
 function Tokens(){
   const [tokens,setTokens]=useState<AgentToken[]>([]);
@@ -101,6 +116,7 @@ export default function Settings(){
     <div className="grid gap-5 md:grid-cols-2">
       <section className="card"><h2 className="font-semibold">Generation mode</h2><p className="muted mt-2">Deterministic templates are active. They use only profile, experience, skill, and project data—no API key required.</p><span className="mt-4 inline-block rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">OFFLINE-SAFE</span></section>
       <section className="card"><h2 className="font-semibold">Safety boundaries</h2><p className="muted mt-2">This product never submits applications, bypasses CAPTCHA, or automates job boards. Apply links always open for manual review.</p></section>
+      <GoogleLink/>
       <Tokens/>
       <Invites/>
       <section className="card md:col-span-2"><h2 className="font-semibold">Session</h2><p className="muted mt-2 mb-4">Signing out removes the local access token from this browser.</p><button className="btn-secondary" onClick={()=>{localStorage.removeItem('jobpilot_token');r.push('/login')}}>Sign out</button></section>

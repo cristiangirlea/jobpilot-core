@@ -53,3 +53,27 @@ func TestFormReaderUsesTheConfiguredOrigins(t *testing.T) {
 		mu.Unlock()
 	}
 }
+
+// Google sign-in is off without a client id, refuses to start with a client
+// id but no secret or redirect URL, and starts with all three, without calling
+// Google.
+func TestGoogleSignInConfiguration(t *testing.T) {
+	ctx := context.Background()
+	if o, err := googleSignIn(ctx, config.Config{JWTSecret: "s"}); o != nil || err != nil {
+		t.Fatalf("unset: %v, %v; want off", o, err)
+	}
+	full := config.GoogleConfig{ClientID: "id", ClientSecret: "secret", RedirectURL: "https://api.example.test/api/auth/google/callback"}
+	for name, change := range map[string]func(*config.GoogleConfig){
+		"no secret":       func(g *config.GoogleConfig) { g.ClientSecret = "" },
+		"no redirect URL": func(g *config.GoogleConfig) { g.RedirectURL = "" },
+	} {
+		g := full
+		change(&g)
+		if _, err := googleSignIn(ctx, config.Config{JWTSecret: "s", Google: g}); err == nil {
+			t.Errorf("%s: the API would start", name)
+		}
+	}
+	if o, err := googleSignIn(ctx, config.Config{JWTSecret: "s", Google: full}); o == nil || err != nil {
+		t.Fatalf("full configuration: %v, %v", o, err)
+	}
+}

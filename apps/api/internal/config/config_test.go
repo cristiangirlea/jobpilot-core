@@ -43,3 +43,23 @@ func TestRegistrationDefaultsToInviteAndRefusesUnknownModes(t *testing.T) {
 		}
 	}
 }
+
+// Google sign-in is off unless a client id is set, and sign-up through it is
+// off unless GOOGLE_ALLOW_SIGNUP is exactly "true".
+func TestGoogleSignInIsOffByDefault(t *testing.T) {
+	for _, key := range []string{"GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URL", "GOOGLE_ALLOW_SIGNUP"} {
+		t.Setenv(key, "")
+	}
+	if g := Load().Google; g.Enabled() || g.AllowSignup {
+		t.Fatalf("unexpected defaults: %+v", g)
+	}
+	t.Setenv("GOOGLE_CLIENT_ID", "id")
+	t.Setenv("GOOGLE_ALLOW_SIGNUP", "yes")
+	if g := Load().Google; !g.Enabled() || g.AllowSignup {
+		t.Fatalf("client id or sign-up read wrongly: %+v", g)
+	}
+	t.Setenv("GOOGLE_ALLOW_SIGNUP", "true")
+	if !Load().Google.AllowSignup {
+		t.Fatal("GOOGLE_ALLOW_SIGNUP=true was not read")
+	}
+}
