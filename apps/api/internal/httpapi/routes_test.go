@@ -20,9 +20,12 @@ var readOnlyPosts = map[string]bool{
 
 // sessionOnly routes refuse agent tokens outright, each through the wrapper
 // named here: token management, so that a leaked token cannot mint siblings or
-// revoke itself to cover its tracks, and approving an application, which is
-// the user's consent to send it.
+// revoke itself to cover its tracks, approving an application, which is
+// the user's consent to send it, and invites, which also need an admin.
 var sessionOnly = map[string]string{
+	"GET /api/invites":              "admin",
+	"POST /api/invites":             "admin",
+	"DELETE /api/invites/{id}":      "admin",
 	"GET /api/tokens":               "session",
 	"POST /api/tokens":              "session",
 	"DELETE /api/tokens/{id}":       "session",
@@ -74,18 +77,20 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 	}
 }
 
-// TestUnauthenticatedRoutesAreTheExpectedThree guards the other direction:
-// everything except health, register and login goes through a wrapper.
-func TestUnauthenticatedRoutesAreTheExpectedThree(t *testing.T) {
+// TestUnauthenticatedRoutesAreTheExpectedFour guards the other direction:
+// everything except health, register, login and the registration mode goes
+// through a wrapper.
+func TestUnauthenticatedRoutesAreTheExpectedFour(t *testing.T) {
 	source, err := os.ReadFile("server.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	open := regexp.MustCompile(`m\.HandleFunc\("([^"]+)"`).FindAllStringSubmatch(string(source), -1)
 	want := map[string]bool{
-		"GET /api/health":         true,
-		"POST /api/auth/register": true,
-		"POST /api/auth/login":    true,
+		"GET /api/health":            true,
+		"POST /api/auth/register":    true,
+		"POST /api/auth/login":       true,
+		"GET /api/auth/registration": true,
 	}
 	for _, m := range open {
 		if !want[m[1]] {

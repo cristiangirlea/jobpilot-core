@@ -5,9 +5,9 @@ paths:
 # The Go API
 
 - Every mutating route in `internal/httpapi/server.go` is registered through `w(...)` so it needs
-  the write scope, except the ones no agent token may reach: `session(...)` for token management
-  and `consent(...)` for approving an application. `routes_test.go` reads the router source and
-  fails otherwise.
+  the write scope, except the ones no agent token may reach: `session(...)` for token management,
+  `consent(...)` for approving an application, and `admin(...)` for invites (`ADMIN_EMAILS` only).
+  `routes_test.go` reads the router source and fails otherwise.
 - Raise `httpapi.Contract` when a change alters what an existing request does, and say in its
   comment what the new number guarantees. The MCP server's `requiredContract` names the version it
   was written against.

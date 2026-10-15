@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -24,6 +25,32 @@ type Config struct {
 	ATSRecruiteeURL string
 	TokenTTL        time.Duration
 	LLM             LLMConfig
+	// Registration is who may create an account: invite (the default), open
+	// or closed. AdminEmails are the accounts that may create invites.
+	Registration string
+	AdminEmails  []string
+	// ClientIPHeader names a request header that holds the caller's address,
+	// set by a proxy in front of the API that overwrites it (CF-Connecting-IP
+	// behind a Cloudflare Tunnel). Empty uses the connection's address. Never
+	// name a header the client can set unchecked, such as X-Forwarded-For.
+	ClientIPHeader string
+}
+
+// Registration modes.
+const (
+	RegistrationInvite = "invite"
+	RegistrationOpen   = "open"
+	RegistrationClosed = "closed"
+)
+
+// Validate refuses settings the API cannot run with, so a typo fails at
+// startup instead of opening sign-up.
+func (c Config) Validate() error {
+	switch c.Registration {
+	case RegistrationInvite, RegistrationOpen, RegistrationClosed:
+		return nil
+	}
+	return fmt.Errorf("REGISTRATION must be invite, open or closed, not %q", c.Registration)
 }
 
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
@@ -50,6 +77,9 @@ func Load() Config {
 		ATSRecruiteeURL:  env("ATS_RECRUITEE_URL", ""),
 		TokenTTL:         time.Duration(hours) * time.Hour,
 		LLM:              loadLLM(),
+		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
+		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
+		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
 	}
 }
 
@@ -65,6 +95,16 @@ func loadLLM() LLMConfig {
 		Timeout:      time.Duration(seconds) * time.Second,
 		CallsPerHour: calls,
 	}
+}
+
+func emails(list string) []string {
+	out := []string{}
+	for _, e := range strings.Split(list, ",") {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func env(key, fallback string) string {

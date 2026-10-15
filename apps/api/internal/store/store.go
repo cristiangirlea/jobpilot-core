@@ -28,7 +28,17 @@ func New(db *pgxpool.Pool) *Store { return &Store{DB: db} }
 func (s *Store) CreateUser(ctx context.Context, email, hash string) (models.User, error) {
 	var u models.User
 	err := s.DB.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),$2) RETURNING id,email,created_at`, email, hash).Scan(&u.ID, &u.Email, &u.CreatedAt)
+	if isUniqueViolation(err) {
+		err = ErrEmailTaken
+	}
 	return u, err
+}
+
+// UserEmail is the sign-in email of an account.
+func (s *Store) UserEmail(ctx context.Context, id string) (string, error) {
+	var email string
+	err := s.DB.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, id).Scan(&email)
+	return email, err
 }
 func (s *Store) Credentials(ctx context.Context, email string) (models.User, string, error) {
 	var u models.User

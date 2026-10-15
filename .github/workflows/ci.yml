@@ -186,6 +186,9 @@ jobs:
           FRONTEND_URL: http://localhost:3000
           TOKEN_TTL_HOURS: "1"
           LLM_PROVIDER: none
+          # The smoke scripts and the MCP end-to-end test create their own
+          # accounts; invite-only sign-up has its own Postgres tests.
+          REGISTRATION: open
           # The MCP end-to-end test serves a fake Greenhouse here: a form, so
           # the outbox approval and withdrawal paths are covered, and board
           # listings, so a discovery run is. Fake Ashby and Recruitee boards

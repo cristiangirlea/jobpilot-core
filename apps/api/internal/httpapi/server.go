@@ -41,7 +41,10 @@ import (
 //	   (gh_jid) by asking Greenhouse, instead of refusing it with 422.
 //	5: outbox entries carry cv, the summary of the CV they carry as it is now
 //	   (absent when it was deleted), and the web app relies on it.
-const Contract = 5
+//	6: registering needs an invite unless the server allows open sign-up
+//	   (403 otherwise); login and registration answer 429 with Retry-After
+//	   when rate-limited.
+const Contract = 6
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -54,15 +57,28 @@ type Server struct {
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
+	// Registration is config.RegistrationInvite (also when empty), Open or
+	// Closed; AdminEmails may manage invites; ClientIPHeader is
+	// config.Config's, the proxy header rate limits read the address from.
+	Registration   string
+	AdminEmails    []string
+	ClientIPHeader string
+
+	limits *authLimits
 }
 
 func (s *Server) Handler() http.Handler {
+	if s.limits == nil {
+		s.limits = newAuthLimits()
+	}
+	auth.PrepareLogin()
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		write(w, 200, map[string]any{"status": "ok", "contract": Contract})
 	})
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
+	m.HandleFunc("GET /api/auth/registration", s.registration)
 	// p: any authenticated caller. w: agent tokens need the write scope.
 	// session: browser logins only, so a leaked agent token cannot mint
 	// siblings or revoke itself. consent: browser logins only too, because
@@ -77,6 +93,10 @@ func (s *Server) Handler() http.Handler {
 	}
 	consent := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireSession(ApprovalNeedsSession, h))
+	}
+	// admin: browser logins of the accounts ADMIN_EMAILS names, for invites.
+	admin := func(h http.HandlerFunc) http.Handler {
+		return auth.Middleware(s.Secret, s.Store, auth.RequireSession("Use the web app to manage invites.", s.requireAdmin(h)))
 	}
 	m.Handle("GET /api/ai/status", p(s.aiStatus))
 	m.Handle("GET /api/answers", p(s.listAnswers))
@@ -145,6 +165,9 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.createToken))
 	m.Handle("DELETE /api/tokens/{id}", session(s.revokeToken))
+	m.Handle("GET /api/invites", admin(s.listInvites))
+	m.Handle("POST /api/invites", admin(s.createInvite))
+	m.Handle("DELETE /api/invites/{id}", admin(s.deleteInvite))
 	return s.cors(m)
 }
 
@@ -167,9 +190,16 @@ func (s *Server) cors(next http.Handler) http.Handler {
 type credentials struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Invite is the sign-up code; login ignores it.
+	Invite string `json:"invite"`
 }
 
+// register and login are rate-limited by client address before the body is
+// read and by email after, both before any bcrypt work.
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
+	if limited(w, s.limits.registerIP, s.clientIP(r)) {
+		return
+	}
 	var x credentials
 	if !decode(w, r, &x) {
 		return
@@ -179,29 +209,51 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		problem(w, 422, "Enter a valid email and a password of at least 8 characters.")
 		return
 	}
+	if limited(w, s.limits.registerEmail, emailKey(x.Email)) {
+		return
+	}
+	if err := s.checkSignUp(r.Context(), x.Invite); err != nil {
+		if !signUpRefused(w, err) {
+			internal(w, err)
+		}
+		return
+	}
 	hash, err := auth.Hash(x.Password)
 	if err != nil {
 		internal(w, err)
 		return
 	}
-	u, err := s.Store.CreateUser(r.Context(), x.Email, hash)
+	u, err := s.createAccount(r.Context(), x.Email, hash, x.Invite)
+	if signUpRefused(w, err) {
+		return
+	}
 	if err != nil {
-		problem(w, 409, "An account with this email already exists.")
+		internal(w, err)
 		return
 	}
 	tok, _ := auth.Token(u.ID, u.Email, s.Secret, s.TokenTTL)
 	write(w, 201, map[string]any{"token": tok, "user": u})
 }
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
+	if limited(w, s.limits.loginIP, s.clientIP(r)) {
+		return
+	}
 	var x credentials
 	if !decode(w, r, &x) {
 		return
 	}
-	u, hash, err := s.Store.Credentials(r.Context(), x.Email)
-	if err != nil || !auth.Verify(hash, x.Password) {
+	email := strings.TrimSpace(strings.ToLower(x.Email))
+	if limited(w, s.limits.loginEmail, emailKey(email)) {
+		return
+	}
+	// An unknown email runs bcrypt too and gets the same answer, so neither
+	// the time nor the text tells whether it has an account.
+	u, hash, err := s.Store.Credentials(r.Context(), email)
+	if !auth.CheckLogin(hash, err == nil, x.Password) {
 		problem(w, 401, "Invalid email or password.")
 		return
 	}
+	s.limits.loginEmail.Reset(emailKey(email))
 	tok, _ := auth.Token(u.ID, u.Email, s.Secret, s.TokenTTL)
 	write(w, 200, map[string]any{"token": tok, "user": u})
 }

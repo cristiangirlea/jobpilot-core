@@ -19,6 +19,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	// SIGTERM is how Kubernetes and docker stop a container; it starts the same drain as Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -78,7 +82,7 @@ func main() {
 	discoveryService := discovery.NewService(dataStore)
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
 	go discoveryService.Start(ctx)
-	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
 	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
 	drained := make(chan struct{})
@@ -91,7 +95,7 @@ func main() {
 			slog.Error("shutdown did not finish draining", "error", err)
 		}
 	}()
-	slog.Info("JobPilot API listening", "addr", cfg.Addr)
+	slog.Info("JobPilot API listening", "addr", cfg.Addr, "registration", cfg.Registration, "admins", len(cfg.AdminEmails))
 	if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
