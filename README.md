@@ -800,12 +800,13 @@ Drop `-Write` for a read-only token, and pass `-ExpiresInDays 90` for one that l
 | `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
 | `JOBPILOT_TOKEN` | An agent token created under **Settings > Agent tokens**, or a short-lived login token |
 | `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Fallback when no token is set; the server logs in on first use and once more after a `401`. Prefer an agent token: it is revocable and can be read-only, while a password is not and gives away the account |
+| `JOBPILOT_CV_DIR` | The one folder `upload_cv` may read a CV from. Unset, the default, turns the tool off. Point it at a folder holding only CV files, never your home folder |
 
 The transport is stdio, so the binary logs to stderr only. Each tool call is logged with its name, duration and whether it failed; arguments are never logged, because they carry profile facts and application text. `make mcp` stamps the build with `git describe`, which `--version` prints.
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 27 KB for 33 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
+The catalog an agent host downloads at the start of every session is about 30 KB for 35 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
 
 ### Tools
 
@@ -844,6 +845,7 @@ Apply engine:
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
 | `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording, for every job, a role family or one job |
 | `approve_answer` | write | Approve a saved answer, optionally replacing its text and choosing its scope |
+| `upload_cv` | write | Upload a `.pdf` or `.docx` from the `JOBPILOT_CV_DIR` folder; stored unapproved, returns the parse and its warnings |
 | `approve_cv` | write | Approve a CV for reuse |
 | `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
 | `compose_application` | write | Assemble a whole application into the outbox for review |
@@ -855,7 +857,7 @@ List tools return summaries without the job description so a page of matches sta
 
 - `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Approval is what lets the sender send an application, so the gate belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
-- CV upload, which is multipart and belongs in the web app.
+- Any other upload, send or delete tool. `upload_cv` is the one exception, chosen by the owner on 2026-10-16: it puts a CV into the user's own JobPilot, where it waits unapproved like a web upload, and sends nothing to an employer. Because the server holds the user's token on their machine, it is off unless `JOBPILOT_CV_DIR` names a folder, and it reads only a `.pdf` or `.docx` within the API's 12 MB limit from inside that folder. The file is opened through Go's `os.Root`, which refuses `..`, symbolic links and Windows junctions that lead out of the folder as it opens, so nothing can be swapped in between a check and the read; the file's first bytes must match its extension. A prompt-injected agent can therefore send at most a PDF or DOCX that is in that folder, never an arbitrary file it can name. The host's own file tools are outside this server's reach, so the folder should be one the agent is not also allowed to write to.
 - Registration, deletes, and profile or filter edits.
 
 Server instructions tell the host that composing does not send, that blockers and anything marked `needs_review` must be shown to the user verbatim, and that an application must never be described as approved or sent. Protected-characteristic questions are never answered and declarations the user must make personally are left blank; both are enforced by the API, not by the model.

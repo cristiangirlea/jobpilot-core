@@ -1,15 +1,23 @@
 package jobpilot
 
 import (
+	"bytes"
 	"context"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
+	"path/filepath"
+	"strings"
 	"time"
 )
 
 // composeTimeout is generous because composing reads the employer's form,
 // decides on a CV, may render one, and may call a model for the letter.
 const composeTimeout = 2 * time.Minute
+
+// uploadTimeout covers sending up to 12 MB and the API extracting and parsing it.
+const uploadTimeout = 90 * time.Second
 
 func (c *Client) AIStatus(ctx context.Context) (AIStatus, error) {
 	var out AIStatus
@@ -80,6 +88,46 @@ func (c *Client) CVs(ctx context.Context) ([]CVDocument, error) {
 func (c *Client) CV(ctx context.Context, id string) (CVDocument, error) {
 	var out CVDocument
 	return out, c.get(ctx, "/api/cv/"+url.PathEscape(id), &out)
+}
+
+// UploadCV sends a CV the way the web app's /cv page does: multipart, the file
+// under "file" and an optional "label". The API stores it unapproved.
+func (c *Client) UploadCV(ctx context.Context, file cvFile, label string) (CVDocument, error) {
+	var buf bytes.Buffer
+	form := multipart.NewWriter(&buf)
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition", `form-data; name="file"; filename="`+quoteEscaper.Replace(file.name)+`"`)
+	header.Set("Content-Type", cvContentType(file.name))
+	part, err := form.CreatePart(header)
+	if err != nil {
+		return CVDocument{}, err
+	}
+	if _, err = part.Write(file.data); err != nil {
+		return CVDocument{}, err
+	}
+	if label = strings.TrimSpace(label); label != "" {
+		if err = form.WriteField("label", label); err != nil {
+			return CVDocument{}, err
+		}
+	}
+	if err = form.Close(); err != nil {
+		return CVDocument{}, err
+	}
+	var out CVDocument
+	body := rawBody{data: buf.Bytes(), contentType: form.FormDataContentType()}
+	return out, c.do(ctx, http.MethodPost, "/api/cv", body, &out, uploadTimeout)
+}
+
+// quoteEscaper is what multipart.CreateFormFile applies to a file name; it is
+// repeated here because that helper always says application/octet-stream,
+// and the API keeps the content type to serve the file back with.
+var quoteEscaper = strings.NewReplacer("\\", "\\\\", `"`, "\\\"")
+
+func cvContentType(name string) string {
+	if strings.EqualFold(filepath.Ext(name), ".pdf") {
+		return "application/pdf"
+	}
+	return "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 }
 
 // ApproveCV always sends a body: the endpoint decodes one, so a bodiless

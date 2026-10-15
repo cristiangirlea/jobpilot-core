@@ -64,6 +64,11 @@ type cvInput struct {
 	CVID string `json:"cv_id" jsonschema:"A CV document id, from list_cvs"`
 }
 
+type uploadCVInput struct {
+	Path  string `json:"path" jsonschema:"A .pdf or .docx in the JOBPILOT_CV_DIR folder: its name, or its full path there"`
+	Label string `json:"label,omitempty" jsonschema:"A short name, such as Backend; the role family is read from the CV"`
+}
+
 type approveCVInput struct {
 	CVID     string `json:"cv_id"`
 	Approved *bool  `json:"approved,omitempty" jsonschema:"Defaults to true; pass false to withdraw approval"`
@@ -210,7 +215,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "list_cvs",
 		Title:       "List CVs",
-		Description: "Return the user's uploaded and tailored CVs: kind is base for an upload or tailored for one written for a job, and only an approved CV is ever reused. The CV text is omitted here; call get_cv for one. Uploading a CV is done in the web app.",
+		Description: "Return the user's uploaded and tailored CVs: kind is base for an upload or tailored for one written for a job, and only an approved CV is ever reused. The CV text is omitted here; call get_cv for one. upload_cv adds a PDF or DOCX; other formats go through the web app.",
 		Annotations: readOnly("List CVs"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, CVList, error) {
 		cvs, err := c.CVs(ctx)
@@ -235,6 +240,28 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		}
 		out, err := c.CV(ctx, in.CVID)
 		return nil, out, toolError(err)
+	})
+
+	addTool(s, &mcp.Tool{
+		Name:  "upload_cv",
+		Title: "Upload a CV",
+		Description: "Upload a .pdf or .docx CV the user asked for, from the folder JOBPILOT_CV_DIR allows (off when unset; nothing outside it). " +
+			"It is stored unapproved: show its parsed warnings in the exact words returned, and approve it only after the user reads it. Re-uploading the same file clears its approval.",
+		Annotations: writeTool("Upload a CV", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadCVInput) (*mcp.CallToolResult, CVDocument, error) {
+		file, err := readCVFile(c.cvDir, in.Path)
+		if err != nil {
+			return nil, CVDocument{}, err
+		}
+		out, err := c.UploadCV(ctx, file, in.Label)
+		if err != nil {
+			return nil, CVDocument{}, toolError(err)
+		}
+		// The text comes back twice, as extracted_text and in parsed; get_cv
+		// returns it, so the result keeps only the fields and warnings.
+		out.ExtractedText = ""
+		delete(out.Parsed, "text")
+		return nil, out, nil
 	})
 
 	addTool(s, &mcp.Tool{
