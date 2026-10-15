@@ -347,7 +347,11 @@ func (g *Greenhouse) post(ctx context.Context, page, action *url.URL, payload []
 		if err != nil || len(body) > pageLimit || guarded(body) {
 			return Unknown(unconfirmed)
 		}
-		if cameBack(body, form) {
+		back, err := cameBack(body, form)
+		if err != nil {
+			return Unknown(unconfirmed)
+		}
+		if back {
 			return HandBack("The employer's form came back without confirming the application, so it was most likely not received. Open the form and send it yourself.")
 		}
 		return nil
@@ -367,11 +371,13 @@ func sameDocument(a, b *url.URL) bool {
 }
 
 // cameBack reports an answer that is the same form again, which is how a form
-// shows its own validation errors instead of a confirmation.
-func cameBack(body []byte, sent webForm) bool {
+// shows its own validation errors instead of a confirmation. An answer that
+// cannot be parsed (html.Parse refuses one nested past 512 elements) confirms
+// nothing, so it is an error, never a confirmation.
+func cameBack(body []byte, sent webForm) (bool, error) {
 	forms, err := parseForms(bytes.NewReader(body))
 	if err != nil {
-		return false
+		return false, err
 	}
 	for _, form := range forms {
 		if !form.post || len(sent.order) == 0 {
@@ -385,8 +391,8 @@ func cameBack(body []byte, sent webForm) bool {
 			}
 		}
 		if same {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }

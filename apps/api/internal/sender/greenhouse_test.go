@@ -152,6 +152,7 @@ func TestSubmitHandsBackWhatItMayNotOrCannotFill(t *testing.T) {
 		{name: "the CV slot is not an upload", page: strings.Replace(formPage, `type="file" name="resume"`, `name="resume"`, 1), wantIn: "as a file"},
 		{name: "no job named", edit: func(s *Submission) { s.JobID = "" }, wantIn: "which Greenhouse job"},
 		{name: "a page too large to read in full", page: formPage + "<!--" + strings.Repeat("x", pageLimit) + " captcha -->", wantIn: "too large"},
+		{name: "a page nested too deep to parse", page: tooDeep(formPage), wantIn: "could not be read"},
 		{name: "the attempt cannot be recorded", edit: func(s *Submission) {
 			s.BeforePost = func() error { return errors.New("the application is no longer being sent") }
 		}, wantIn: "stopped before anything reached the employer"},
@@ -196,6 +197,7 @@ func TestSubmitReadsTheEmployersAnswer(t *testing.T) {
 		{name: "a challenge in answer", status: 200, reply: `<div class="g-recaptcha"></div>`, unknown: true},
 		{name: "an answer too large to read", status: 200, reply: strings.Repeat("x", pageLimit+1), unknown: true},
 		{name: "the form again, with errors", status: 200, reply: formPage},
+		{name: "an answer nested too deep to parse", status: 200, reply: tooDeep(formPage), unknown: true},
 		{name: "a refusal", status: 422},
 		{name: "rate limited", status: 429},
 		{name: "a server error", status: 502, unknown: true},
@@ -302,4 +304,9 @@ func TestGreenhouseFormsLiveOnTheHostedBoard(t *testing.T) {
 			t.Errorf("%q: got %q, want %q", base, got, want)
 		}
 	}
+}
+
+// tooDeep wraps a page in more nested elements than html.Parse accepts (512).
+func tooDeep(page string) string {
+	return strings.Repeat("<div>", 600) + page + strings.Repeat("</div>", 600)
 }
