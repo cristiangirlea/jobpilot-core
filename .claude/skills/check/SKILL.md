@@ -27,21 +27,31 @@ step's result in one line; on a failure, show the error text and fix it before r
    workflow's publish or infra-bump job changed: `sh scripts/infra-bump-test.sh` (needs git and jq;
    without jq, as on Windows, run it as CI does, under dash:
    `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src:ro ubuntu:22.04 sh -c 'apt-get update -qq && apt-get install -y -qq git jq >/dev/null && sh /src/scripts/infra-bump-test.sh'`).
-5. Integration, when runtime code, SQL or migrations changed. Never against the owner's stack on
-   5432/8080: start a throwaway `postgres:16-alpine` on port 55432 (user, password and database
-   `jobpilot`), then
-   - `DATABASE_URL=postgres://jobpilot:jobpilot@localhost:55432/jobpilot?sslmode=disable sh migrations/migrate.sh`
-     (needs `psql`; without it, `docker build -t jobpilot-migrate migrations` and run that image
-     with `DATABASE_URL` pointing at `host.docker.internal:55432`)
-   - in `apps/api`: `JOBPILOT_TEST_DATABASE_URL=<same URL> go test -count=1 -run Postgres ./...`
-   - start the API natively with `API_ADDR=:18080`, that `DATABASE_URL`, a throwaway `JWT_SECRET`,
-     `LLM_PROVIDER=none`, `ATS_GREENHOUSE_URL`, `ATS_ASHBY_URL` and `ATS_RECRUITEE_URL` all
-     `http://localhost:18999`, `OUTBOX_SENDER_ENABLED=true` and `OUTBOX_SEND_DELAY_SECONDS=3`
-   - `JOBPILOT_API_URL=http://localhost:18080/api pwsh -File scripts/smoke.ps1`, the same for
-     `scripts/seniority-filter-smoke.ps1` (on Windows without `pwsh`:
-     `powershell -ExecutionPolicy Bypass -File ...`)
-   - in `apps/mcp`: `JOBPILOT_E2E_ATS_PORT=18999 go test -count=1 -run TestEndToEnd . -args -api http://localhost:18080`
-   Stop the API by its PID and remove the container afterwards.
+5. Integration, when runtime code, SQL or migrations changed: `bash scripts/check-integration.sh`
+   from the repository root (Git Bash on Windows; it takes a few minutes, so run it in the
+   background where a tool call has a time limit). Other sessions run it at the same time from
+   their own worktrees, so it never uses fixed ports and never touches the owner's stack on
+   5432/8080. Each run:
+   - starts a `postgres:16-alpine` container named `jobpilot-check-<time>-<pid>-<random>` on a
+     loopback port Docker picks, and applies `migrations/migrate.sh` with the container's own `psql`;
+   - runs `go test -count=1 -run Postgres ./...` in `apps/api` against it;
+   - builds the API binary into a temporary directory and starts it on `127.0.0.1:<free port>`
+     with the fake ATS on another free port (random in 20000-39999, checked with `ss` or
+     `Get-NetTCPConnection`), `LLM_PROVIDER=none`, `OUTBOX_SENDER_ENABLED=true` and
+     `OUTBOX_SEND_DELAY_SECONDS=3`;
+   - before each smoke script and around the MCP end-to-end test, confirms the only listener on
+     the API's port runs the binary this run built (its unique path; in Git Bash `$!` is a bash
+     stub, not `api.exe`, so a PID comparison would not do), its log says it listens there, and
+     it answers `/api/health`. If another session's API answers instead, it stops there rather
+     than testing someone else's branch and data;
+   - runs `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1` (`pwsh`, or Windows
+     `powershell` without it) and `TestEndToEnd` in `apps/mcp`;
+   - stops its API (by that path on Windows) and removes its container on exit, also on failure,
+     and prints where the API log is.
+   "The API exited" or "cannot listen on port" means another process took a picked port between
+   the check and the bind: run it again. When running the steps by hand instead, keep the same
+   rules, and under `MSYS_NO_PATHCONV=1` give a Windows `go build -o` a Windows path
+   (`cygpath -w`): there `/c/x` is taken literally and lands in `<drive>:\c\x`.
 
 While iterating, run only the touched module's tests; run the whole list once before the PR.
 
