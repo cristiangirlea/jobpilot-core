@@ -9,8 +9,9 @@ import {Empty,ErrorMessage,Header} from "@/components/UI";
 
 const kindLabel:Record<string,string>={answer:"Answer",cv:"CV",outbox:"Application"};
 
-// href comes from the API; only a path inside this app becomes a link.
-const internalHref=(n:Notification)=>{const href=n.detail?.href;return typeof href==="string"&&href.startsWith("/")&&!href.startsWith("//")?href:""};
+// href comes from the API; only a path inside this app becomes a link. A
+// second slash or a backslash would make it a link to another host.
+const internalHref=(n:Notification)=>{const href=n.detail?.href;return typeof href==="string"&&href.startsWith("/")&&href[1]!=="/"&&href[1]!=="\\"?href:""};
 
 export default function NotificationsPage(){
   const [feed,setFeed]=useState<NotificationFeed|null>(null);
