@@ -636,6 +636,11 @@ Authorization: Bearer <token>
 | `GET` | `/api/health` | Health check; reports the API `contract` version a client may rely on |
 | `POST` | `/api/auth/register` | Create user and return token |
 | `POST` | `/api/auth/login` | Authenticate and return token |
+| `GET` | `/api/auth/providers` | Which other sign-in methods are on (`{"google": true}`) |
+| `GET` | `/api/auth/google/start` | Redirect to Google (404 when Google is off) |
+| `GET` | `/api/auth/google/callback` | Google's redirect back; ends on the web app's `/login/google?code=...` (with a binding cookie) or `/login?error=...` |
+| `POST` | `/api/auth/google/exchange` | Exchange the single-use code from the callback for a token; needs the binding cookie |
+| `POST` | `/api/auth/google/link` | Link the Google account from a `?link=1` flow to the signed-in account (browser session only; needs the binding cookie) |
 
 ### Profile endpoints
 
@@ -876,6 +881,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
+| `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 
 Core entities:
 
@@ -898,6 +904,7 @@ discovery_sources
 discovery_runs
 outbound_clicks
 agent_tokens
+user_identities
 ```
 
 When changing schema:
@@ -921,6 +928,8 @@ When changing schema:
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
 | `ATS_ASHBY_URL` | Origin of Ashby's public job pages, whose posting query the form reader calls; defaults to `https://jobs.ashbyhq.com`. Point it at a fake as above |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL` | Sign-in with Google; off while `GOOGLE_CLIENT_ID` is unset; with it set, the API refuses to start without the other two. The redirect URL is the API's `/api/auth/google/callback`, registered in the Google OAuth client |
+| `GOOGLE_ALLOW_SIGNUP` | `true` lets a Google account create a JobPilot account when no account has its email; unset, Google signs in only accounts it was linked to under Settings |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
 
 ### AI environment
@@ -1083,6 +1092,7 @@ CI runs all of the above on every pull request and every merge to master, plus b
 Implemented safeguards:
 
 - bcrypt password hashing.
+- Optional sign-in with Google through OpenID Connect: the authorization-code flow with PKCE, state and nonce held in a signed, HttpOnly, ten-minute cookie, and an ID token checked for signature, issuer, audience, expiry and a verified email before it is trusted. A Google identity is never joined to an existing account by email, because sign-up does not verify addresses and the account may have been registered by someone else: the account's owner links Google from Settings while signed in. Google creates an account only when `GOOGLE_ALLOW_SIGNUP=true` and no account has its email; an account created that way has no password. The callback hands the web app a single-use code that lasts a minute instead of the token, so a session token never appears in a URL, and the code works only with a binding cookie set in the browser that finished the flow, so a code sent to someone else cannot sign them into the sender's account. The codes are held in memory, which assumes one API instance like the scheduler lock.
 - Signed, expiring JWT bearer tokens.
 - Protected routes and user-scoped SQL access.
 - Strict JSON parsing and request size limits.
