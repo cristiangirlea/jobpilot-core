@@ -674,10 +674,6 @@ func TestEndToEnd(t *testing.T) {
 	filterPresetsFromTheAgent(t, call, accepted.Job.ID)
 }
 
-// filterPresetsFromTheAgent creates a preset, changes one rule of it, and
-// activates it, which re-scores the user's jobs: the job accepted at the
-// start mentions PostgreSQL, which the new preset excludes. It runs last, so
-// the stricter filter cannot change what the earlier steps see.
 // TestEndToEndUploadCV sends a generated DOCX through upload_cv to the live
 // API's CV route, as its own user so the CV cannot change what the main test
 // composes. The fixture is generated here; no real CV is ever used.
@@ -739,6 +735,9 @@ func TestEndToEndUploadCV(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(res.StructuredContent)
+	if res.IsError {
+		raw, _ = json.Marshal(res.Content)
+	}
 	var uploaded struct {
 		ID       string         `json:"id"`
 		Label    string         `json:"label"`
@@ -778,6 +777,10 @@ func TestEndToEndUploadCV(t *testing.T) {
 	}
 }
 
+// filterPresetsFromTheAgent creates a preset, changes one rule of it, and
+// activates it, which re-scores the user's jobs: the job accepted at the
+// start mentions PostgreSQL, which the new preset excludes. It runs last, so
+// the stricter filter cannot change what the earlier steps see.
 func filterPresetsFromTheAgent(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool), acceptedID string) {
 	activeName := func() string {
 		out, text, isErr := call("get_filters", nil)

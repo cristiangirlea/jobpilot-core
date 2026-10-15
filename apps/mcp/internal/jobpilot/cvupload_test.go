@@ -3,11 +3,15 @@ package jobpilot
 import (
 	"archive/zip"
 	"bytes"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -59,6 +63,7 @@ func cvFolders(t *testing.T) (allowed, outside string) {
 	write(filepath.Join(allowed, "variants", "backend.docx"), fakeDOCX(t))
 	write(filepath.Join(allowed, "notes.txt"), []byte("plain text"))
 	write(filepath.Join(allowed, "renamed.pdf"), []byte("not a pdf at all"))
+	write(filepath.Join(allowed, "renamed.docx"), fakePDF)
 	write(filepath.Join(allowed, "empty.pdf"), nil)
 	write(filepath.Join(outside, "secret.pdf"), fakePDF)
 	if err := os.Mkdir(filepath.Join(allowed, "folder.pdf"), 0o755); err != nil {
@@ -114,6 +119,7 @@ func TestReadCVFileRefuses(t *testing.T) {
 		{"another extension", allowed, "notes.txt", ".pdf or .docx"},
 		{"no extension", allowed, "cv", ".pdf or .docx"},
 		{"a renamed file", allowed, "renamed.pdf", "not a pdf"},
+		{"a PDF named .docx", allowed, "renamed.docx", "not a docx"},
 		{"an empty file", allowed, "empty.pdf", "empty"},
 		{"a folder named like a CV", allowed, "folder.pdf", "not a regular file"},
 		{"a file over the API's limit", allowed, "big.pdf", "at most 12 MB"},
@@ -146,7 +152,15 @@ func TestReadCVFileRefusesALinkOutOfTheFolder(t *testing.T) {
 	if err := os.Symlink("cv.pdf", filepath.Join(allowed, "alias.pdf")); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"link.pdf", filepath.Join("linked", "secret.pdf")} {
+	// Relative targets are resolved, '..' included, rather than refused for
+	// their form as absolute ones are.
+	if err := os.Symlink(filepath.Join("..", "private", "secret.pdf"), filepath.Join(allowed, "up.pdf")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..", "private"), filepath.Join(allowed, "uplinked")); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"link.pdf", filepath.Join("linked", "secret.pdf"), "up.pdf", filepath.Join("uplinked", "secret.pdf")} {
 		if _, err := readCVFile(allowed, path); err == nil || !strings.Contains(err.Error(), "outside") {
 			t.Errorf("readCVFile(%q) = %v; a link out of the folder must be refused", path, err)
 		}
@@ -168,6 +182,80 @@ func TestReadCVFileRefusesAJunctionOutOfTheFolder(t *testing.T) {
 	}
 	if _, err := readCVFile(allowed, filepath.Join("junction", "secret.pdf")); err == nil || !strings.Contains(err.Error(), "outside") {
 		t.Fatalf("a junction out of the folder must be refused, got %v", err)
+	}
+}
+
+// Windows spells paths in ways Linux has no counterpart for: another drive,
+// a drive without a folder, a folder without a drive, and other letter case.
+func TestReadCVFileWindowsPathShapes(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows path shapes")
+	}
+	allowed, _ := cvFolders(t)
+	volume := filepath.VolumeName(allowed)
+	other := "Z:"
+	if strings.EqualFold(volume, other) {
+		other = "Y:"
+	}
+	for _, path := range []string{
+		other + `\cvs\cv.pdf`,
+		volume + "cv.pdf",
+		strings.TrimPrefix(allowed, volume) + `\cv.pdf`,
+		`\\?\` + allowed + `\cv.pdf`,
+	} {
+		if got, err := readCVFile(allowed, path); err == nil {
+			t.Errorf("readCVFile(%q) read %d bytes; it must refuse", path, len(got.data))
+		}
+	}
+	// The same folder in other letter case is still the folder.
+	if _, err := readCVFile(allowed, strings.ToUpper(allowed)+`\cv.pdf`); err != nil {
+		t.Errorf("a path differing only in case should be read: %v", err)
+	}
+}
+
+// The upload body is bytes, not JSON, and must go out whole again when a
+// stale token earns a 401 and the client logs in once more.
+func TestUploadCVRetriesWholeAfterA401(t *testing.T) {
+	var attempts atomic.Int32
+	var lastBody atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/auth/login":
+			_, _ = w.Write([]byte(`{"token":"fresh"}`))
+		case "/api/cv":
+			attempts.Add(1)
+			if r.Header.Get("Authorization") != "Bearer fresh" {
+				_, _ = io.Copy(io.Discard, r.Body)
+				w.WriteHeader(401)
+				_, _ = w.Write([]byte(`{"error":"unauthorized"}`))
+				return
+			}
+			file, _, err := r.FormFile("file")
+			if err != nil {
+				w.WriteHeader(400)
+				return
+			}
+			data, _ := io.ReadAll(file)
+			lastBody.Store(data)
+			w.WriteHeader(201)
+			_, _ = w.Write([]byte(`{"id":"cv-up","approved":false}`))
+		}
+	}))
+	defer srv.Close()
+	c, err := NewClient(Options{BaseURL: srv.URL, Token: "stale", Email: "me@example.test", Password: "secret-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := c.UploadCV(t.Context(), cvFile{name: "cv.pdf", data: fakePDF}, "")
+	if err != nil || out.ID != "cv-up" {
+		t.Fatalf("UploadCV after a 401: %+v, %v", out, err)
+	}
+	if attempts.Load() != 2 {
+		t.Fatalf("want the upload sent twice, got %d", attempts.Load())
+	}
+	if got, _ := lastBody.Load().([]byte); !bytes.Equal(got, fakePDF) {
+		t.Fatalf("the retry carried %d bytes of the file, want %d", len(got), len(fakePDF))
 	}
 }
 
