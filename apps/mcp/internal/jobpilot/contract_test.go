@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -37,6 +38,32 @@ func TestClientReadsTheContractFromHealth(t *testing.T) {
 			t.Errorf("%s: got contract %d predates=%v err=%v", c.body, h.Contract, client.PredatesContract(), err)
 		}
 		srv.Close()
+	}
+}
+
+// An API whose version cannot be read does not support a contract, and the
+// next call asks again, so an API that recovers is recognised.
+func TestSupportsChecksUntilTheAPIAnswers(t *testing.T) {
+	var up atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !up.Load() {
+			http.Error(w, "starting", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"ok","contract":6}`))
+	}))
+	defer srv.Close()
+	client, err := NewClient(Options{BaseURL: srv.URL, Token: "tok"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.supports(context.Background(), scopesContract) {
+		t.Fatal("an API that cannot be checked must not count as supporting a contract")
+	}
+	up.Store(true)
+	if !client.supports(context.Background(), scopesContract) {
+		t.Fatal("once the API answers, a current one supports the contract")
 	}
 }
 
