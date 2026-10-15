@@ -28,3 +28,5 @@ export type BoardSuggestion={provider:string;identifier:string;name:string;note:
 export type DetectedBoard={provider:string;identifier:string;job_id?:string;supported:boolean};
 export type AgentToken={id:string;name:string;token_prefix:string;scopes:string[];created_at:string;last_used_at?:string;expires_at?:string;revoked_at?:string};
 export type AgentTokenCreated={token:string;agent_token:AgentToken};
+export type Notification={id:string;kind:string;subject_id:string;title:string;detail:Record<string,unknown>;created_at:string;updated_at:string;resolved_at?:string};
+export type NotificationFeed={open:number;items:Notification[]};

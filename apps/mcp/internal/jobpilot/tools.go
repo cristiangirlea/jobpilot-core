@@ -388,6 +388,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 
 	addCatalogTools(s, c)
 	addApplyTools(s, c)
+	addNotificationTools(s, c)
 	return s
 }
 

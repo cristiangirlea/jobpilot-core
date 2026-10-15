@@ -225,6 +225,7 @@ func (f *fakeAPI) handler() http.Handler {
 		send(w, 201, `{"id":"s-new","provider":"`+fmt.Sprint(body["provider"])+`","name":"`+fmt.Sprint(body["name"])+`","identifier":"","search_query":"","excluded_search_query":"","active":true,"created_at":"2026-09-20T00:00:00Z"}`)
 	})
 	f.applyRoutes(m, send)
+	f.notificationRoutes(m, send)
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if f.noContract {
 			send(w, 200, `{"status":"ok"}`)
