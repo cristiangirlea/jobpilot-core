@@ -25,7 +25,10 @@ type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
 	Links   *LinkChecker
-	mu      sync.Mutex
+	// MayDiscover, when set, says whose schedule may run: accounts it refuses
+	// keep their sources but are skipped by the scheduler (#128).
+	MayDiscover func(ctx context.Context, userID string) bool
+	mu          sync.Mutex
 }
 
 var ErrMissingDesiredTitle = errors.New("add a desired job title to your profile first")
@@ -518,6 +521,9 @@ func (s *Service) runDue(ctx context.Context) {
 		return
 	}
 	for _, id := range ids {
+		if s.MayDiscover != nil && !s.MayDiscover(ctx, id) {
+			continue
+		}
 		run, runErr := s.RunUser(ctx, id)
 		if runErr != nil {
 			slog.Error("scheduled discovery failed", "user_id", id, "error", runErr)

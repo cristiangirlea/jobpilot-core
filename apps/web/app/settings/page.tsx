@@ -1,4 +1,4 @@
-"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
+"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import {useMe} from "@/components/useMe";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
 
 function when(value?:string){return value?new Date(value).toLocaleDateString():"—"}
 
@@ -17,7 +17,7 @@ function GoogleLink(){
   </section>;
 }
 
-function Tokens(){
+function Tokens({policy}:{policy:"read"|"write"}){
   const [tokens,setTokens]=useState<AgentToken[]>([]);
   const [name,setName]=useState("");
   const [canWrite,setCanWrite]=useState(false);
@@ -55,7 +55,7 @@ function Tokens(){
     </div>}
     <div className="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto] sm:items-end">
       <Field label="Name"><input value={name} placeholder="Claude Code on this laptop" onChange={e=>setName(e.target.value)}/></Field>
-      <Field label="Access"><select value={canWrite?"write":"read"} onChange={e=>setCanWrite(e.target.value==="write")}><option value="read">Read only</option><option value="write">Read and write</option></select></Field>
+      {policy==="write"&&<Field label="Access"><select value={canWrite?"write":"read"} onChange={e=>setCanWrite(e.target.value==="write")}><option value="read">Read only</option><option value="write">Read and write</option></select></Field>}
       <Field label="Expires"><select value={days} onChange={e=>setDays(Number(e.target.value))}><option value={0}>Never</option><option value={30}>30 days</option><option value={90}>90 days</option><option value={365}>365 days</option></select></Field>
       <button className="btn-primary" disabled={!name.trim()} onClick={create}>Create token</button>
     </div>
@@ -111,13 +111,17 @@ function Invites(){
 
 export default function Settings(){
   const r=useRouter();
+  // Members (#128) see their own sections only; the cards about how this
+  // server is set up are for its admins, and agent tokens follow
+  // USER_AGENT_TOKENS.
+  const me=useMe(),admin=me?.admin===true;
   return <Shell>
     <Header eyebrow="Workspace" title="Settings" description="JobPilot Core is configured through local environment variables."/>
     <div className="grid gap-5 md:grid-cols-2">
-      <section className="card"><h2 className="font-semibold">Generation mode</h2><p className="muted mt-2">Deterministic templates are active. They use only profile, experience, skill, and project data—no API key required.</p><span className="mt-4 inline-block rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">OFFLINE-SAFE</span></section>
-      <section className="card"><h2 className="font-semibold">Safety boundaries</h2><p className="muted mt-2">This product never submits applications, bypasses CAPTCHA, or automates job boards. Apply links always open for manual review.</p></section>
+      {admin&&<section className="card"><h2 className="font-semibold">Generation mode</h2><p className="muted mt-2">Deterministic templates are active. They use only profile, experience, skill, and project data—no API key required.</p><span className="mt-4 inline-block rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">OFFLINE-SAFE</span></section>}
+      {admin&&<section className="card"><h2 className="font-semibold">Safety boundaries</h2><p className="muted mt-2">This product never submits applications, bypasses CAPTCHA, or automates job boards. Apply links always open for manual review.</p></section>}
       <GoogleLink/>
-      <Tokens/>
+      {me&&me.agent_tokens!=="off"&&<Tokens policy={me.agent_tokens}/>}
       <Invites/>
       <section className="card md:col-span-2"><h2 className="font-semibold">Session</h2><p className="muted mt-2 mb-4">Signing out removes the local access token from this browser.</p><button className="btn-secondary" onClick={()=>{localStorage.removeItem('jobpilot_token');r.push('/login')}}>Sign out</button></section>
     </div>

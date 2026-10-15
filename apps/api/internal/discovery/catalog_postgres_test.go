@@ -113,13 +113,60 @@ func TestCatalogScoringAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if summary.LastJobAt == nil || summary.JobsLast24h < 3 || summary.JobsLast7d < summary.JobsLast24h || summary.OpenMatches != 1 {
-		t.Fatalf("summary = %+v; want the three new jobs counted and one open match (the excluded one is rejected, the closed one unscored)", summary)
+	// The database is shared with other tests, so counts are compared, not
+	// matched exactly: the open job counts, and reporting it gone removes it.
+	if summary.LastJobAt == nil || summary.JobsLast24h < 3 || summary.JobsLast7d < summary.JobsLast24h || summary.OpenMatches < 1 {
+		t.Fatalf("summary = %+v; want the three new jobs counted and the open one among Bea's matches", summary)
 	}
 	if _, err := st.ReportJob(ctx, bea.ID, open.ID); err != nil {
 		t.Fatal(err)
 	}
-	if after, err := st.CatalogSummary(ctx, bea.ID); err != nil || after.OpenMatches != 0 {
-		t.Fatalf("a job Bea reported gone still counts: %+v (%v)", after, err)
+	if after, err := st.CatalogSummary(ctx, bea.ID); err != nil || after.OpenMatches != summary.OpenMatches-1 {
+		t.Fatalf("a job Bea reported gone still counts: %+v, before %+v (%v)", after, summary, err)
+	}
+}
+
+// Scheduled discovery runs only for accounts MayDiscover allows (#128): a
+// member whose schedule falls due is claimed and skipped, so nothing is
+// fetched on its behalf.
+func TestSchedulerSkipsAccountsThatMayNotDiscoverAgainstPostgres(t *testing.T) {
+	url := os.Getenv("JOBPILOT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set JOBPILOT_TEST_DATABASE_URL to a migrated database to run this")
+	}
+	ctx := context.Background()
+	pool, err := database.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	st := store.New(pool)
+	member, err := st.CreateUser(ctx, "scheduler-member-"+time.Now().Format("20060102150405.000000")+"@example.test", "not a real hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SaveDiscoverySettings(ctx, member.ID, models.DiscoverySettings{Enabled: true, IntervalMinutes: 360, MinScore: 50, MaxJobsPerRun: 10}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE discovery_settings SET next_run_at=now()-interval '1 minute' WHERE user_id=$1`, member.ID); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(st)
+	asked := map[string]bool{}
+	// Every account due in the shared database is refused, so this run
+	// fetches nothing for anyone.
+	svc.MayDiscover = func(_ context.Context, id string) bool { asked[id] = true; return false }
+	for i := 0; i < 20 && !asked[member.ID]; i++ {
+		svc.runDue(ctx)
+	}
+	if !asked[member.ID] {
+		t.Fatal("the member's due schedule was never claimed")
+	}
+	runs, err := st.DiscoveryRuns(ctx, member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 0 {
+		t.Fatalf("a member's schedule ran %d times", len(runs))
 	}
 }

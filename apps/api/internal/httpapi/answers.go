@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"strings"
@@ -15,8 +16,8 @@ import (
 
 // answerService builds the resolver on demand so the store stays the single
 // owner of persistence and the handler stays stateless.
-func (s *Server) answerService() *answers.Service {
-	return &answers.Service{Bank: s.Store, LLM: s.LLM}
+func (s *Server) answerService(ctx context.Context) *answers.Service {
+	return &answers.Service{Bank: s.Store, LLM: s.llmFor(ctx)}
 }
 
 func (s *Server) listAnswers(w http.ResponseWriter, r *http.Request) {
@@ -217,7 +218,8 @@ func (s *Server) resolveJobAnswers(w http.ResponseWriter, r *http.Request) {
 		Match:     job.Match,
 		Documents: generator.Generate(profile, job.Job, job.Match),
 	}
-	resolutions := s.answerService().ResolveAll(ctx, uid, body.Questions, subject)
+	ai := s.llmFor(ctx)
+	resolutions := (&answers.Service{Bank: s.Store, LLM: ai}).ResolveAll(ctx, uid, body.Questions, subject)
 	pending := 0
 	for _, resolution := range resolutions {
 		if resolution.NeedsReview {
@@ -225,8 +227,8 @@ func (s *Server) resolveJobAnswers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	write(w, 200, resolveResponse{
-		AIEnabled:   s.LLM.Enabled(),
-		Provider:    s.LLM.Describe(),
+		AIEnabled:   ai.Enabled(),
+		Provider:    ai.Describe(),
 		NeedsReview: pending,
 		Resolutions: resolutions,
 	})
