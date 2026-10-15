@@ -46,6 +46,19 @@ func (s *Server) createToken(w http.ResponseWriter, r *http.Request) {
 		problem(w, 422, "Expiry must be between 0 and 365 days.")
 		return
 	}
+	policy, err := s.tokenPolicy(r.Context(), auth.UserID(r.Context()))
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	switch {
+	case policy == TokensOff:
+		problem(w, 403, tokensOff)
+		return
+	case policy == TokensRead && auth.HasScopeIn(scopes, auth.ScopeWrite):
+		problem(w, 403, tokensReadOnly)
+		return
+	}
 	var expires *time.Time
 	if x.ExpiresInDays > 0 {
 		at := time.Now().AddDate(0, 0, x.ExpiresInDays)

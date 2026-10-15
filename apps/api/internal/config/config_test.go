@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // The form reader's origins default to the public services, so an unset
 // variable never changes where a real application's form is read.
@@ -61,5 +64,26 @@ func TestGoogleSignInIsOffByDefault(t *testing.T) {
 	t.Setenv("GOOGLE_ALLOW_SIGNUP", "true")
 	if !Load().Google.AllowSignup {
 		t.Fatal("GOOGLE_ALLOW_SIGNUP=true was not read")
+	}
+}
+
+// Members get no agent tokens unless USER_AGENT_TOKENS says read or write,
+// and any other value stops the API at startup instead of guessing.
+func TestUserAgentTokensDefaultsToOff(t *testing.T) {
+	t.Setenv("USER_AGENT_TOKENS", "")
+	t.Setenv("REGISTRATION", "")
+	cfg := Load()
+	if cfg.UserAgentTokens != "off" || cfg.Validate() != nil {
+		t.Fatalf("default = %q (%v), want off", cfg.UserAgentTokens, cfg.Validate())
+	}
+	for _, v := range []string{"read", "Write"} {
+		t.Setenv("USER_AGENT_TOKENS", v)
+		if cfg := Load(); cfg.Validate() != nil || cfg.UserAgentTokens != strings.ToLower(v) {
+			t.Fatalf("%q was refused or misread: %q", v, cfg.UserAgentTokens)
+		}
+	}
+	t.Setenv("USER_AGENT_TOKENS", "yes")
+	if Load().Validate() == nil {
+		t.Fatal("USER_AGENT_TOKENS=yes was accepted")
 	}
 }

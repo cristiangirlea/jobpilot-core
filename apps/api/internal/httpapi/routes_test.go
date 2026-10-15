@@ -34,6 +34,26 @@ var sessionOnly = map[string]string{
 	"POST /api/auth/google/link": "session",
 }
 
+// adminOnly routes are for the accounts ADMIN_EMAILS names (#128): ap( for
+// reading, aw( for changing, which also needs the write scope. Discovery is
+// the admin's, and so is the configured AI provider's status. Moving a route
+// off this list hands it to every member.
+var adminOnly = map[string]string{
+	"GET /api/ai/status":                 "ap",
+	"GET /api/discovery/settings":        "ap",
+	"PUT /api/discovery/settings":        "aw",
+	"GET /api/discovery/sources":         "ap",
+	"POST /api/discovery/sources":        "aw",
+	"PUT /api/discovery/sources/{id}":    "aw",
+	"POST /api/discovery/validate":       "ap",
+	"DELETE /api/discovery/sources/{id}": "aw",
+	"GET /api/discovery/runs":            "ap",
+	"POST /api/discovery/run":            "aw",
+	"POST /api/discovery/recommended":    "aw",
+	"GET /api/discovery/suggestions":     "ap",
+	"POST /api/discovery/detect":         "ap",
+}
+
 var routePattern = regexp.MustCompile(`m\.Handle\("([^"]+)",\s*(\w+)\(`)
 
 // TestEveryMutatingRouteRequiresTheWriteScope reads the router itself, because
@@ -51,10 +71,20 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 		t.Fatalf("only found %d routes; the registration pattern probably changed, which would make this test vacuous", len(matches))
 	}
 
-	seenWrite, seenSession := 0, 0
+	seenWrite, seenSession, seenAdmin := 0, 0, 0
 	for _, m := range matches {
 		route, wrapper := m[1], m[2]
-		switch want, sessionRoute := sessionOnly[route]; {
+		want, sessionRoute := sessionOnly[route]
+		adminWant, adminRoute := adminOnly[route]
+		switch {
+		case adminRoute:
+			if wrapper != adminWant {
+				t.Errorf("%s is for admins through the %s( wrapper, not %s(", route, adminWant, wrapper)
+			}
+			if adminWant == "ap" && !(strings.HasPrefix(route, "GET ") || readOnlyPosts[route]) {
+				t.Errorf("%s changes stored state, so aw( is expected", route)
+			}
+			seenAdmin++
 		case sessionRoute:
 			if wrapper != want {
 				t.Errorf("%s must refuse agent tokens through the %s( wrapper, not %s(", route, want, wrapper)
@@ -73,6 +103,9 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 	}
 	if seenWrite < 30 {
 		t.Errorf("expected most routes to be write-scoped, got %d", seenWrite)
+	}
+	if seenAdmin != len(adminOnly) {
+		t.Errorf("expected %d admin-only routes, found %d", len(adminOnly), seenAdmin)
 	}
 	if seenSession != len(sessionOnly) {
 		t.Errorf("expected %d session-only routes, found %d", len(sessionOnly), seenSession)

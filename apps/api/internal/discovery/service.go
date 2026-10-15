@@ -25,7 +25,28 @@ type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
 	Links   *LinkChecker
-	mu      sync.Mutex
+	// MayDiscover, when set, says whose schedule may run: accounts it refuses
+	// keep their sources but are skipped by the scheduler (#128).
+	MayDiscover func(ctx context.Context, userID string) bool
+	mu          sync.Mutex
+	// matching holds a *sync.Mutex per account; see LockMatching.
+	matching sync.Map
+}
+
+// LockMatching serializes, for one account, evaluating jobs against its
+// profile and exclusions with re-evaluating them after those change. Without
+// it, a pass that read the exclusions just before the account excluded a
+// company could save an accepted match after the re-evaluation, and a hard
+// rejection must always win. It returns the unlock. A nil Service locks
+// nothing, for servers built without discovery.
+func (s *Service) LockMatching(userID string) (unlock func()) {
+	if s == nil {
+		return func() {}
+	}
+	m, _ := s.matching.LoadOrStore(userID, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 var ErrMissingDesiredTitle = errors.New("add a desired job title to your profile first")
@@ -344,7 +365,83 @@ func (s *Service) prepare(ctx context.Context, userID string, job models.Job, ev
 func (s *Service) finish(ctx context.Context, userID string, run models.DiscoveryRun, runErr error) (models.DiscoveryRun, error) {
 	finished, err := s.Store.FinishDiscoveryRun(ctx, userID, run, runErr)
 	_ = s.Store.TouchDiscoverySchedule(ctx, userID)
+	if run.JobsAdded > 0 {
+		// The run is stored by now; scoring for the other accounts must not
+		// stop because whoever started the run went away.
+		scoreCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), catalogFanOutTimeout)
+		s.ScoreCatalogForEveryone(scoreCtx)
+		cancel()
+	}
 	return finished, err
+}
+
+// Catalog scoring: a job is global and a match is per user, so the jobs one
+// account's discovery brings in are scored for every other account too.
+// Nothing here fetches; it only evaluates jobs already stored.
+const (
+	// catalogBatch bounds one read of unscored jobs; a pass reads batches,
+	// newest first, until none are left.
+	catalogBatch = 2000
+	// catalogFanOutTimeout bounds scoring for every account after a run.
+	catalogFanOutTimeout = 5 * time.Minute
+)
+
+// ScoreCatalog scores the open catalog jobs the user has no match for yet
+// against their profile, exclusions and active filter, and returns how many
+// it scored.
+func (s *Service) ScoreCatalog(ctx context.Context, userID string) (int, error) {
+	defer s.LockMatching(userID)()
+	profile, err := s.Store.Profile(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	blacklist, err := s.Store.Blacklist(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	filter, err := s.Store.ActiveFilter(ctx, userID)
+	if err != nil {
+		return 0, err
+	}
+	filterID := ""
+	if filter != nil {
+		filterID = filter.ID
+	}
+	scored := 0
+	for {
+		jobs, err := s.Store.UnscoredJobs(ctx, userID, catalogBatch)
+		if err != nil || len(jobs) == 0 {
+			return scored, err
+		}
+		now := time.Now()
+		evaluations := make([]store.JobEvaluation, 0, len(jobs))
+		for _, job := range jobs {
+			evaluations = append(evaluations, store.JobEvaluation{JobID: job.ID, Evaluation: matching.Evaluate(profile, blacklist, filter, job.JobInput, now)})
+		}
+		// Saving gives each job a match, so the next read moves on.
+		if err := s.Store.SaveJobMatches(ctx, userID, filterID, evaluations); err != nil {
+			return scored, err
+		}
+		scored += len(evaluations)
+		if len(jobs) < catalogBatch {
+			return scored, nil
+		}
+	}
+}
+
+// ScoreCatalogForEveryone runs ScoreCatalog for each account. A failure for
+// one account is logged and the others still get their matches.
+func (s *Service) ScoreCatalogForEveryone(ctx context.Context) {
+	users, err := s.Store.UserIDs(ctx)
+	if err != nil {
+		slog.Error("list accounts to score the catalog for", "error", err)
+		return
+	}
+	for _, id := range users {
+		if _, err := s.ScoreCatalog(ctx, id); err != nil {
+			slog.Error("score the catalog for an account", "error", err)
+		}
+	}
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -458,6 +555,9 @@ func (s *Service) runDue(ctx context.Context) {
 		return
 	}
 	for _, id := range ids {
+		if s.MayDiscover != nil && !s.MayDiscover(ctx, id) {
+			continue
+		}
 		run, runErr := s.RunUser(ctx, id)
 		if runErr != nil {
 			slog.Error("scheduled discovery failed", "user_id", id, "error", runErr)
