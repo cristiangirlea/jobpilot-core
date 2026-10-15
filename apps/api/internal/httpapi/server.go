@@ -55,7 +55,7 @@ import (
 //	9: users carry email_verified; while the server sends email, an
 //	   unverified account is refused with 403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
-//	   answers, and creating agent tokens.
+//	   answers, creating agent tokens, and linking a Google identity.
 const Contract = 9
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
@@ -203,7 +203,9 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.requireVerified(s.createToken)))
 	m.Handle("DELETE /api/tokens/{id}", session(s.revokeToken))
-	m.Handle("POST /api/auth/google/link", session(s.googleLink))
+	// Linking adds a lasting way in, which a password reset does not remove,
+	// so it waits for a verified address.
+	m.Handle("POST /api/auth/google/link", session(s.requireVerified(s.googleLink)))
 	m.Handle("GET /api/invites", admin(s.listInvites))
 	m.Handle("POST /api/invites", admin(s.createInvite))
 	m.Handle("DELETE /api/invites/{id}", admin(s.deleteInvite))

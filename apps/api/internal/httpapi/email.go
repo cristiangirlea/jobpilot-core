@@ -111,7 +111,8 @@ func (s *Server) sendVerification(ctx context.Context, u models.User) error {
 // requireVerified refuses accounts whose address is not verified yet, while
 // email is on. It guards what costs the server work or outlives a session:
 // discovery runs, everything that generates documents or answers (generate,
-// compose, a tailored CV, resolving a job's answers) and agent tokens.
+// compose, a tailored CV, resolving a job's answers), agent tokens and
+// linking a Google identity.
 func (s *Server) requireVerified(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if s.verificationRequired() {

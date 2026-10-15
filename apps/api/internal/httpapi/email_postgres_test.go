@@ -95,6 +95,9 @@ func TestEmailVerificationAgainstPostgres(t *testing.T) {
 		{"POST", "/api/jobs/00000000-0000-0000-0000-000000000000/compose", `{}`},
 		{"POST", "/api/jobs/00000000-0000-0000-0000-000000000000/cv", `{}`},
 		{"POST", "/api/jobs/00000000-0000-0000-0000-000000000000/answers", `{"questions":[{"text":"Cover letter"}]}`},
+		// Someone who registered another person's address must not attach a
+		// Google login that would survive the owner's password reset.
+		{"POST", "/api/auth/google/link", `{"code":"any"}`},
 	} {
 		if w := call(t, h, c.method, c.path, session, c.body); w.Code != 403 || errorText(t, w) != needsVerifiedEmail {
 			t.Errorf("%s %s should wait for a verified address: %d %s", c.method, c.path, w.Code, w.Body.String())
