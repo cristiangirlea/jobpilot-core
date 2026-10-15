@@ -20,13 +20,38 @@ var readOnlyPosts = map[string]bool{
 
 // sessionOnly routes refuse agent tokens outright, each through the wrapper
 // named here: token management, so that a leaked token cannot mint siblings or
-// revoke itself to cover its tracks, and approving an application, which is
-// the user's consent to send it.
+// revoke itself to cover its tracks, approving an application, which is
+// the user's consent to send it, and invites, which also need an admin.
 var sessionOnly = map[string]string{
+	"GET /api/invites":              "admin",
+	"POST /api/invites":             "admin",
+	"DELETE /api/invites/{id}":      "admin",
 	"GET /api/tokens":               "session",
 	"POST /api/tokens":              "session",
 	"DELETE /api/tokens/{id}":       "session",
 	"POST /api/outbox/{id}/approve": "consent",
+	// Linking a Google identity adds a way into the account.
+	"POST /api/auth/google/link": "session",
+}
+
+// adminOnly routes are for the accounts ADMIN_EMAILS names (#128): ap( for
+// reading, aw( for changing, which also needs the write scope. Discovery is
+// the admin's, and so is the configured AI provider's status. Moving a route
+// off this list hands it to every member.
+var adminOnly = map[string]string{
+	"GET /api/ai/status":                 "ap",
+	"GET /api/discovery/settings":        "ap",
+	"PUT /api/discovery/settings":        "aw",
+	"GET /api/discovery/sources":         "ap",
+	"POST /api/discovery/sources":        "aw",
+	"PUT /api/discovery/sources/{id}":    "aw",
+	"POST /api/discovery/validate":       "ap",
+	"DELETE /api/discovery/sources/{id}": "aw",
+	"GET /api/discovery/runs":            "ap",
+	"POST /api/discovery/run":            "aw",
+	"POST /api/discovery/recommended":    "aw",
+	"GET /api/discovery/suggestions":     "ap",
+	"POST /api/discovery/detect":         "ap",
 }
 
 var routePattern = regexp.MustCompile(`m\.Handle\("([^"]+)",\s*(\w+)\(`)
@@ -46,10 +71,20 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 		t.Fatalf("only found %d routes; the registration pattern probably changed, which would make this test vacuous", len(matches))
 	}
 
-	seenWrite, seenSession := 0, 0
+	seenWrite, seenSession, seenAdmin := 0, 0, 0
 	for _, m := range matches {
 		route, wrapper := m[1], m[2]
-		switch want, sessionRoute := sessionOnly[route]; {
+		want, sessionRoute := sessionOnly[route]
+		adminWant, adminRoute := adminOnly[route]
+		switch {
+		case adminRoute:
+			if wrapper != adminWant {
+				t.Errorf("%s is for admins through the %s( wrapper, not %s(", route, adminWant, wrapper)
+			}
+			if adminWant == "ap" && !(strings.HasPrefix(route, "GET ") || readOnlyPosts[route]) {
+				t.Errorf("%s changes stored state, so aw( is expected", route)
+			}
+			seenAdmin++
 		case sessionRoute:
 			if wrapper != want {
 				t.Errorf("%s must refuse agent tokens through the %s( wrapper, not %s(", route, want, wrapper)
@@ -69,14 +104,17 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 	if seenWrite < 30 {
 		t.Errorf("expected most routes to be write-scoped, got %d", seenWrite)
 	}
+	if seenAdmin != len(adminOnly) {
+		t.Errorf("expected %d admin-only routes, found %d", len(adminOnly), seenAdmin)
+	}
 	if seenSession != len(sessionOnly) {
 		t.Errorf("expected %d session-only routes, found %d", len(sessionOnly), seenSession)
 	}
 }
 
-// TestUnauthenticatedRoutesAreTheExpectedThree guards the other direction:
-// everything except health, register and login goes through a wrapper.
-func TestUnauthenticatedRoutesAreTheExpectedThree(t *testing.T) {
+// TestUnauthenticatedRoutesAreTheExpectedOnes guards the other direction:
+// everything except health and signing in goes through a wrapper.
+func TestUnauthenticatedRoutesAreTheExpectedOnes(t *testing.T) {
 	source, err := os.ReadFile("server.go")
 	if err != nil {
 		t.Fatal(err)
@@ -86,6 +124,13 @@ func TestUnauthenticatedRoutesAreTheExpectedThree(t *testing.T) {
 		"GET /api/health":         true,
 		"POST /api/auth/register": true,
 		"POST /api/auth/login":    true,
+		// Sign-in with Google: the provider list, the redirect to Google and
+		// back, and the single-use code the web app exchanges for its token.
+		"GET /api/auth/providers":        true,
+		"GET /api/auth/google/start":     true,
+		"GET /api/auth/google/callback":  true,
+		"POST /api/auth/google/exchange": true,
+		"GET /api/auth/registration":     true,
 	}
 	for _, m := range open {
 		if !want[m[1]] {

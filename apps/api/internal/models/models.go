@@ -219,6 +219,16 @@ type DiscoveredJob struct {
 	Input      JobInput
 }
 
+// CatalogSummary is what a user who does not run discovery sees of it: how
+// fresh the shared catalog is and how many open jobs fit them.
+type CatalogSummary struct {
+	LastJobAt   *time.Time `json:"last_job_at"`
+	JobsLast24h int        `json:"jobs_last_24h"`
+	JobsLast7d  int        `json:"jobs_last_7d"`
+	OpenJobs    int        `json:"open_jobs"`
+	OpenMatches int        `json:"open_matches"`
+}
+
 type DiscoveryRun struct {
 	ID                   string     `json:"id"`
 	Status               string     `json:"status"`
@@ -359,6 +369,17 @@ type OutboxCV struct {
 	Approved  bool     `json:"approved"`
 	Alignment *float64 `json:"alignment,omitempty"`
 	Missing   []string `json:"missing,omitempty"`
+}
+
+// Invite is a single-use sign-up code an admin created. The code itself is
+// returned once at creation; CodePrefix tells two invites apart.
+type Invite struct {
+	ID         string     `json:"id"`
+	Note       string     `json:"note"`
+	CodePrefix string     `json:"code_prefix"`
+	CreatedAt  time.Time  `json:"created_at"`
+	ExpiresAt  time.Time  `json:"expires_at"`
+	UsedAt     *time.Time `json:"used_at,omitempty"`
 }
 
 // AgentToken is a long-lived credential for an agent host or script. The

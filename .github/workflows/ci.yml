@@ -49,6 +49,10 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -race ./...
+      # Known vulnerabilities the code reaches, in the standard library and the modules; built by
+      # the toolchain above, which must be the module's own. The version matches the Makefile's.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   web:
     name: web (typecheck)
@@ -138,7 +142,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          # Go 1.25 builds both modules; the go job already proves the API's own toolchain.
+          # Both modules name the same Go release.
           go-version-file: apps/mcp/go.mod
           cache-dependency-path: |
             apps/api/go.sum
@@ -186,6 +190,9 @@ jobs:
           FRONTEND_URL: http://localhost:3000
           TOKEN_TTL_HOURS: "1"
           LLM_PROVIDER: none
+          # The smoke scripts and the MCP end-to-end test create their own
+          # accounts; invite-only sign-up has its own Postgres tests.
+          REGISTRATION: open
           # The MCP end-to-end test serves a fake Greenhouse here: a form, so
           # the outbox approval and withdrawal paths are covered, and board
           # listings, so a discovery run is. Fake Ashby and Recruitee boards

@@ -109,6 +109,7 @@ API_ADDR="127.0.0.1:$api_port" \
 	JWT_SECRET="throwaway-$id" \
 	TOKEN_TTL_HOURS=1 \
 	LLM_PROVIDER=none \
+	REGISTRATION=open \
 	ATS_GREENHOUSE_URL="http://localhost:$ats_port" \
 	ATS_ASHBY_URL="http://localhost:$ats_port" \
 	ATS_RECRUITEE_URL="http://localhost:$ats_port" \

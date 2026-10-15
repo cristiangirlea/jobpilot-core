@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"jobpilot/core/api/internal/ats"
+	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/config"
 	database "jobpilot/core/api/internal/db"
 	"jobpilot/core/api/internal/discovery"
@@ -20,6 +21,10 @@ import (
 
 func main() {
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		slog.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	// SIGTERM is how Kubernetes and docker stop a container; it starts the same drain as Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -78,8 +83,15 @@ func main() {
 	slog.Info("AI adapter configured", "provider", aiClient.Describe())
 	discoveryService := discovery.NewService(dataStore)
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
+	google, err := googleSignIn(ctx, cfg)
+	if err != nil {
+		slog.Error("invalid Google sign-in configuration", "error", err)
+		os.Exit(1)
+	}
+	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, UserAgentTokens: cfg.UserAgentTokens}
+	// Scheduled discovery runs only for admins (#128): it is theirs to automate.
+	discoveryService.MayDiscover = api.IsAdmin
 	go discoveryService.Start(ctx)
-	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL}
 	if cfg.OutboxSending {
 		outboxSender := sender.New(dataStore, sender.NewGreenhouse(cfg.ATSGreenhouseURL), cfg.OutboxSendDelay)
 		go outboxSender.Start(ctx)
@@ -99,7 +111,7 @@ func main() {
 			slog.Error("shutdown did not finish draining", "error", err)
 		}
 	}()
-	slog.Info("JobPilot API listening", "addr", cfg.Addr)
+	slog.Info("JobPilot API listening", "addr", cfg.Addr, "registration", cfg.Registration, "admins", len(cfg.AdminEmails))
 	if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
@@ -110,4 +122,17 @@ func main() {
 // formReader reads employer forms from the ATS origins the configuration names.
 func formReader(cfg config.Config) *ats.Reader {
 	return ats.NewReader().WithGreenhouseBase(cfg.ATSGreenhouseURL).WithAshbyBase(cfg.ATSAshbyURL).WithRecruiteeBase(cfg.ATSRecruiteeURL)
+}
+
+// googleSignIn is nil when GOOGLE_CLIENT_ID is unset, which keeps sign-in to
+// email and password. Set, it needs the secret and redirect URL as well.
+func googleSignIn(ctx context.Context, cfg config.Config) (*auth.OIDC, error) {
+	if !cfg.Google.Enabled() {
+		return nil, nil
+	}
+	o, err := auth.NewOIDC(ctx, auth.OIDCConfig{Provider: "google", Endpoints: auth.Google, ClientID: cfg.Google.ClientID, ClientSecret: cfg.Google.ClientSecret, RedirectURL: cfg.Google.RedirectURL, Secret: cfg.JWTSecret})
+	if err == nil {
+		slog.Info("sign-in with Google enabled", "signup", cfg.Google.AllowSignup)
+	}
+	return o, err
 }

@@ -106,7 +106,7 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 	}
 
 	// 3. Build one. It is stored unapproved, so it cannot be sent yet.
-	tailored := cv.Tailor(ctx, s.LLM, profile, job.Job, job.Match, baseText)
+	tailored := cv.Tailor(ctx, s.llmFor(ctx), profile, job.Job, job.Match, baseText)
 	data, err := cv.RenderPDF(tailored)
 	if err != nil {
 		return cvDecision{}, err

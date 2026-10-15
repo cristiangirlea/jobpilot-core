@@ -12,11 +12,15 @@ step's result in one line; on a failure, show the error text and fix it before r
    go mod tidy -diff
    go vet ./...
    go test -race ./...
+   go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
    ```
+
+   govulncheck must be built by the module's own Go release (`go run` inside the module does that;
+   a binary built by an older Go fails to load the packages). `make vulncheck` runs it for both.
 
    `-race` needs cgo. If `go env CGO_ENABLED` is `0` (Windows without gcc), run the tests in a
    container instead, from the repository root in Git Bash:
-   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version> go test -race ./...`,
+   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version, e.g. 1.27.2> go test -race ./...`,
    or run `go test ./...` and say in the report that `-race` was skipped.
 2. Web: `cd apps/web && npm ci && npm run typecheck`.
 3. Images, only when a Dockerfile, `go.mod`, `package*.json` or `migrations/` changed:
@@ -37,8 +41,8 @@ step's result in one line; on a failure, show the error text and fix it before r
    - runs `go test -count=1 -run Postgres ./...` in `apps/api` against it;
    - builds the API binary into a temporary directory and starts it on `127.0.0.1:<free port>`
      with the fake ATS on another free port (random in 20000-39999, checked with `ss` or
-     `Get-NetTCPConnection`), `LLM_PROVIDER=none`, `OUTBOX_SENDER_ENABLED=true` and
-     `OUTBOX_SEND_DELAY_SECONDS=3`;
+     `Get-NetTCPConnection`), `LLM_PROVIDER=none`, `REGISTRATION=open` (the scripts create their
+     own accounts), `OUTBOX_SENDER_ENABLED=true` and `OUTBOX_SEND_DELAY_SECONDS=3`;
    - before each smoke script and around the MCP end-to-end test, confirms the only listener on
      the API's port runs the binary this run built (its unique path; in Git Bash `$!` is a bash
      stub, not `api.exe`, so a PID comparison would not do), its log says it listens there, and
