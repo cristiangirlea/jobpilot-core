@@ -47,9 +47,11 @@ func PrepareLogin() { dummyHash() }
 // CheckLogin verifies a password for an account that may not exist. Without
 // an account it still runs one bcrypt comparison, against dummyHash, so the
 // answer takes as long as a wrong password and timing does not tell whether
-// an email is registered.
+// an email is registered. An account with no password (created through
+// Google, empty hash) is answered the same way: bcrypt would refuse the
+// empty hash at once, and that speed would tell.
 func CheckLogin(hash string, found bool, password string) bool {
-	if !found {
+	if !found || hash == "" {
 		Verify(dummyHash(), password)
 		return false
 	}
