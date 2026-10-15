@@ -14,7 +14,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 | Path | Holds |
 |---|---|
 | `apps/api` | Go module `jobpilot/core/api`. `cmd/api` (server), `cmd/seed`; `internal/httpapi/server.go` (every route), `store` (SQL, user isolation), `matching`, `discovery`, `generator`, `ats` (employer form readers), `cv`, `answers`, `llm`, `auth` (JWT, `jpat_` agent tokens). |
-| `apps/mcp` | Separate Go module `jobpilot/core/mcp` (needs Go 1.25): stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
+| `apps/mcp` | Separate Go module `jobpilot/core/mcp`: stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |
 | `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`. |
@@ -30,7 +30,11 @@ test -z "$(gofmt -l .)"   # LF line endings are pinned in .gitattributes
 go mod tidy -diff
 go vet ./...
 go test -race ./...       # -race needs cgo: on Windows without gcc run it in a golang container, or drop -race locally
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...   # nothing reachable; `make vulncheck`
 ```
+
+Both modules name the same Go release in `go.mod` (1.27.2), which CI installs; `apps/api/Dockerfile`
+builds on `golang:1.27.2-alpine` (the golang images run only their own release). Move them together.
 
 then `npm ci && npm run typecheck` in `apps/web`; `docker build` of `apps/api`, `apps/web`
 (`--build-arg NEXT_PUBLIC_API_URL=...`) and `migrations`; kustomize + kubeconform on `deploy/base`

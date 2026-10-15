@@ -12,11 +12,15 @@ step's result in one line; on a failure, show the error text and fix it before r
    go mod tidy -diff
    go vet ./...
    go test -race ./...
+   go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
    ```
+
+   govulncheck must be built by the module's own Go release (`go run` inside the module does that;
+   a binary built by an older Go fails to load the packages). `make vulncheck` runs it for both.
 
    `-race` needs cgo. If `go env CGO_ENABLED` is `0` (Windows without gcc), run the tests in a
    container instead, from the repository root in Git Bash:
-   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version> go test -race ./...`,
+   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version, e.g. 1.27.2> go test -race ./...`,
    or run `go test ./...` and say in the report that `-race` was skipped.
 2. Web: `cd apps/web && npm ci && npm run typecheck`.
 3. Images, only when a Dockerfile, `go.mod`, `package*.json` or `migrations/` changed:

@@ -181,7 +181,7 @@ apps/
     components/                        navigation, forms, chips, UI helpers
     lib/api.ts                         authenticated API client
     lib/types.ts                       frontend data types
-  mcp/                                 separate Go module (Go 1.25)
+  mcp/                                 separate Go module
     main.go                            stdio MCP server entrypoint
     internal/jobpilot/client.go        REST client: bearer token or login
     internal/jobpilot/tools.go         tool set and host instructions
@@ -746,7 +746,7 @@ The HTTP layer uses strict JSON decoding with unknown fields rejected and a 2 Mi
 
 `apps/mcp` is a Model Context Protocol server that lets an agent host such as Claude Code work with JobPilot through typed tools. It is a client of the REST API and nothing more: every call carries the user's bearer token, so user isolation, the rejection locks, and the no-submission boundary are enforced by the API exactly as they are for the web UI.
 
-It is its own Go module because the MCP SDK requires Go 1.25 and brings dependencies the API does not need. The API module and its Go 1.23 container build are unchanged.
+It is its own Go module because the MCP SDK brings dependencies the API does not need. Both modules name the same Go release (1.27.2).
 
 ### Build and register
 
@@ -1009,7 +1009,7 @@ Run `make seed` only after registering at least one user. The seed command delib
 
 ### Native backend
 
-Requires Go 1.23 and PostgreSQL:
+Requires Go 1.27.2 (the `go` line in `go.mod`) and PostgreSQL:
 
 ```bash
 cd apps/api
@@ -1020,7 +1020,7 @@ go run ./cmd/api
 
 ### Native MCP server
 
-Requires Go 1.25. The unit tests run against a fake API; only the binary itself needs a running API:
+Requires Go 1.27.2. The unit tests run against a fake API; only the binary itself needs a running API:
 
 ```bash
 cd apps/mcp
