@@ -232,9 +232,20 @@ type DiscoveryRun struct {
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 }
 
+// Answer scopes: where an approved answer is reused.
+const (
+	AnswerScopeGlobal     = "global"      // every job
+	AnswerScopeRoleFamily = "role_family" // jobs of the answer's role family
+	AnswerScopeJob        = "job"         // the answer's job only
+)
+
 // AnswerEntry is one reusable application answer. Answers are private per user
 // and are only reused once approved, so an unreviewed generated answer can
 // never reach an employer on its own.
+//
+// Scope is where an approved answer is reused: "global" (every job),
+// "role_family" (jobs of RoleFamily), or "job" (JobID only). For the other
+// scopes JobID is the job a draft was written for, if any.
 type AnswerEntry struct {
 	ID                 string     `json:"id,omitempty"`
 	QuestionKey        string     `json:"question_key"`
@@ -242,6 +253,8 @@ type AnswerEntry struct {
 	QuestionNormalized string     `json:"question_normalized,omitempty"`
 	Answer             string     `json:"answer"`
 	RoleFamily         string     `json:"role_family"`
+	Scope              string     `json:"scope"`
+	JobID              string     `json:"job_id,omitempty"`
 	Technologies       []string   `json:"technologies"`
 	Source             string     `json:"source"`
 	Approved           bool       `json:"approved"`
@@ -359,4 +372,27 @@ type AgentToken struct {
 	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
 	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
 	RevokedAt   *time.Time `json:"revoked_at,omitempty"`
+}
+
+// Notification is one thing that waits, or waited, for the user. Kind names
+// what it is (answer, cv, outbox, and kinds added later) and SubjectID the
+// thing in its own table; Detail holds what a reader needs to show it,
+// including href, the web page where it is resolved.
+type Notification struct {
+	ID         string         `json:"id"`
+	Kind       string         `json:"kind"`
+	SubjectID  string         `json:"subject_id"`
+	Title      string         `json:"title"`
+	Detail     map[string]any `json:"detail"`
+	CreatedAt  time.Time      `json:"created_at"`
+	UpdatedAt  time.Time      `json:"updated_at"`
+	ResolvedAt *time.Time     `json:"resolved_at,omitempty"`
+}
+
+// NotificationFeed is a page of notifications and how many are open in all.
+// Next, when set, is the after value for the following page.
+type NotificationFeed struct {
+	Open  int            `json:"open"`
+	Items []Notification `json:"items"`
+	Next  string         `json:"next,omitempty"`
 }

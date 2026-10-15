@@ -222,6 +222,7 @@ A SHA-256 fingerprint deduplicates a job using normalized company, normalized ti
 - `discovery_sources`
 - `discovery_runs`
 - `outbound_clicks`
+- `notifications`
 
 Every job visible to a user is reached through that user's `job_matches` row. Profiles, filters, match explanations, documents, applications, and history are always scoped by `user_id` in the store layer.
 
@@ -232,6 +233,7 @@ Every job visible to a user is reached through that user's `job_matches` row. Pr
 | `/register` | Create an account |
 | `/login` | Authenticate |
 | `/dashboard` | Completeness, catalog and application metrics, top recommendations, next actions |
+| `/notifications` | Everything waiting for the user's decision, with a badge in the navigation; history of what was resolved |
 | `/profile` | Profile overview |
 | `/profile/setup` | Contact, job preferences, seniorities, authorization, compensation, notice |
 | `/profile/experience` | Current and previous employers and work history |
@@ -474,8 +476,8 @@ Every completion is cached in `llm_cache`, keyed on provider, model, task, syste
 Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
 
 1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone. A salary is stated with its period, "85,000 EUR per year" (yearly, as matching compares it with job salary ranges; a contract rate is per day), and is offered for review, because an employer will hold the candidate to a period the candidate did not write. A notice period of `0` reads "Available immediately"; a bare number, whose unit is unknown, is offered for review.
-2. **Exact reuse** - this same question, previously approved for this role family.
-3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
+2. **Exact reuse** - this same question, previously approved for this job, this role family, or every job, the narrowest first.
+3. **Similar reuse** - the same canonical question, approved for this job, for a sufficiently similar role and stack, or for every job.
 4. **Provider** - only on a genuine miss. Stored unapproved.
 5. **Deterministic wording** - the existing generator output.
 
@@ -484,6 +486,8 @@ The reuse keys are all deterministic and computed locally:
 - **Canonical question key** from a local pattern table, so "Why are you a good fit?" and "What makes you the right candidate?" resolve to the same stored answer.
 - **Role family** from the job title, matched on whole words.
 - **Technology signature** from a closed vocabulary, ranked by how often each technology is mentioned and then sorted, so the stored signature is stable and comparable across postings.
+
+Each answer has a **scope**, chosen when it is saved or approved (web, MCP `save_answer` and `approve_answer`): `global` (every job), `role_family` (jobs of its role family, the default, and what every answer was before scopes), or `job` (one job only). A draft remembers the job it was written for, so approving it can narrow it to that job. Resolution prefers the narrowest scope: this job, then this role family, then an answer filed under the `general` family, then every job. A job-only answer is never offered to another job.
 
 Safety rules:
 
@@ -602,6 +606,12 @@ Approval is the user's consent to send exactly what the entry says, so it is che
 Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten.
 
 Measured against a real Greenhouse posting with a 17-field form, 14 fields resolved without a single model call: 10 from stored profile facts, 2 from the answer bank, plus the CV and the cover letter.
+
+## Notifications
+
+One list per user of everything that waits for the user's decision: unapproved answers (`answer`), unapproved CVs (`cv`), and outbox entries in `needs_review` or `ready` (`outbox`). A row opens when an item starts waiting and is resolved, not deleted, once it stops, so the list keeps a history; an item that waits again opens a new row. The web app shows the open count as a badge and the list at `/notifications`; agents read it with `list_pending_decisions` and the `review_pending_decisions` prompt.
+
+Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed changes nothing; pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
 
 ## Applications and referral attribution
 
@@ -723,6 +733,7 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 
 `PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
 | `GET` | `/api/dashboard` | User-specific metrics and recommendations |
+| `GET` | `/api/notifications` | What waits for the user (`state=open`, the default, oldest first, or `all` with the history, newest first; `limit` 1 to 200, default 50; `after`, the previous page's `next`) and `open`, the count of open items |
 
 ### Agent token endpoints
 
@@ -769,7 +780,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 25 KB for 32 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
+The catalog an agent host downloads at the start of every session is about 27 KB for 33 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
 
 ### Tools
 
@@ -778,8 +789,10 @@ The catalog an agent host downloads at the start of every session is about 25 KB
 | `get_profile` | read | Candidate facts the agent may use when writing |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
+| `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history, and `after` the following page |
 | `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
+| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
@@ -804,8 +817,8 @@ Apply engine:
 | `detect_board` | read | Work out the provider and identifier behind a careers URL |
 | `list_board_suggestions` | read | Curated employer boards known to work as sources |
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
-| `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording |
-| `approve_answer` | write | Approve a saved answer, optionally replacing its text |
+| `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording, for every job, a role family or one job |
+| `approve_answer` | write | Approve a saved answer, optionally replacing its text and choosing its scope |
 | `approve_cv` | write | Approve a CV for reuse |
 | `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
 | `compose_application` | write | Assemble a whole application into the outbox for review |
@@ -828,8 +841,9 @@ Server instructions tell the host that composing does not send, that blockers an
 |---|---|---|
 | `prepare_application` | `job_id` (required) | Walk one job from its match explanation to a tracked application, stopping at a rejection and leaving the submission to the user |
 | `weekly_review` | none | Summarise pipeline health, what has stalled, and what to do next; reads the filter to name the rule behind the strongest rejections |
+| `review_pending_decisions` | none | Go through what waits for the user one item at a time, show each in the exact words returned, and approve an answer or CV only on the user's word; applications are approved in the web app |
 
-Both encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
+All three encode the rules that matter at the point of use: stop at a rejected job and explain which rule applied, never claim an application was submitted, and write only from stored facts.
 
 ### Verification
 
@@ -881,6 +895,8 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
+| `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
+| `020_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 
 Core entities:
