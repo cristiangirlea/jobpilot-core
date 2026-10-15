@@ -10,7 +10,7 @@ import (
 )
 
 // Notification kinds that triggers on their own tables keep current
-// (migrations/019_notifications.sql). Other kinds are opened and resolved by
+// (migrations/020_notifications.sql). Other kinds are opened and resolved by
 // their own code through OpenNotification and ResolveNotification.
 const (
 	NotificationAnswer = "answer" // an answer bank entry waiting for approval

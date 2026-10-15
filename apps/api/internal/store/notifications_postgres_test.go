@@ -133,7 +133,7 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 	}
 
 	// Approving the answer resolves it; the history keeps it.
-	if _, err := st.UpdateAnswer(ctx, ana.ID, answer.ID, "", true); err != nil {
+	if _, err := st.UpdateAnswer(ctx, ana.ID, answer.ID, "", true, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	f = feed(ana.ID, "")
@@ -145,7 +145,7 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 		t.Fatalf("the resolved answer should stay in the history: %+v", got)
 	}
 	// Withdrawing the approval makes it wait again, as a new row.
-	if _, err := st.UpdateAnswer(ctx, ana.ID, answer.ID, "", false); err != nil {
+	if _, err := st.UpdateAnswer(ctx, ana.ID, answer.ID, "", false, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if again := open(feed(ana.ID, ""), NotificationAnswer, answer.ID); again.ID == a.ID {
@@ -177,7 +177,7 @@ func TestNotificationsAgainstPostgres(t *testing.T) {
 	// in between leaves two resolved rows, each with its own times.
 	quick := draft(ana.ID, "What is your notice period?")
 	for _, approved := range []bool{true, false, true} {
-		if _, err := st.UpdateAnswer(ctx, ana.ID, quick.ID, "", approved); err != nil {
+		if _, err := st.UpdateAnswer(ctx, ana.ID, quick.ID, "", approved, "", ""); err != nil {
 			t.Fatal(err)
 		}
 	}

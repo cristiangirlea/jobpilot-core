@@ -232,9 +232,20 @@ type DiscoveryRun struct {
 	CompletedAt          *time.Time `json:"completed_at,omitempty"`
 }
 
+// Answer scopes: where an approved answer is reused.
+const (
+	AnswerScopeGlobal     = "global"      // every job
+	AnswerScopeRoleFamily = "role_family" // jobs of the answer's role family
+	AnswerScopeJob        = "job"         // the answer's job only
+)
+
 // AnswerEntry is one reusable application answer. Answers are private per user
 // and are only reused once approved, so an unreviewed generated answer can
 // never reach an employer on its own.
+//
+// Scope is where an approved answer is reused: "global" (every job),
+// "role_family" (jobs of RoleFamily), or "job" (JobID only). For the other
+// scopes JobID is the job a draft was written for, if any.
 type AnswerEntry struct {
 	ID                 string     `json:"id,omitempty"`
 	QuestionKey        string     `json:"question_key"`
@@ -242,6 +253,8 @@ type AnswerEntry struct {
 	QuestionNormalized string     `json:"question_normalized,omitempty"`
 	Answer             string     `json:"answer"`
 	RoleFamily         string     `json:"role_family"`
+	Scope              string     `json:"scope"`
+	JobID              string     `json:"job_id,omitempty"`
 	Technologies       []string   `json:"technologies"`
 	Source             string     `json:"source"`
 	Approved           bool       `json:"approved"`

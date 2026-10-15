@@ -13,6 +13,8 @@ type AnswerEntry struct {
 	QuestionText string     `json:"question_text"`
 	Answer       string     `json:"answer"`
 	RoleFamily   string     `json:"role_family"`
+	Scope        string     `json:"scope,omitempty"`
+	JobID        string     `json:"job_id,omitempty"`
 	Technologies []string   `json:"technologies,omitempty"`
 	Source       string     `json:"source"`
 	Approved     bool       `json:"approved"`

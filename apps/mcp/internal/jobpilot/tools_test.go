@@ -254,7 +254,7 @@ func (f *fakeAPI) handler() http.Handler {
 			send(w, 200, `{"status":"ok"}`)
 			return
 		}
-		send(w, 200, `{"status":"ok","contract":1}`)
+		send(w, 200, `{"status":"ok","contract":6}`)
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" {
@@ -297,17 +297,24 @@ func sessionWithClient(t *testing.T, client *mcp.Client) *mcp.ClientSession {
 
 func connect(t *testing.T, token string, logger *slog.Logger, host *mcp.Client) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
-	return connectWith(t, token, logger, host, false)
+	return connectWith(t, token, logger, host, false, true)
 }
 
 // sessionAgainstOldAPI wires a server whose startup contract check saw an API
 // from before the health endpoint reported a version.
 func sessionAgainstOldAPI(t *testing.T) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
-	return connectWith(t, "test-token", nil, nil, true)
+	return connectWith(t, "test-token", nil, nil, true, true)
 }
 
-func connectWith(t *testing.T, token string, logger *slog.Logger, host *mcp.Client, oldAPI bool) (*mcp.ClientSession, *fakeAPI) {
+// sessionUnchecked wires a server whose startup contract check never
+// succeeded, as when the API was down when the server started.
+func sessionUnchecked(t *testing.T, oldAPI bool) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
+	return connectWith(t, "test-token", nil, nil, oldAPI, false)
+}
+
+func connectWith(t *testing.T, token string, logger *slog.Logger, host *mcp.Client, oldAPI, check bool) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
 	fake := &fakeAPI{noContract: oldAPI}
 	srv := httptest.NewServer(fake.handler())
@@ -316,8 +323,10 @@ func connectWith(t *testing.T, token string, logger *slog.Logger, host *mcp.Clie
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = client.CheckContract(context.Background()); err != nil {
-		t.Fatal(err)
+	if check {
+		if _, err = client.CheckContract(context.Background()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	server := NewServer(client, "test", logger)
 	st, ct := mcp.NewInMemoryTransports()
