@@ -50,6 +50,11 @@ type Options struct {
 // server tolerates a newer API and warns about an older one.
 const requiredContract = 1
 
+// scopesContract is the API contract from which an answer carries a scope. An
+// older API ignores the field and keeps the answer for the whole role family,
+// which is wider than the user chose, so a narrower scope is refused there.
+const scopesContract = 6
+
 // contractUnknown means no health check has succeeded yet. Unknown counts as
 // compatible: an API that is unreachable at startup must not disable tools
 // that will work once it is up.
@@ -159,10 +164,28 @@ func (c *Client) CheckContract(ctx context.Context) (Health, error) {
 
 // PredatesContract reports whether the API was seen to be older than this
 // server expects. Only a successful check can say yes.
-func (c *Client) PredatesContract() bool {
+func (c *Client) PredatesContract() bool { return c.predates(requiredContract) }
+
+// supports reports whether the API is known to meet version. With no
+// successful check yet it checks now, and an API it still cannot check counts
+// as not supporting it.
+func (c *Client) supports(ctx context.Context, version int) bool {
+	c.mu.Lock()
+	known := c.contract != contractUnknown
+	c.mu.Unlock()
+	if !known {
+		if _, err := c.CheckContract(ctx); err != nil {
+			return false
+		}
+	}
+	return !c.predates(version)
+}
+
+// predates reports whether the API was seen to be older than version.
+func (c *Client) predates(version int) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.contract != contractUnknown && c.contract < requiredContract
+	return c.contract != contractUnknown && c.contract < version
 }
 
 func (c *Client) canLogin() bool { return c.email != "" && c.password != "" }

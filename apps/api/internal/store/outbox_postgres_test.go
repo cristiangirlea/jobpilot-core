@@ -165,14 +165,28 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	draft := newDraft("Why do you want this role?", false)
 	withDraft := compose(job, cv.ID, []models.OutboxAnswer{required("Why this role?", "ai", draft.Answer, draft.ID)})
 	refuses("a required AI draft not approved", withDraft, "not approved")
-	if _, err := st.UpdateAnswer(ctx, ana.ID, draft.ID, "", true); err != nil {
+	if _, err := st.UpdateAnswer(ctx, ana.ID, draft.ID, "", true, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	approves("a required AI draft approved since compose, as worded", withDraft)
 
+	// Drafts for several jobs share one bank entry: approving it for another
+	// job only does not approve it here.
+	elsewhere := newJob("elsewhere")
+	shared := newDraft("Why this team?", false)
+	withShared := compose(job, cv.ID, []models.OutboxAnswer{required("Why this team?", "ai", shared.Answer, shared.ID)})
+	if _, err := st.UpdateAnswer(ctx, ana.ID, shared.ID, "", true, models.AnswerScopeJob, elsewhere.ID); err != nil {
+		t.Fatal(err)
+	}
+	refuses("a required AI draft approved for another job only", withShared, "another job only")
+	if _, err := st.UpdateAnswer(ctx, ana.ID, shared.ID, "", true, "", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	approves("a required AI draft approved for this job only", withShared)
+
 	edited := newDraft("What would you build first?", true)
 	withEdited := compose(job, cv.ID, []models.OutboxAnswer{required("Build first?", "ai", edited.Answer, edited.ID)})
-	if _, err := st.UpdateAnswer(ctx, ana.ID, edited.ID, "Something else entirely.", true); err != nil {
+	if _, err := st.UpdateAnswer(ctx, ana.ID, edited.ID, "Something else entirely.", true, "", ""); err != nil {
 		t.Fatal(err)
 	}
 	refuses("a required AI draft approved with other wording", withEdited, "You changed your answer")

@@ -474,8 +474,8 @@ Every completion is cached in `llm_cache`, keyed on provider, model, task, syste
 Application questions resolve in a fixed order, and that order is the cost model. Only step four can cost anything.
 
 1. **Stored profile facts** - name, phone, notice period, authorization, salary, links. Pure lookups; no review needed. First and last name come from the profile's given and family names; until those are filled, a split of the full name is offered for review, because which word is the surname cannot be told from the name alone. A salary is stated with its period, "85,000 EUR per year" (yearly, as matching compares it with job salary ranges; a contract rate is per day), and is offered for review, because an employer will hold the candidate to a period the candidate did not write. A notice period of `0` reads "Available immediately"; a bare number, whose unit is unknown, is offered for review.
-2. **Exact reuse** - this same question, previously approved for this role family.
-3. **Similar reuse** - the same canonical question, approved for a sufficiently similar role and stack.
+2. **Exact reuse** - this same question, previously approved for this job, this role family, or every job, the narrowest first.
+3. **Similar reuse** - the same canonical question, approved for this job, for a sufficiently similar role and stack, or for every job.
 4. **Provider** - only on a genuine miss. Stored unapproved.
 5. **Deterministic wording** - the existing generator output.
 
@@ -484,6 +484,8 @@ The reuse keys are all deterministic and computed locally:
 - **Canonical question key** from a local pattern table, so "Why are you a good fit?" and "What makes you the right candidate?" resolve to the same stored answer.
 - **Role family** from the job title, matched on whole words.
 - **Technology signature** from a closed vocabulary, ranked by how often each technology is mentioned and then sorted, so the stored signature is stable and comparable across postings.
+
+Each answer has a **scope**, chosen when it is saved or approved (web, MCP `save_answer` and `approve_answer`): `global` (every job), `role_family` (jobs of its role family, the default, and what every answer was before scopes), or `job` (one job only). A draft remembers the job it was written for, so approving it can narrow it to that job. Resolution prefers the narrowest scope: this job, then this role family, then an answer filed under the `general` family, then every job. A job-only answer is never offered to another job.
 
 Safety rules:
 
@@ -800,8 +802,8 @@ Apply engine:
 | `detect_board` | read | Work out the provider and identifier behind a careers URL |
 | `list_board_suggestions` | read | Curated employer boards known to work as sources |
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
-| `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording |
-| `approve_answer` | write | Approve a saved answer, optionally replacing its text |
+| `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording, for every job, a role family or one job |
+| `approve_answer` | write | Approve a saved answer, optionally replacing its text and choosing its scope |
 | `approve_cv` | write | Approve a CV for reuse |
 | `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
 | `compose_application` | write | Assemble a whole application into the outbox for review |
@@ -877,6 +879,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `016_job_reposts.sql` | Fingerprints of reposts, recorded against the job they repost |
 | `017_employer_links.sql` | The employer's own application page behind an aggregator's posting |
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
+| `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
 
 Core entities:
 

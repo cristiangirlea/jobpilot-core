@@ -32,8 +32,8 @@ const similarityFloor = 0.34
 
 // Bank is the persistence the resolver needs. Implemented by the store.
 type Bank interface {
-	FindAnswer(ctx context.Context, userID, normalized, roleFamily string) (models.AnswerEntry, bool, error)
-	CandidateAnswers(ctx context.Context, userID, questionKey string, limit int) ([]models.AnswerEntry, error)
+	FindAnswer(ctx context.Context, userID, normalized, roleFamily, jobID string) (models.AnswerEntry, bool, error)
+	CandidateAnswers(ctx context.Context, userID, questionKey, roleFamily, jobID string, limit int) ([]models.AnswerEntry, error)
 	SaveAnswer(ctx context.Context, userID string, entry models.AnswerEntry) (models.AnswerEntry, error)
 	TouchAnswer(ctx context.Context, userID, id string) error
 }
@@ -138,9 +138,10 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 		}
 	}
 
-	// 2. This exact question, answered before for this role family.
+	// 2. This exact question, answered before for this job, this role family,
+	// or every job, the narrowest first.
 	if s.Bank != nil {
-		if entry, found, err := s.Bank.FindAnswer(ctx, userID, normalized, family); err == nil && found && entry.Approved {
+		if entry, found, err := s.Bank.FindAnswer(ctx, userID, normalized, family, subject.Job.ID); err == nil && found && entry.Approved {
 			if answer, usable := fitToQuestion(entry.Answer, question.Options, question.Kind); usable {
 				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
 				resolution.Answer, resolution.Source = answer, SourceBank
@@ -152,7 +153,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 
 	// 3. The same kind of question, answered for a sufficiently similar stack.
 	if s.Bank != nil && key != "" && !skillScoped {
-		if entry, ok := s.bestSimilar(ctx, userID, key, family, signature); ok {
+		if entry, ok := s.bestSimilar(ctx, userID, key, family, subject.Job.ID, signature); ok {
 			if answer, usable := fitToQuestion(entry.Answer, question.Options, question.Kind); usable {
 				_ = s.Bank.TouchAnswer(ctx, userID, entry.ID)
 				resolution.Answer, resolution.Source = answer, SourceBankSimilar
@@ -187,7 +188,7 @@ func (s *Service) Resolve(ctx context.Context, userID string, question Question,
 			if s.Bank != nil {
 				entry := models.AnswerEntry{
 					QuestionKey: key, QuestionText: text, QuestionNormalized: normalized,
-					Answer: answer, RoleFamily: family, Technologies: signature,
+					Answer: answer, RoleFamily: family, JobID: subject.Job.ID, Technologies: signature,
 					Source: SourceAI, Approved: false,
 				}
 				if saved, saveErr := s.Bank.SaveAnswer(ctx, userID, entry); saveErr == nil {
@@ -226,16 +227,19 @@ func (s *Service) ResolveAll(ctx context.Context, userID string, questions []Que
 	return out
 }
 
-// bestSimilar picks the highest-scoring approved answer for the same canonical
-// question. Same role family is worth more than stack overlap alone, and ties
-// break towards the answer that has already served well.
-func (s *Service) bestSimilar(ctx context.Context, userID, key, family string, signature []string) (models.AnswerEntry, bool) {
-	candidates, err := s.Bank.CandidateAnswers(ctx, userID, key, 25)
+// bestSimilar picks the best approved answer for the same canonical question,
+// narrowest scope first: an answer for this job only, then the role-family
+// answers, then one for every job, which needs no overlap. Within a scope, same
+// role family is worth more than stack overlap alone, and ties break towards
+// the answer that has already served well.
+func (s *Service) bestSimilar(ctx context.Context, userID, key, family, jobID string, signature []string) (models.AnswerEntry, bool) {
+	candidates, err := s.Bank.CandidateAnswers(ctx, userID, key, family, jobID, 25)
 	if err != nil || len(candidates) == 0 {
 		return models.AnswerEntry{}, false
 	}
 	type scored struct {
 		entry models.AnswerEntry
+		tier  int
 		score float64
 	}
 	var ranked []scored
@@ -248,16 +252,30 @@ func (s *Service) bestSimilar(ctx context.Context, userID, key, family string, s
 		if entry.RoleFamily == family {
 			score += 0.5
 		}
-		if overlap < similarityFloor && entry.RoleFamily != family {
-			continue
+		// The store returns a job-only answer for its own job alone.
+		tier := 1
+		switch entry.Scope {
+		case models.AnswerScopeJob:
+			tier = 0
+		case models.AnswerScopeGlobal:
+			tier = 2
+		default:
+			if overlap < similarityFloor && entry.RoleFamily != family {
+				continue
+			}
 		}
 		score += float64(entry.UsageCount) / 1000
-		ranked = append(ranked, scored{entry, score})
+		ranked = append(ranked, scored{entry, tier, score})
 	}
 	if len(ranked) == 0 {
 		return models.AnswerEntry{}, false
 	}
-	sort.SliceStable(ranked, func(i, j int) bool { return ranked[i].score > ranked[j].score })
+	sort.SliceStable(ranked, func(i, j int) bool {
+		if ranked[i].tier != ranked[j].tier {
+			return ranked[i].tier < ranked[j].tier
+		}
+		return ranked[i].score > ranked[j].score
+	})
 	return ranked[0].entry, true
 }
 
