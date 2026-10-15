@@ -20,9 +20,12 @@ var readOnlyPosts = map[string]bool{
 
 // sessionOnly routes refuse agent tokens outright, each through the wrapper
 // named here: token management, so that a leaked token cannot mint siblings or
-// revoke itself to cover its tracks, and approving an application, which is
-// the user's consent to send it.
+// revoke itself to cover its tracks, approving an application, which is
+// the user's consent to send it, and invites, which also need an admin.
 var sessionOnly = map[string]string{
+	"GET /api/invites":              "admin",
+	"POST /api/invites":             "admin",
+	"DELETE /api/invites/{id}":      "admin",
 	"GET /api/tokens":               "session",
 	"POST /api/tokens":              "session",
 	"DELETE /api/tokens/{id}":       "session",
@@ -94,6 +97,7 @@ func TestUnauthenticatedRoutesAreTheExpectedOnes(t *testing.T) {
 		"GET /api/auth/google/start":     true,
 		"GET /api/auth/google/callback":  true,
 		"POST /api/auth/google/exchange": true,
+		"GET /api/auth/registration":     true,
 	}
 	for _, m := range open {
 		if !want[m[1]] {
