@@ -298,6 +298,7 @@ const (
 	OutboxNeedsReview = "needs_review" // something is missing or unapproved
 	OutboxReady       = "ready"        // complete, waiting for the user
 	OutboxApproved    = "approved"     // released by the user
+	OutboxSending     = "sending"      // being posted to the employer's form
 	OutboxSent        = "sent"
 	OutboxFailed      = "failed"
 	OutboxCancelled   = "cancelled"

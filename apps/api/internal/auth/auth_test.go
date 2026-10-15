@@ -43,6 +43,16 @@ func TestCheckLoginDoesTheSameWorkWithoutAnAccount(t *testing.T) {
 	if unknown < known/2 {
 		t.Fatalf("an unknown email answered in %v against %v for a wrong password; it should run bcrypt too", unknown, known)
 	}
+	// An account without a password (signed up through Google) has an empty
+	// hash; it must cost the same and never pass, not even with the dummy's
+	// own password.
+	start := time.Now()
+	if CheckLogin("", true, "jobpilot: no account has this password") {
+		t.Fatal("an account without a password must not pass")
+	}
+	if noPassword := time.Since(start); noPassword < known/2 {
+		t.Fatalf("an account without a password answered in %v against %v; it should run bcrypt too", noPassword, known)
+	}
 	if CheckLogin(dummyHash(), false, "jobpilot: no account has this password") {
 		t.Fatal("without an account the answer is always no, even for the dummy's own password")
 	}

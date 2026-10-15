@@ -64,7 +64,8 @@ func TestApprovingNeedsABrowserSessionAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := (&Server{Store: st, Secret: secret, FrontendURL: "http://localhost:3000"}).Handler()
+	sender := &kicks{}
+	h := (&Server{Store: st, Secret: secret, FrontendURL: "http://localhost:3000", Sender: sender}).Handler()
 	post := func(path, token string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
 		r := httptest.NewRequest(http.MethodPost, path, nil)
@@ -84,12 +85,31 @@ func TestApprovingNeedsABrowserSessionAgainstPostgres(t *testing.T) {
 	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "consent to send") {
 		t.Fatalf("a write-scoped agent token must not approve, got %d %s", w.Code, w.Body.String())
 	}
+	if sender.n != 0 {
+		t.Fatal("a refused approval must not wake the sender")
+	}
 	if stored, err := st.OutboxEntry(ctx, user.ID, entry.ID); err != nil || stored.Status != models.OutboxReady {
 		t.Fatalf("a refused approval must leave the entry ready, got %+v, %v", stored, err)
 	}
 
 	if w = post("/api/outbox/"+entry.ID+"/approve", session); w.Code != http.StatusOK || status(w) != models.OutboxApproved {
 		t.Fatalf("the user's session must approve, got %d %s", w.Code, w.Body.String())
+	}
+	if sender.n != 1 {
+		t.Fatalf("an approval should wake the sender once, got %d", sender.n)
+	}
+
+	// While it is being sent, the entry can be neither approved nor cancelled.
+	if _, err := pool.Exec(ctx, `UPDATE application_outbox SET status='sending' WHERE id=$1`, entry.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range []string{"approve", "cancel"} {
+		if w = post("/api/outbox/"+entry.ID+"/"+action, session); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "being sent") {
+			t.Fatalf("%s while sending must be a 409, got %d %s", action, w.Code, w.Body.String())
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE application_outbox SET status='approved' WHERE id=$1`, entry.ID); err != nil {
+		t.Fatal(err)
 	}
 	if w = post("/api/outbox/00000000-0000-0000-0000-000000000000/approve", session); w.Code != http.StatusNotFound {
 		t.Fatalf("a missing entry is a 404, got %d %s", w.Code, w.Body.String())

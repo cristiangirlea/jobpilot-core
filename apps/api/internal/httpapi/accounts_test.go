@@ -13,7 +13,7 @@ import (
 	"jobpilot/core/api/internal/ratelimit"
 )
 
-func post(t *testing.T, h http.Handler, path, body string, header map[string]string) *httptest.ResponseRecorder {
+func postFrom(t *testing.T, h http.Handler, path, body string, header map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
 	r := httptest.NewRequest("POST", path, strings.NewReader(body))
 	r.RemoteAddr = "192.0.2.10:5555"
@@ -44,7 +44,7 @@ func TestClosedRegistrationRefusesEverySignUp(t *testing.T) {
 		`{"email":"new@example.test","password":"long enough"}`,
 		`{"email":"new@example.test","password":"long enough","invite":"jpi_anything"}`,
 	} {
-		w := post(t, h, "/api/auth/register", body, nil)
+		w := postFrom(t, h, "/api/auth/register", body, nil)
 		if w.Code != 403 || errorText(t, w) != signUpClosed {
 			t.Fatalf("expected 403 %q, got %d %s", signUpClosed, w.Code, w.Body.String())
 		}
@@ -77,7 +77,7 @@ func TestSpentLimitsAnswer429WithRetryAfter(t *testing.T) {
 		{"sign-up by email", "/api/auth/register", &authLimits{loginIP: open, loginEmail: open, registerIP: open, registerEmail: spent}},
 	} {
 		s := &Server{limits: c.limits}
-		w := post(t, s.Handler(), c.path, `{"email":"someone@example.test","password":"long enough"}`, nil)
+		w := postFrom(t, s.Handler(), c.path, `{"email":"someone@example.test","password":"long enough"}`, nil)
 		if w.Code != 429 || w.Header().Get("Retry-After") != "90" || errorText(t, w) != "Too many attempts. Try again in 2 minutes." {
 			t.Errorf("%s: got %d, Retry-After %q, %s", c.name, w.Code, w.Header().Get("Retry-After"), w.Body.String())
 		}
@@ -123,24 +123,24 @@ func TestSignUpLimitsCountPerAddressAndPerEmail(t *testing.T) {
 
 	h := (&Server{Registration: config.RegistrationClosed, ClientIPHeader: "CF-Connecting-IP"}).Handler()
 	for i := range 10 {
-		if w := post(t, h, "/api/auth/register", body(string(rune('a'+i))+"@example.test"), from("203.0.113.1")); w.Code != 403 {
+		if w := postFrom(t, h, "/api/auth/register", body(string(rune('a'+i))+"@example.test"), from("203.0.113.1")); w.Code != 403 {
 			t.Fatalf("attempt %d from one address should reach the gate: %d", i+1, w.Code)
 		}
 	}
-	if w := post(t, h, "/api/auth/register", body("k@example.test"), from("203.0.113.1")); w.Code != 429 {
+	if w := postFrom(t, h, "/api/auth/register", body("k@example.test"), from("203.0.113.1")); w.Code != 429 {
 		t.Fatalf("the eleventh sign-up from one address in an hour should be limited: %d", w.Code)
 	}
-	if w := post(t, h, "/api/auth/register", body("k@example.test"), from("203.0.113.2")); w.Code != 403 {
+	if w := postFrom(t, h, "/api/auth/register", body("k@example.test"), from("203.0.113.2")); w.Code != 403 {
 		t.Fatalf("another address has its own count: %d", w.Code)
 	}
 
 	h = (&Server{Registration: config.RegistrationClosed, ClientIPHeader: "CF-Connecting-IP"}).Handler()
 	for i := range 5 {
-		if w := post(t, h, "/api/auth/register", body("Same@Example.test"), from("203.0.113."+string(rune('1'+i)))); w.Code != 403 {
+		if w := postFrom(t, h, "/api/auth/register", body("Same@Example.test"), from("203.0.113."+string(rune('1'+i)))); w.Code != 403 {
 			t.Fatalf("attempt %d for one email should reach the gate: %d", i+1, w.Code)
 		}
 	}
-	if w := post(t, h, "/api/auth/register", body("same@example.test"), from("203.0.113.9")); w.Code != 429 {
+	if w := postFrom(t, h, "/api/auth/register", body("same@example.test"), from("203.0.113.9")); w.Code != 429 {
 		t.Fatalf("the sixth sign-up for one email in an hour should be limited, whatever its case: %d", w.Code)
 	}
 }

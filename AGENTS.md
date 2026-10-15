@@ -62,9 +62,11 @@ owner's real profile, CV, applications and tokens.
 
 ## Product rules the code enforces (keep them true)
 
-- Nothing submits an application, opens a browser, or records an apply click on the user's behalf.
-  Composing fills the outbox; approving an outbox entry is consent to send and happens only in the
-  web app, so the MCP server has no `approve_outbox`, send, upload or delete tool (a test checks).
+- Only the outbox sender (`apps/api/internal/sender`, off unless `OUTBOX_SENDER_ENABLED=true`)
+  submits anything, and only entries the user approved in the web app, through the employer's own
+  form over plain HTTP: no browser, no CAPTCHA solving, and an entry that may have reached the
+  employer is never sent again. Composing fills the outbox; approving an outbox entry is consent to
+  send, so the MCP server has no `approve_outbox`, send, upload or delete tool (a test checks).
 - Hard-rule rejections (current or previous employer, excluded company, an active filter) are
   final: documents, applications and the applied status are refused with 409, and `apply_url` /
   `employer_url` are withheld centrally in the store scanners. Never weaken this to the frontend.

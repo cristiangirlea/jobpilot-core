@@ -45,14 +45,18 @@ import (
 //	6: answers carry scope (global, role_family or job) and job_id, which
 //	   POST and PATCH /api/answers honour; resolving prefers the narrowest
 //	   scope. An older API ignores them and keeps every answer per role family.
-//	7: registering needs an invite unless the server allows open sign-up
+//	7: where the server sends (health reports sending: true), an approved
+//	   outbox entry goes to the employer's form and ends sent or failed, with
+//	   the reason in error; while it is sending, composing it, approving it
+//	   and cancelling it are refused with 409.
+//	8: registering needs an invite unless the server allows open sign-up
 //	   (403 otherwise); login and registration answer 429 with Retry-After
 //	   when rate-limited.
-//	8: users carry email_verified; while the server sends email, an
+//	9: users carry email_verified; while the server sends email, an
 //	   unverified account is refused with 403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, and creating agent tokens.
-const Contract = 8
+const Contract = 9
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -65,6 +69,14 @@ type Server struct {
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
+	// Google is nil unless sign-in with Google is configured. GoogleSignup
+	// lets it create an account for someone who has none.
+	Google       *auth.OIDC
+	GoogleSignup bool
+	handoff      *auth.Handoff
+	// Sender sends approved outbox entries; nil when sending is off.
+	Sender interface{ Kick() }
+
 	// Registration is config.RegistrationInvite (also when empty), Open or
 	// Closed; AdminEmails may manage invites; ClientIPHeader is
 	// config.Config's, the proxy header rate limits read the address from.
@@ -89,11 +101,16 @@ func (s *Server) Handler() http.Handler {
 	auth.PrepareLogin()
 	m := http.NewServeMux()
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		write(w, 200, map[string]any{"status": "ok", "contract": Contract})
+		write(w, 200, map[string]any{"status": "ok", "contract": Contract, "sending": s.Sender != nil})
 	})
 	m.HandleFunc("POST /api/auth/register", s.register)
 	m.HandleFunc("POST /api/auth/login", s.login)
 	m.HandleFunc("GET /api/auth/registration", s.registration)
+	s.handoff = auth.NewHandoff()
+	m.HandleFunc("GET /api/auth/providers", s.authProviders)
+	m.HandleFunc("GET /api/auth/google/start", s.googleStart)
+	m.HandleFunc("GET /api/auth/google/callback", s.googleCallback)
+	m.HandleFunc("POST /api/auth/google/exchange", s.googleExchange)
 	m.HandleFunc("POST /api/auth/verify-email", s.verifyEmail)
 	m.HandleFunc("POST /api/auth/password-reset", s.requestPasswordReset)
 	m.HandleFunc("POST /api/auth/password-reset/confirm", s.confirmPasswordReset)
@@ -186,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.requireVerified(s.createToken)))
 	m.Handle("DELETE /api/tokens/{id}", session(s.revokeToken))
+	m.Handle("POST /api/auth/google/link", session(s.googleLink))
 	m.Handle("GET /api/invites", admin(s.listInvites))
 	m.Handle("POST /api/invites", admin(s.createInvite))
 	m.Handle("DELETE /api/invites/{id}", admin(s.deleteInvite))
@@ -200,6 +218,12 @@ func (s *Server) cors(next http.Handler) http.Handler {
 		// The web job list reads how many jobs match from this header.
 		w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
 		w.Header().Set("Vary", "Origin")
+		// Redeeming a Google handoff code needs its binding cookie, so the
+		// web app sends these two with credentials. No other route reads a
+		// cookie.
+		if r.URL.Path == "/api/auth/google/exchange" || r.URL.Path == "/api/auth/google/link" {
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+		}
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(204)
 			return

@@ -30,6 +30,8 @@ var sessionOnly = map[string]string{
 	"POST /api/tokens":              "session",
 	"DELETE /api/tokens/{id}":       "session",
 	"POST /api/outbox/{id}/approve": "consent",
+	// Linking a Google identity adds a way into the account.
+	"POST /api/auth/google/link": "session",
 }
 
 var routePattern = regexp.MustCompile(`m\.Handle\("([^"]+)",\s*(\w+)\(`)
@@ -78,8 +80,8 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 }
 
 // TestUnauthenticatedRoutesAreTheExpectedOnes guards the other direction:
-// everything except health, register, login, the registration mode and the
-// two emailed links (verify, reset) goes through a wrapper.
+// everything except health, signing in, the registration mode and the two
+// emailed links (verify, reset) goes through a wrapper.
 func TestUnauthenticatedRoutesAreTheExpectedOnes(t *testing.T) {
 	source, err := os.ReadFile("server.go")
 	if err != nil {
@@ -87,9 +89,15 @@ func TestUnauthenticatedRoutesAreTheExpectedOnes(t *testing.T) {
 	}
 	open := regexp.MustCompile(`m\.HandleFunc\("([^"]+)"`).FindAllStringSubmatch(string(source), -1)
 	want := map[string]bool{
-		"GET /api/health":                       true,
-		"POST /api/auth/register":               true,
-		"POST /api/auth/login":                  true,
+		"GET /api/health":         true,
+		"POST /api/auth/register": true,
+		"POST /api/auth/login":    true,
+		// Sign-in with Google: the provider list, the redirect to Google and
+		// back, and the single-use code the web app exchanges for its token.
+		"GET /api/auth/providers":               true,
+		"GET /api/auth/google/start":            true,
+		"GET /api/auth/google/callback":         true,
+		"POST /api/auth/google/exchange":        true,
 		"GET /api/auth/registration":            true,
 		"POST /api/auth/verify-email":           true,
 		"POST /api/auth/password-reset":         true,
