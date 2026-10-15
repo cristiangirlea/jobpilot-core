@@ -97,8 +97,11 @@ func (s *Server) llmForUser(ctx context.Context, userID string) *llm.Client {
 // USER_AGENT_TOKENS (off unless set) for members.
 func (s *Server) tokenPolicy(ctx context.Context, userID string) (string, error) {
 	ok, err := s.admin(ctx, userID)
-	if err != nil || ok {
-		return TokensWrite, err
+	if err != nil {
+		return TokensOff, err
+	}
+	if ok {
+		return TokensWrite, nil
 	}
 	switch s.UserAgentTokens {
 	case TokensRead, TokensWrite:

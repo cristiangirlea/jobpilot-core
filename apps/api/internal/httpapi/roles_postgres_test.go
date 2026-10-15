@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"jobpilot/core/api/internal/auth"
+	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/llm"
 )
 
@@ -32,7 +33,7 @@ func TestRolesAgainstPostgres(t *testing.T) {
 	}
 	const secret = "roles-test-secret"
 	configured := &llm.Client{}
-	s := &Server{Store: st, Secret: secret, TokenTTL: time.Hour, AdminEmails: []string{adminEmail}, LLM: configured}
+	s := &Server{Store: st, Discovery: discovery.NewService(st), Secret: secret, TokenTTL: time.Hour, AdminEmails: []string{adminEmail}, LLM: configured}
 	h := s.Handler()
 	adminSession, _ := auth.Token(admin.ID, adminEmail, secret, time.Hour)
 	memberSession, _ := auth.Token(member.ID, member.Email, secret, time.Hour)
@@ -73,6 +74,9 @@ func TestRolesAgainstPostgres(t *testing.T) {
 	}
 	if w := call(t, h, "GET", "/api/catalog/summary", memberSession, ""); w.Code != 200 {
 		t.Fatalf("member's catalog summary = %d %s", w.Code, w.Body)
+	}
+	if w := call(t, h, "POST", "/api/jobs/find", memberSession, ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"scored"`) {
+		t.Fatalf("member's Find jobs for my profile = %d %s", w.Code, w.Body)
 	}
 
 	// The AI provider is for admins; a member gets none, so every draft

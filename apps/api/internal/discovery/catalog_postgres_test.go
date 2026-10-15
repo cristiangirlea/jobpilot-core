@@ -48,6 +48,10 @@ func TestCatalogScoringAgainstPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// As discovery stores it; a job created without a source is a paste.
+		if _, err := pool.Exec(ctx, `UPDATE jobs SET discovered_at=now() WHERE id=$1`, j.ID); err != nil {
+			t.Fatal(err)
+		}
 		return j
 	}
 	matchOf := func(u, jobID string) (models.JobWithMatch, bool) {
@@ -83,7 +87,20 @@ func TestCatalogScoringAgainstPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	excluded := job("Catalog Excluded "+run, "excluded")
+	// An open job is scored however long ago it arrived.
+	old := job("Catalog Old "+run, "old")
+	if _, err := pool.Exec(ctx, `UPDATE jobs SET created_at=now()-interval '90 days' WHERE id=$1`, old.ID); err != nil {
+		t.Fatal(err)
+	}
 	closed := job("Catalog Closed "+run, "closed")
+	// A job the admin pasted in by link is theirs, not the catalog's.
+	pasted, err := st.CreateDiscoveredJob(ctx, admin.ID, "", "", "", "", "catalog-"+run+"-pasted", models.JobInput{
+		Title: "Backend Engineer", Company: "Catalog Pasted " + run, Location: "Remote",
+		Description: "Build backend services in Go.", ApplyURL: "https://example.test/catalog/" + run + "/pasted",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := st.CloseJob(ctx, closed.ID, "closed for the test"); err != nil {
 		t.Fatal(err)
 	}
@@ -93,13 +110,19 @@ func TestCatalogScoringAgainstPostgres(t *testing.T) {
 	if m, ok := matchOf(bea.ID, excluded.ID); !ok || !m.Match.Rejected {
 		t.Fatalf("a job at a company Bea excludes was not scored as rejected for her: %+v %v", m.Match, ok)
 	}
+	if _, ok := matchOf(bea.ID, old.ID); !ok {
+		t.Fatal("an open job added 90 days ago was not scored")
+	}
+	if _, ok := matchOf(bea.ID, pasted.ID); ok {
+		t.Fatal("a job another account pasted in reached Bea's inbox")
+	}
 	if _, ok := matchOf(bea.ID, closed.ID); ok {
 		t.Fatal("a closed job was scored")
 	}
 	if again, err := svc.ScoreCatalog(ctx, bea.ID); err != nil || again != 0 {
 		t.Fatalf("a second pass scored %d jobs again (%v)", again, err)
 	}
-	unscored, err := st.UnscoredJobs(ctx, bea.ID, time.Now().Add(-time.Hour), 100)
+	unscored, err := st.UnscoredJobs(ctx, bea.ID, 100)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,8 +144,19 @@ func TestCatalogScoringAgainstPostgres(t *testing.T) {
 	if _, err := st.ReportJob(ctx, bea.ID, open.ID); err != nil {
 		t.Fatal(err)
 	}
-	if after, err := st.CatalogSummary(ctx, bea.ID); err != nil || after.OpenMatches != summary.OpenMatches-1 {
-		t.Fatalf("a job Bea reported gone still counts: %+v, before %+v (%v)", after, summary, err)
+	adminBefore, err := st.CatalogSummary(ctx, admin.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.ReportJob(ctx, bea.ID, old.ID); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := st.CatalogSummary(ctx, bea.ID); err != nil || after.OpenMatches != summary.OpenMatches-2 {
+		t.Fatalf("jobs Bea reported gone still count: %+v, before %+v (%v)", after, summary, err)
+	}
+	// One account's reports change only its own count.
+	if after, err := st.CatalogSummary(ctx, admin.ID); err != nil || after.OpenMatches != adminBefore.OpenMatches {
+		t.Fatalf("Bea's report changed the admin's open matches: %+v, before %+v (%v)", after, adminBefore, err)
 	}
 }
 

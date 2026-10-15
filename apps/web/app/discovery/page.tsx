@@ -41,7 +41,10 @@ const titleFromIdentifier=(value:string)=>value.split(/[-_]/).filter(Boolean).ma
 
 // Discovery belongs to the server's admins (#128); a member who opens this
 // page is pointed at the jobs page, where the catalog is scored for them.
-export default function DiscoveryPage(){const me=useMe();if(me&&!me.admin)return <Shell><Header eyebrow="Discovery" title="Jobs come from this server's discovery" description="The admin runs the job searches. Every new job is checked against your profile and filters."/><section className="card"><p className="muted">Your matches are on the jobs page, where Find jobs for my profile checks anything new.</p><Link className="btn mt-4 inline-flex" href="/jobs">Go to jobs</Link></section></Shell>;return <DiscoveryAdmin/>}
+// Nothing mounts until the role is known, so a member never loads the admin
+// controls. If the role cannot be read the admin view shows, and the API
+// refuses whatever a member may not use.
+export default function DiscoveryPage(){const me=useMe();if(me===undefined)return <Shell><p className="muted">Loading…</p></Shell>;if(me&&!me.admin)return <Shell><Header eyebrow="Discovery" title="Jobs come from this server's discovery" description="The admin runs the job searches. Every new job is checked against your profile and filters."/><section className="card"><p className="muted">Your matches are on the jobs page, where Find jobs for my profile checks anything new.</p><Link className="btn mt-4 inline-flex" href="/jobs">Go to jobs</Link></section></Shell>;return <DiscoveryAdmin/>}
 function DiscoveryAdmin(){
   const [settings,setSettings]=useState(defaultSettings);
   const [sources,setSources]=useState<DiscoverySource[]>([]);

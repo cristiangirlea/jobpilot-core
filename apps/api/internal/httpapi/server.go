@@ -540,6 +540,9 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
 	defer cancel()
 	uid := auth.UserID(ctx)
+	// After the change is stored and before reading it back, so a catalog
+	// pass that read the old exclusions cannot save after this one.
+	defer s.Discovery.LockMatching(uid)()
 	profile, err := s.Store.Profile(ctx, uid)
 	if err != nil {
 		return err
