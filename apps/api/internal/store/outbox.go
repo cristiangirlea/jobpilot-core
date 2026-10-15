@@ -209,6 +209,9 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 	if previousStatus == models.OutboxSent {
 		return models.OutboxEntry{}, ErrOutboxSent
 	}
+	if previousStatus == models.OutboxSending {
+		return models.OutboxEntry{}, ErrOutboxSending
+	}
 	if wasApproved {
 		entry.Notices = append(entry.Notices, ApprovalWithdrawnNotice)
 	}
@@ -230,7 +233,7 @@ func (s *Store) SaveOutboxEntry(ctx context.Context, userID string, entry models
 			cover_letter_source=EXCLUDED.cover_letter_source, form=EXCLUDED.form,
 			answers=EXCLUDED.answers, blockers=EXCLUDED.blockers, notices=EXCLUDED.notices, needs_review=EXCLUDED.needs_review,
 			error='', approved_at=NULL, updated_at=now()
-		WHERE application_outbox.status <> 'sent'
+		WHERE application_outbox.status NOT IN ('sent','sending')
 		RETURNING `+outboxColumns,
 		userID, entry.JobID, application, entry.Status, entry.Channel, entry.ATSProvider,
 		cvDocument, entry.CVDecision, entry.CoverLetter, entry.CoverLetterSource,
@@ -344,6 +347,8 @@ func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (mode
 	case models.OutboxReady, models.OutboxNeedsReview:
 	case models.OutboxSent:
 		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
+	case models.OutboxSending:
+		return models.OutboxEntry{}, sendingRefusal
 	default:
 		return models.OutboxEntry{}, OutboxRefusal(fmt.Sprintf("This application is %s. Prepare it again to approve it.", entry.Status))
 	}
@@ -431,7 +436,7 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 }
 
 // CancelOutboxEntry drops an entry from the queue. A sent one is history and
-// stays as it is.
+// stays as it is, and one being sent can no longer be stopped.
 func (s *Store) CancelOutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
 	current, err := s.OutboxEntry(ctx, userID, id)
 	if err != nil {
@@ -440,12 +445,15 @@ func (s *Store) CancelOutboxEntry(ctx context.Context, userID, id string) (model
 	if current.Status == models.OutboxSent {
 		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
 	}
+	if current.Status == models.OutboxSending {
+		return models.OutboxEntry{}, sendingRefusal
+	}
 	cancelled, err := scanOutbox(s.DB.QueryRow(ctx, `UPDATE application_outbox
 		SET status='cancelled', updated_at=now()
-		WHERE user_id=$1 AND id=$2 AND status <> 'sent' RETURNING `+outboxColumns, userID, id))
+		WHERE user_id=$1 AND id=$2 AND status NOT IN ('sent','sending') RETURNING `+outboxColumns, userID, id))
 	if errors.Is(err, pgx.ErrNoRows) {
-		// Sent between the read and the update.
-		return models.OutboxEntry{}, OutboxRefusal("This application has already been sent.")
+		// Taken for sending between the read and the update.
+		return models.OutboxEntry{}, sendingRefusal
 	}
 	if err != nil {
 		return models.OutboxEntry{}, err

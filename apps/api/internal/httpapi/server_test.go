@@ -81,6 +81,29 @@ func TestHealthReportsTheContract(t *testing.T) {
 	}
 }
 
+// Health says whether this server sends approved applications, so a client
+// can tell the user whether an approval waits or goes.
+func TestHealthReportsWhetherApprovalsAreSent(t *testing.T) {
+	for _, server := range []*Server{{}, {Sender: &kicks{}}} {
+		w := httptest.NewRecorder()
+		server.Handler().ServeHTTP(w, httptest.NewRequest("GET", "/api/health", nil))
+		var body struct {
+			Sending bool `json:"sending"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Sending != (server.Sender != nil) {
+			t.Fatalf("sending should be %v, got %s", server.Sender != nil, w.Body.String())
+		}
+	}
+}
+
+// kicks counts the approvals that asked the sender for a sweep.
+type kicks struct{ n int }
+
+func (k *kicks) Kick() { k.n++ }
+
 // Found in early use: every match linked to an aggregator page, so
 // no form could be read, and the blocker only said to apply by hand. It now
 // says what makes forms readable: the employer's own board as a source.

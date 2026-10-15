@@ -188,7 +188,7 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	saved, err := s.Store.SaveOutboxEntry(ctx, uid, entry)
-	if errors.Is(err, store.ErrOutboxSent) {
+	if errors.Is(err, store.ErrOutboxSent) || errors.Is(err, store.ErrOutboxSending) {
 		problem(w, 409, err.Error())
 		return
 	}
@@ -307,6 +307,9 @@ func (s *Server) getOutboxEntry(w http.ResponseWriter, r *http.Request) {
 // Only a browser session reaches it (the consent wrapper).
 func (s *Server) approveOutboxEntry(w http.ResponseWriter, r *http.Request) {
 	entry, err := s.Store.ApproveOutboxEntry(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
+	if err == nil && entry.Status == models.OutboxApproved && s.Sender != nil {
+		s.Sender.Kick()
+	}
 	respondOutbox(w, entry, err)
 }
 

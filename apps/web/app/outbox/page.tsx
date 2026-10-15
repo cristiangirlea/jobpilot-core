@@ -9,7 +9,7 @@ import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
 const statusTone:Record<string,string>={
   needs_review:"bg-amber-50 text-amber-700",ready:"bg-sky-50 text-sky-700",
-  approved:"bg-sage text-moss",sent:"bg-emerald-50 text-emerald-700",
+  approved:"bg-sage text-moss",sending:"bg-sage text-moss",sent:"bg-emerald-50 text-emerald-700",
   failed:"bg-red-50 text-red-700",cancelled:"bg-black/5 text-ink/50",
 };
 
@@ -25,9 +25,11 @@ export default function OutboxPage(){
   const [error,setError]=useState("");
   const [notice,setNotice]=useState("");
   const [busy,setBusy]=useState(false);
+  // Whether this server sends approved applications, as its health says.
+  const [sending,setSending]=useState(false);
 
   const load=async()=>{try{setItems(await api<OutboxEntry[]>("/outbox"))}catch(e){setError((e as Error).message)}};
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load();api<{sending?:boolean}>("/health").then(h=>setSending(!!h.sending)).catch(()=>{})},[]);
 
   const act=async(entry:OutboxEntry,action:"approve"|"cancel")=>{
     setBusy(true);setError("");setNotice("");
@@ -35,7 +37,7 @@ export default function OutboxPage(){
       const updated=await api<OutboxEntry>(`/outbox/${entry.id}/${action}`,{method:"POST",body:"{}"});
       setOpen(updated);await load();
       setNotice(action==="approve"
-        ?"Approved. It is queued for sending; nothing has been sent yet."
+        ?(sending?"Approved. It goes to the employer's form in a few minutes; Remove it before then to stop it.":"Approved. This server does not send applications, so nothing has been sent.")
         :"Removed from the queue.");
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   };
@@ -49,6 +51,17 @@ export default function OutboxPage(){
       await api(`/cv/${entry.cv_document_id}/approve`,{method:"POST",body:JSON.stringify({approved:true})});
       setNotice("CV approved. Applications carrying it no longer wait on it.");
       setOpen(await api<OutboxEntry>(`/outbox/${entry.id}`));await load();
+    }catch(e){setError((e as Error).message)}finally{setBusy(false)}
+  };
+
+  // A handed-back application was not sent: the user applies on the
+  // employer's form and records it here.
+  const appliedByHand=async(entry:OutboxEntry)=>{
+    if(!entry.application_id)return;
+    setBusy(true);setError("");setNotice("");
+    try{
+      await api(`/applications/${entry.application_id}`,{method:"PATCH",body:JSON.stringify({status:"applied"})});
+      setNotice("Recorded as applied.");
     }catch(e){setError((e as Error).message)}finally{setBusy(false)}
   };
 
@@ -82,16 +95,21 @@ export default function OutboxPage(){
                   {item.blockers.length>0&&` · ${item.blockers.length} to fix`}</p>
               </button>)}
           </div>
-          {open&&<Detail entry={open} busy={busy} onAct={act} onApproveCV={approveCV}/>}
+          {open&&<Detail entry={open} busy={busy} sending={sending} onAct={act} onApproveCV={approveCV} onApplied={appliedByHand}/>}
         </div>
       </>}
   </Shell>;
 }
 
-function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
-  onAct:(entry:OutboxEntry,action:"approve"|"cancel")=>void;onApproveCV:(entry:OutboxEntry)=>void}){
+function Detail({entry,busy,sending,onAct,onApproveCV,onApplied}:{entry:OutboxEntry;busy:boolean;sending:boolean;
+  onAct:(entry:OutboxEntry,action:"approve"|"cancel")=>void;onApproveCV:(entry:OutboxEntry)=>void;onApplied:(entry:OutboxEntry)=>void}){
   const blocked=entry.blockers.length>0;
-  const done=entry.status==="sent"||entry.status==="cancelled";
+  // Sent, cancelled and in-flight entries take no action; a failed one is
+  // prepared again from its job.
+  const done=entry.status==="sent"||entry.status==="cancelled"||entry.status==="sending";
+  // Feed links are not trusted: only a web page becomes a link.
+  const link=entry.job?.employer_url||entry.job?.apply_url||"";
+  const form=/^https?:\/\//i.test(link)?link:"";
   return <div className="card space-y-5">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
@@ -100,7 +118,7 @@ function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
       </div>
       <div className="flex gap-2">
         {!done&&<button className="btn-secondary !py-2" disabled={busy} onClick={()=>onAct(entry,"cancel")}>Remove</button>}
-        {!done&&<button className="btn-primary !py-2" disabled={busy||blocked} title={blocked?"Clear the items below first":""}
+        {!done&&entry.status!=="failed"&&<button className="btn-primary !py-2" disabled={busy||blocked} title={blocked?"Clear the items below first":""}
           onClick={()=>onAct(entry,"approve")}>{entry.status==="approved"?"Approved":"Approve"}</button>}
       </div>
     </div>
@@ -116,7 +134,26 @@ function Detail({entry,busy,onAct,onApproveCV}:{entry:OutboxEntry;busy:boolean;
     </div>}
 
     {entry.status==="approved"&&<div className="rounded-xl bg-sage px-4 py-3 text-sm text-moss">
-      Approved and queued. Sending is not built yet, so nothing has left your machine.
+      {sending
+        ?"Approved. It goes to the employer's form a few minutes after approval; Remove it before then to stop it."
+        :"Approved and queued. This server does not send applications, so nothing has left your machine."}
+    </div>}
+
+    {entry.status==="sending"&&<div className="rounded-xl bg-sage px-4 py-3 text-sm text-moss">
+      Being sent to the employer's form now.
+    </div>}
+
+    {entry.status==="sent"&&<div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+      Sent through the employer's form{entry.sent_at&&` on ${new Date(entry.sent_at).toLocaleString()}`}. It is recorded as applied.
+    </div>}
+
+    {entry.status==="failed"&&<div className="rounded-xl bg-red-50 px-4 py-3">
+      <p className="text-sm font-semibold text-red-900">Back with you: finish this one on the employer's site</p>
+      {entry.error&&<p className="mt-1 text-sm text-red-800">{entry.error}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        {form&&<a className="btn-primary !py-2" href={form} target="_blank" rel="noopener noreferrer">Open the employer's form</a>}
+        {entry.application_id&&<button className="btn-secondary !py-2" disabled={busy} onClick={()=>onApplied(entry)}>I applied</button>}
+      </div>
     </div>}
 
     {entry.cv_document_id&&<CVCard entry={entry} busy={busy} done={done} onApprove={onApproveCV}/>}
