@@ -25,7 +25,10 @@ type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
 	Links   *LinkChecker
-	mu      sync.Mutex
+	// VerifiedOnly skips scheduled runs for accounts whose email is not
+	// verified; it is set while the API sends email.
+	VerifiedOnly bool
+	mu           sync.Mutex
 }
 
 var ErrMissingDesiredTitle = errors.New("add a desired job title to your profile first")
@@ -452,7 +455,7 @@ func (s *Service) CheckJob(ctx context.Context, job store.LinkToCheck, timeout t
 	return result
 }
 func (s *Service) runDue(ctx context.Context) {
-	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10)
+	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10, s.VerifiedOnly)
 	if err != nil {
 		slog.Error("claim discovery schedules", "error", err)
 		return

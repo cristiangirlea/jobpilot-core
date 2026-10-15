@@ -77,20 +77,23 @@ func TestEveryMutatingRouteRequiresTheWriteScope(t *testing.T) {
 	}
 }
 
-// TestUnauthenticatedRoutesAreTheExpectedFour guards the other direction:
-// everything except health, register, login and the registration mode goes
-// through a wrapper.
-func TestUnauthenticatedRoutesAreTheExpectedFour(t *testing.T) {
+// TestUnauthenticatedRoutesAreTheExpectedOnes guards the other direction:
+// everything except health, register, login, the registration mode and the
+// two emailed links (verify, reset) goes through a wrapper.
+func TestUnauthenticatedRoutesAreTheExpectedOnes(t *testing.T) {
 	source, err := os.ReadFile("server.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	open := regexp.MustCompile(`m\.HandleFunc\("([^"]+)"`).FindAllStringSubmatch(string(source), -1)
 	want := map[string]bool{
-		"GET /api/health":            true,
-		"POST /api/auth/register":    true,
-		"POST /api/auth/login":       true,
-		"GET /api/auth/registration": true,
+		"GET /api/health":                       true,
+		"POST /api/auth/register":               true,
+		"POST /api/auth/login":                  true,
+		"GET /api/auth/registration":            true,
+		"POST /api/auth/verify-email":           true,
+		"POST /api/auth/password-reset":         true,
+		"POST /api/auth/password-reset/confirm": true,
 	}
 	for _, m := range open {
 		if !want[m[1]] {

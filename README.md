@@ -647,6 +647,16 @@ Authorization: Bearer <token>
 | `POST` | `/api/auth/register` | Create user and return token; needs `invite` unless `REGISTRATION=open` |
 | `POST` | `/api/auth/login` | Authenticate and return token |
 | `GET` | `/api/auth/registration` | The sign-up mode: `invite`, `open` or `closed` |
+| `POST` | `/api/auth/verify-email` | Verify an address with the emailed link's `token` |
+| `POST` | `/api/auth/password-reset` | Email a reset link; answers 202 alike whether or not the email has an account |
+| `POST` | `/api/auth/password-reset/confirm` | Set a new `password` with the emailed link's `token` |
+
+### Account endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/account` | The signed-in account's `email`, `email_verified`, and whether this server requires verification |
+| `POST` | `/api/account/verification` | Send a new verification link; earlier links stop working |
 
 ### Invite endpoints
 
@@ -885,6 +895,9 @@ JobPilot's own login is the only gate in front of it, so sign-up and login are g
 - **Invites.** An account listed in `ADMIN_EMAILS` creates them under **Settings > Invites**, or with `POST /api/invites`. A code (`jpi_` prefix) is shown once, stored only as its SHA-256 digest, lasts 1 to 90 days (14 by default), and is claimed in the same transaction that creates the account, so it works once and a refused sign-up does not spend it. A missing, unknown, used or expired code all get the same 403. Fifty open invites per admin. The register page reads `?invite=` from its address, so a link can carry the code.
 - **Rate limits.** Login: 30 attempts per client address and 10 per email in 15 minutes; a successful login clears the email's count. Sign-up: 10 per address and 5 per email an hour. Past a limit the answer is 429 with `Retry-After`, before any database or bcrypt work. Emails are counted by their SHA-256 digest, so the table's size does not depend on what a caller sends. Counts are kept in memory (`internal/ratelimit`), which suits the single API replica; a restart forgets them. The address is the connection's unless `CLIENT_IP_HEADER` names a header the proxy in front overwrites (`CF-Connecting-IP` behind a Cloudflare Tunnel); IPv6 addresses count by their /64.
 - **Equal answers.** A login for an unknown email runs a bcrypt comparison against a fixed hash of the same cost and gets the same 401 text as a wrong password, so neither the time nor the text tells whether an account exists.
+- **Email.** Verification and reset emails go through an SMTP relay over TLS (`SMTP_HOST` and friends; the relay is the operator's choice, Brevo's free one works). Without `SMTP_HOST` no email is prepared or sent and verification is not required, which is how tests, CI and local runs work; the startup log says `email=false`. Email work (the lookup for a reset, minting the link, sending) runs on four workers fed by a queue of 64; when the queue is full a job is dropped and logged, and failures are logged with the recipient and subject, never the link. Links point at `FRONTEND_URL` and carry their token in the fragment, so it never reaches a server log; only a token's SHA-256 digest is stored.
+- **Verification.** While email is on, a new account gets a link valid for 24 hours. Until it is opened the account can sign in and use the app, but running discovery, generating, tailoring or composing documents, resolving a job's form answers, and creating agent tokens answer 403, and its scheduled discovery waits. A new link (Settings banner, `POST /api/account/verification`, three an hour) retires the earlier ones. Accounts that existed before verification count as verified.
+- **Password reset.** `POST /api/auth/password-reset` answers 202 with the same text at once whether or not the email has an account; the lookup and the email happen afterwards. The link works once, for one hour, and a newer link or a completed reset retires the others. Opening it also verifies the address. Requests: 10 per address and 3 per email an hour; the two link pages: 20 per address an hour. Sessions signed in before a reset stay valid until they expire (`TOKEN_TTL_HOURS`; #124).
 
 ## Database and migrations
 
@@ -913,6 +926,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
 | `020_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
 | `021_invites.sql` | Single-use sign-up invite codes, stored as digests |
+| `022_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
 
 Core entities:
 
@@ -959,6 +973,7 @@ When changing schema:
 | `REGISTRATION` | `invite` (default), `open` or `closed`; Compose defaults to `open` for local development. See "Accounts and sign-up" |
 | `ADMIN_EMAILS` | Comma-separated accounts that may create invites |
 | `CLIENT_IP_HEADER` | Header holding the caller's address, set by the proxy in front (`CF-Connecting-IP` behind a Cloudflare Tunnel); empty uses the connection's address |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | SMTP relay for verification and reset emails (port 587 by default, TLS required); unset sends nothing. In Kubernetes they come from the optional `jobpilot-smtp` Secret. See "Accounts and sign-up" |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
 | `ATS_ASHBY_URL` | Origin of Ashby's public job pages, whose posting query the form reader calls; defaults to `https://jobs.ashbyhq.com`. Point it at a fake as above |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
@@ -1136,12 +1151,12 @@ Local-MVP limitations:
 
 - Browser tokens are stored in `localStorage`, not secure HTTP-only cookies, and cannot be revoked individually; rotating `JWT_SECRET` invalidates all of them. Agent tokens are revocable one by one and can be limited to read access.
 - Local Compose uses HTTP and a development database password.
-- There is no email verification, password reset, MFA, or rate limiter.
+- There is no MFA. Login and sign-up rate limits are kept in memory, for one API instance; email verification and password reset need an SMTP relay (see "Accounts and sign-up"), and sessions outlive a password reset (#124).
 - The scheduler lock is process-local and is intended for one API instance.
 - Discovery APIs can change or rate-limit without notice.
 - This deployment is not hardened for an internet-facing production environment.
 
-Before public production use, add secure cookies or another hardened token strategy, TLS, secret management, rate limiting, account recovery, audit/observability, backups, provider terms review, privacy controls, and a cross-instance scheduler lock.
+Before public production use, add secure cookies or another hardened token strategy, TLS, secret management, audit/observability, backups, provider terms review, privacy controls, and a cross-instance scheduler lock.
 
 ## Known limitations and best next tasks
 

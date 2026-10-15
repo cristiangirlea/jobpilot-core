@@ -43,3 +43,19 @@ func TestRegistrationDefaultsToInviteAndRefusesUnknownModes(t *testing.T) {
 		}
 	}
 }
+
+// Sending email is off unless SMTP_HOST is set; the port defaults to 587.
+func TestMailIsOffUntilSMTPIsConfigured(t *testing.T) {
+	for _, key := range []string{"SMTP_HOST", "SMTP_PORT", "SMTP_USERNAME", "SMTP_PASSWORD", "MAIL_FROM"} {
+		t.Setenv(key, "")
+	}
+	if m := Load().Mail; m.SMTPHost != "" || m.SMTPPort != 587 {
+		t.Fatalf("expected no host and port 587, got %+v", m)
+	}
+	t.Setenv("SMTP_HOST", "smtp-relay.example.test")
+	t.Setenv("SMTP_PORT", "not a port")
+	t.Setenv("MAIL_FROM", "JobPilot <jobs@example.test>")
+	if m := Load().Mail; m.SMTPHost != "smtp-relay.example.test" || m.SMTPPort != -1 || m.From != "JobPilot <jobs@example.test>" {
+		t.Fatalf("unexpected mail config %+v", m)
+	}
+}

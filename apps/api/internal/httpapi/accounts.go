@@ -43,6 +43,9 @@ var (
 // package ratelimit).
 type authLimits struct {
 	loginIP, loginEmail, registerIP, registerEmail *ratelimit.Limiter
+	// Password reset requests per address and per email, the two link
+	// pages (verify, reset) per address, and verification resends per user.
+	resetIP, resetEmail, linkIP, resendUser *ratelimit.Limiter
 }
 
 func newAuthLimits() *authLimits {
@@ -51,6 +54,10 @@ func newAuthLimits() *authLimits {
 		loginEmail:    ratelimit.New(10, 15*time.Minute),
 		registerIP:    ratelimit.New(10, time.Hour),
 		registerEmail: ratelimit.New(5, time.Hour),
+		resetIP:       ratelimit.New(10, time.Hour),
+		resetEmail:    ratelimit.New(3, time.Hour),
+		linkIP:        ratelimit.New(20, time.Hour),
+		resendUser:    ratelimit.New(3, time.Hour),
 	}
 }
 

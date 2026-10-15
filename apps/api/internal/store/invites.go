@@ -126,7 +126,7 @@ func (s *Store) CreateUserWithInvite(ctx context.Context, email, hash, code stri
 	if err != nil {
 		return u, err
 	}
-	err = tx.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),$2) RETURNING id,email,created_at`, email, hash).Scan(&u.ID, &u.Email, &u.CreatedAt)
+	err = tx.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),$2) RETURNING `+userColumns, email, hash).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified)
 	if isUniqueViolation(err) {
 		return models.User{}, ErrEmailTaken
 	}

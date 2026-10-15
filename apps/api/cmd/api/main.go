@@ -8,6 +8,7 @@ import (
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/httpapi"
 	"jobpilot/core/api/internal/llm"
+	"jobpilot/core/api/internal/mail"
 	"jobpilot/core/api/internal/store"
 	"log/slog"
 	"net/http"
@@ -37,6 +38,11 @@ func main() {
 			slog.Error("invalid configuration", "error", err)
 			os.Exit(1)
 		}
+	}
+	sender, err := mailSender(cfg.Mail)
+	if err != nil {
+		slog.Error("invalid mail configuration", "error", err)
+		os.Exit(1)
 	}
 	dataStore := store.New(pool)
 	// Catalog upkeep for jobs stored before a feature existed runs in the
@@ -80,9 +86,10 @@ func main() {
 	}
 	slog.Info("AI adapter configured", "provider", aiClient.Describe())
 	discoveryService := discovery.NewService(dataStore)
+	discoveryService.VerifiedOnly = sender.Enabled()
 	discoveryService.Fetcher.UseGreenhouseOrigin(cfg.ATSGreenhouseURL)
 	go discoveryService.Start(ctx)
-	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: (&httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, Mailer: sender}).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
 	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
 	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
 	drained := make(chan struct{})
@@ -95,12 +102,22 @@ func main() {
 			slog.Error("shutdown did not finish draining", "error", err)
 		}
 	}()
-	slog.Info("JobPilot API listening", "addr", cfg.Addr, "registration", cfg.Registration, "admins", len(cfg.AdminEmails))
+	slog.Info("JobPilot API listening", "addr", cfg.Addr, "registration", cfg.Registration, "admins", len(cfg.AdminEmails), "email", sender.Enabled())
 	if err = srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		slog.Error("server stopped", "error", err)
 		os.Exit(1)
 	}
 	<-drained
+}
+
+// mailSender is the SMTP relay the configuration names, or a sender that only
+// logs when SMTP_HOST is unset; then nobody has to verify their address.
+func mailSender(c config.MailConfig) (mail.Sender, error) {
+	if c.SMTPHost == "" {
+		return mail.Disabled{}, nil
+	}
+	s := &mail.SMTP{Host: c.SMTPHost, Port: c.SMTPPort, Username: c.SMTPUsername, Password: c.SMTPPassword, From: c.From}
+	return s, s.Validate()
 }
 
 // formReader reads employer forms from the ATS origins the configuration names.

@@ -34,6 +34,19 @@ type Config struct {
 	// behind a Cloudflare Tunnel). Empty uses the connection's address. Never
 	// name a header the client can set unchecked, such as X-Forwarded-For.
 	ClientIPHeader string
+	// Mail is the SMTP relay for verification and reset emails. Sending is
+	// off while SMTPHost is empty.
+	Mail MailConfig
+}
+
+// MailConfig is read from SMTP_HOST, SMTP_PORT (587 by default),
+// SMTP_USERNAME, SMTP_PASSWORD (a secret) and MAIL_FROM.
+type MailConfig struct {
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	From         string
 }
 
 // Registration modes.
@@ -80,6 +93,7 @@ func Load() Config {
 		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
 		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
+		Mail:             loadMail(),
 	}
 }
 
@@ -94,6 +108,20 @@ func loadLLM() LLMConfig {
 		OllamaURL:    env("LLM_OLLAMA_URL", "http://localhost:11434"),
 		Timeout:      time.Duration(seconds) * time.Second,
 		CallsPerHour: calls,
+	}
+}
+
+func loadMail() MailConfig {
+	port, err := strconv.Atoi(env("SMTP_PORT", "587"))
+	if err != nil {
+		port = -1 // refused by the sender's validation at startup
+	}
+	return MailConfig{
+		SMTPHost:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		SMTPPort:     port,
+		SMTPUsername: os.Getenv("SMTP_USERNAME"),
+		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
+		From:         strings.TrimSpace(os.Getenv("MAIL_FROM")),
 	}
 }
 

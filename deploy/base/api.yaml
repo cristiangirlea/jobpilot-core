@@ -69,6 +69,13 @@ spec:
                 secretKeyRef:
                   name: jobpilot-jwt
                   key: secret
+          # Verification and reset emails: a Secret whose keys are the
+          # variables (SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD,
+          # MAIL_FROM). Without it nothing is sent and nobody has to verify.
+          envFrom:
+            - secretRef:
+                name: jobpilot-smtp
+                optional: true
           readinessProbe:
             httpGet:
               path: /api/health
