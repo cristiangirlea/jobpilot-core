@@ -33,11 +33,10 @@ cleanup() {
 		# the environment so no character in it can break the PowerShell source.
 		CHECK_API_EXE="$exe_path" powershell -NoProfile -Command 'Get-Process | Where-Object { $_.Path -eq $env:CHECK_API_EXE } | Stop-Process -Force' 2> /dev/null || true
 	fi
-	if [ -n "$api_pid" ]; then
-		kill "$api_pid" 2> /dev/null || true
-		wait "$api_pid" 2> /dev/null || true
-	fi
-	rm -f "$exe" # the log stays for reading; the binary would pile up run after run
+	if [ -n "$api_pid" ]; then kill "$api_pid" 2> /dev/null || true; fi
+	# The log stays for reading; the binary would pile up run after run. A failure here must not
+	# stop the container's removal.
+	rm -f "$exe" 2> /dev/null || echo "check-integration: could not remove $exe" >&2
 	docker rm -f "$pg" > /dev/null 2>&1 || true
 	echo "check-integration: stopped; API log at $run/api.log"
 }
