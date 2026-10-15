@@ -255,6 +255,87 @@ func TestApproveAnswerDefaultsToApproving(t *testing.T) {
 	}
 }
 
+func TestAnswerScopeIsPassedThrough(t *testing.T) {
+	cs, fake := session(t)
+	if res, text := call(t, cs, "save_answer", map[string]any{"question_text": "Why us?", "answer": "Because.", "scope": "job", "job_id": "job-a"}); res.IsError {
+		t.Fatal(text)
+	}
+	if fake.answers[0]["scope"] != "job" || fake.answers[0]["job_id"] != "job-a" {
+		t.Fatalf("the scope and its job must be sent, sent %v", fake.answers[0])
+	}
+	if res, text := call(t, cs, "save_answer", map[string]any{"question_text": "Why us?", "answer": "Because."}); res.IsError {
+		t.Fatal(text)
+	}
+	if _, sent := fake.answers[1]["scope"]; sent {
+		t.Fatalf("no scope means the API's default, sent %v", fake.answers[1])
+	}
+	if res, text := call(t, cs, "approve_answer", map[string]any{"answer_id": "a-2", "scope": "global"}); res.IsError {
+		t.Fatal(text)
+	}
+	if fake.answerPatches[0]["scope"] != "global" || fake.answerPatches[0]["approved"] != true {
+		t.Fatalf("approving for every job, sent %v", fake.answerPatches[0])
+	}
+	// Narrowing a draft to its own job needs no job_id: the API knows it.
+	if res, text := call(t, cs, "approve_answer", map[string]any{"answer_id": "a-2", "scope": "job"}); res.IsError {
+		t.Fatal(text)
+	}
+
+	for _, bad := range []map[string]any{
+		{"question_text": "Why us?", "answer": "Because.", "scope": "job"},
+		{"question_text": "Why us?", "answer": "Because.", "scope": "everywhere"},
+	} {
+		if res, text := call(t, cs, "save_answer", bad); !res.IsError || !(strings.Contains(text, "job_id") || strings.Contains(text, "scope must be")) {
+			t.Fatalf("%v must be refused: %s", bad, text)
+		}
+	}
+	if len(fake.answers) != 2 || len(fake.answerPatches) != 2 {
+		t.Fatal("refusals must not reach the API")
+	}
+}
+
+// An API from before scopes ignores the field, so a narrower scope would be
+// reused more widely than the user chose; it is refused instead.
+func TestAnswerScopeIsRefusedAgainstAnOldAPI(t *testing.T) {
+	cs, fake := sessionAgainstOldAPI(t)
+	for _, tool := range []struct {
+		name string
+		args map[string]any
+	}{
+		{"save_answer", map[string]any{"question_text": "Why us?", "answer": "Because.", "scope": "job", "job_id": "job-a"}},
+		{"approve_answer", map[string]any{"answer_id": "a-2", "scope": "global"}},
+	} {
+		if res, text := call(t, cs, tool.name, tool.args); !res.IsError || !strings.Contains(text, "predates answer scopes") {
+			t.Fatalf("%s: expected a refusal, got %s", tool.name, text)
+		}
+	}
+	if len(fake.answers) != 0 || len(fake.answerPatches) != 0 {
+		t.Fatal("the refusals must happen before any request")
+	}
+	if res, text := call(t, cs, "save_answer", map[string]any{"question_text": "Why us?", "answer": "Because."}); res.IsError {
+		t.Fatalf("an answer without a scope still works on an old API: %s", text)
+	}
+}
+
+// A server that could not check the API at startup checks before sending a
+// scope, so an old API that came up later is still caught.
+func TestAnswerScopeChecksAnUncheckedAPI(t *testing.T) {
+	cs, fake := sessionUnchecked(t, true)
+	if res, text := call(t, cs, "approve_answer", map[string]any{"answer_id": "a-2", "scope": "job"}); !res.IsError || !strings.Contains(text, "predates answer scopes") {
+		t.Fatalf("an old API found late must still refuse a scope, got %s", text)
+	}
+	if len(fake.answerPatches) != 0 {
+		t.Fatal("the refusal must happen before any request")
+	}
+
+	cs, fake = sessionUnchecked(t, false)
+	if res, text := call(t, cs, "approve_answer", map[string]any{"answer_id": "a-2", "scope": "job"}); res.IsError {
+		t.Fatalf("a current API found late must accept a scope: %s", text)
+	}
+	if len(fake.answerPatches) != 1 || fake.answerPatches[0]["scope"] != "job" {
+		t.Fatalf("the scope must be sent, got %v", fake.answerPatches)
+	}
+}
+
 func TestCVTools(t *testing.T) {
 	cs, fake := session(t)
 

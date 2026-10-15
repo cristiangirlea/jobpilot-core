@@ -22,12 +22,37 @@ type saveAnswerInput struct {
 	RoleFamily   string   `json:"role_family,omitempty" jsonschema:"Which kind of role this answer suits; defaults to general"`
 	Technologies []string `json:"technologies,omitempty" jsonschema:"Technologies this answer is specific to, which decides where it is reused"`
 	Approved     bool     `json:"approved,omitempty" jsonschema:"Set true only when the user has read this exact wording and confirmed it. Default false"`
+	Scope        string   `json:"scope,omitempty" jsonschema:"Where it is reused: global (every job), role_family (the default) or job (job_id only)"`
+	JobID        string   `json:"job_id,omitempty" jsonschema:"The job a job-scoped answer is for"`
 }
 
 type approveAnswerInput struct {
 	AnswerID string `json:"answer_id" jsonschema:"The answer bank entry, from list_answers or a resolution's entry_id"`
 	Approved *bool  `json:"approved,omitempty" jsonschema:"Defaults to true; pass false to withdraw approval"`
 	Answer   string `json:"answer,omitempty" jsonschema:"Replacement wording, when the user edited it"`
+	Scope    string `json:"scope,omitempty" jsonschema:"Where it is reused: global (every job), role_family or job; unchanged when omitted"`
+	JobID    string `json:"job_id,omitempty" jsonschema:"For scope job: the job, when not the one the draft was written for"`
+}
+
+// answerScope checks a scope the user chose for an answer. An API from before
+// scopes would ignore it and keep the answer for its role family, which is not
+// what the user said, so that is refused rather than sent, and so is an API
+// whose version cannot be confirmed.
+func answerScope(ctx context.Context, c *Client, scope, jobID string, needJob bool) (string, error) {
+	scope = strings.TrimSpace(scope)
+	switch scope {
+	case "", "role_family":
+	case "global", "job":
+		if !c.supports(ctx, scopesContract) {
+			return "", errors.New("this API predates answer scopes, or its version could not be confirmed, and would ignore the scope, keeping the answer for its role family; save it without a scope, or update the API")
+		}
+	default:
+		return "", errors.New("scope must be global, role_family or job")
+	}
+	if scope == "job" && needJob && strings.TrimSpace(jobID) == "" {
+		return "", errors.New("job_id is required for scope job")
+	}
+	return scope, nil
 }
 
 type resolveInput struct {
@@ -136,7 +161,8 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:  "save_answer",
 		Title: "Save an answer",
 		Description: "Add an answer to the bank for reuse on similar questions. It is saved unapproved unless the user has read this exact wording and confirmed it, " +
-			"because an unapproved answer is never reused and that is the safe default. Use only facts from the profile or an uploaded CV.",
+			"because an unapproved answer is never reused and that is the safe default. Use only facts from the profile or an uploaded CV. " +
+			"Ask the user where it applies: every job, this kind of role, or this job only; the narrowest match wins.",
 		Annotations: writeTool("Save an answer", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in saveAnswerInput) (*mcp.CallToolResult, AnswerEntry, error) {
 		if strings.TrimSpace(in.QuestionText) == "" {
@@ -148,17 +174,22 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		// The API treats a hand-written answer as self-approving when the
 		// field is absent. An agent's is not, so it is always explicit.
 		approved := in.Approved
+		scope, err := answerScope(ctx, c, in.Scope, in.JobID, true)
+		if err != nil {
+			return nil, AnswerEntry{}, err
+		}
 		out, err := c.SaveAnswer(ctx, answerWrite{
 			QuestionText: in.QuestionText, Answer: in.Answer,
-			RoleFamily: in.RoleFamily, Technologies: in.Technologies, Approved: &approved,
+			RoleFamily: in.RoleFamily, Scope: scope, JobID: in.JobID, Technologies: in.Technologies, Approved: &approved,
 		})
 		return nil, out, toolError(err)
 	})
 
 	addTool(s, &mcp.Tool{
-		Name:        "approve_answer",
-		Title:       "Approve an answer",
-		Description: "Approve a saved answer so it can be reused, optionally replacing its wording first. Only call this after the user has read the exact text and said yes.",
+		Name:  "approve_answer",
+		Title: "Approve an answer",
+		Description: "Approve a saved answer so it can be reused, optionally replacing its wording first. Only call this after the user has read the exact text and said yes, " +
+			"and ask them where it applies: every job, this kind of role, or this job only.",
 		Annotations: writeTool("Approve an answer", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveAnswerInput) (*mcp.CallToolResult, AnswerEntry, error) {
 		if strings.TrimSpace(in.AnswerID) == "" {
@@ -168,7 +199,11 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		if in.Approved != nil {
 			approved = *in.Approved
 		}
-		out, err := c.UpdateAnswer(ctx, in.AnswerID, answerPatch{Answer: in.Answer, Approved: &approved})
+		scope, err := answerScope(ctx, c, in.Scope, in.JobID, false)
+		if err != nil {
+			return nil, AnswerEntry{}, err
+		}
+		out, err := c.UpdateAnswer(ctx, in.AnswerID, answerPatch{Answer: in.Answer, Approved: &approved, Scope: scope, JobID: in.JobID})
 		return nil, out, toolError(err)
 	})
 

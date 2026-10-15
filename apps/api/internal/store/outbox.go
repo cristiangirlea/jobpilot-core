@@ -405,17 +405,23 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 		case "template":
 			return OutboxRefusal(fmt.Sprintf("A required question carries template wording you have not reviewed: %q. Save your own answer to it in the answer bank, then prepare this application again.", answer.Label)), nil
 		case "ai":
-			var banked string
+			var banked, scope, bankJob string
 			var bankApproved bool
 			err := pgx.ErrNoRows // a draft the bank never stored has nothing to approve
 			if answer.EntryID != "" {
-				err = tx.QueryRow(ctx, `SELECT answer, approved FROM answer_bank WHERE user_id=$1 AND id=$2 FOR SHARE`, userID, answer.EntryID).Scan(&banked, &bankApproved)
+				err = tx.QueryRow(ctx, `SELECT answer, approved, scope, COALESCE(job_id::text,'') FROM answer_bank WHERE user_id=$1 AND id=$2 FOR SHARE`,
+					userID, answer.EntryID).Scan(&banked, &bankApproved, &scope, &bankJob)
 			}
 			if errors.Is(err, pgx.ErrNoRows) || (err == nil && !bankApproved) {
 				return OutboxRefusal(fmt.Sprintf("A required question carries a drafted answer you have not approved: %q. Approve it in the answer bank first.", answer.Label)), nil
 			}
 			if err != nil {
 				return "", err
+			}
+			// Drafts for several jobs can share one bank entry; approving it for
+			// one of them only is no approval for the others.
+			if scope == models.AnswerScopeJob && bankJob != entry.JobID {
+				return OutboxRefusal(fmt.Sprintf("The answer to %q is approved for another job only. Approve it for this job too in the answer bank, then prepare this application again.", answer.Label)), nil
 			}
 			if strings.TrimSpace(banked) != strings.TrimSpace(answer.Answer) {
 				return OutboxRefusal(fmt.Sprintf("You changed your answer to %q after this application was prepared. Prepare it again so it carries the answer you approved.", answer.Label)), nil

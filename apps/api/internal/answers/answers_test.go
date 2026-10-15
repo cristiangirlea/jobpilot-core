@@ -152,7 +152,7 @@ type fakeBank struct {
 	touched []string
 }
 
-func (f *fakeBank) FindAnswer(_ context.Context, _, normalized, roleFamily string) (models.AnswerEntry, bool, error) {
+func (f *fakeBank) FindAnswer(_ context.Context, _, normalized, roleFamily, _ string) (models.AnswerEntry, bool, error) {
 	for _, entry := range f.entries {
 		if entry.QuestionNormalized == normalized && (entry.RoleFamily == roleFamily || entry.RoleFamily == "") {
 			return entry, true, nil
@@ -161,7 +161,7 @@ func (f *fakeBank) FindAnswer(_ context.Context, _, normalized, roleFamily strin
 	return models.AnswerEntry{}, false, nil
 }
 
-func (f *fakeBank) CandidateAnswers(_ context.Context, _, questionKey string, _ int) ([]models.AnswerEntry, error) {
+func (f *fakeBank) CandidateAnswers(_ context.Context, _, questionKey, _, _ string, _ int) ([]models.AnswerEntry, error) {
 	var out []models.AnswerEntry
 	for _, entry := range f.entries {
 		if entry.QuestionKey == questionKey {
@@ -301,6 +301,63 @@ func TestGeneratedAnswersAreStoredUnapproved(t *testing.T) {
 	}
 	if len(bank.saved) != 1 || bank.saved[0].Approved {
 		t.Fatalf("expected exactly one unapproved saved entry, got %+v", bank.saved)
+	}
+}
+
+func TestGeneratedAnswersRememberTheirJob(t *testing.T) {
+	bank := &fakeBank{}
+	service := &Service{Bank: bank, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
+	s := subject()
+	s.Job.ID = "job-1"
+	if _, err := service.Resolve(context.Background(), "u1", Question{Text: "What is the strangest bug you have shipped?"}, s); err != nil {
+		t.Fatal(err)
+	}
+	// The draft stays a role-family answer until approved, but keeps the job,
+	// so approving it can narrow it to that job.
+	if len(bank.saved) != 1 || bank.saved[0].JobID != "job-1" || bank.saved[0].Scope != "" {
+		t.Fatalf("expected one draft for job-1 in the default scope, got %+v", bank.saved)
+	}
+}
+
+func TestSimilarReuseByScope(t *testing.T) {
+	// Same canonical question as "Why are you a good fit?", for a role of
+	// another family with no stack in common.
+	other := func(id, scope string) models.AnswerEntry {
+		return models.AnswerEntry{ID: id, QuestionKey: KeyWhyFit, QuestionNormalized: "what makes you the right candidate " + id,
+			Answer: id, RoleFamily: "frontend", Scope: scope, Technologies: []string{"react"}, Approved: true}
+	}
+	resolve := func(entries ...models.AnswerEntry) Resolution {
+		t.Helper()
+		service := &Service{Bank: &fakeBank{entries: entries}, LLM: llm.New(nil, nil, 0, 0)}
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: "Why are you a good fit?"}, subject())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resolution
+	}
+	if got := resolve(other("family", models.AnswerScopeRoleFamily)); got.Source == SourceBankSimilar {
+		t.Fatalf("a role-family answer for unrelated roles must not be reused, got %+v", got)
+	}
+	if got := resolve(other("every job", models.AnswerScopeGlobal)); got.Source != SourceBankSimilar || got.Answer != "every job" {
+		t.Fatalf("an answer for every job needs no overlap, got %+v", got)
+	}
+	// The store offers a job-only answer to its own job alone, and there it
+	// wins over a closer match.
+	near := models.AnswerEntry{ID: "close", QuestionKey: KeyWhyFit, QuestionNormalized: "close", Answer: "close",
+		RoleFamily: "backend", Technologies: []string{"go", "kubernetes", "postgresql"}, Approved: true}
+	if got := resolve(near, other("this job", models.AnswerScopeJob)); got.Answer != "this job" {
+		t.Fatalf("this job's own answer comes first, got %+v", got)
+	}
+	// However much used, a broader answer never beats a narrower one.
+	busy := near
+	busy.ID, busy.Answer, busy.UsageCount, busy.Scope = "busy", "busy", 5000, models.AnswerScopeGlobal
+	if got := resolve(busy, other("this job", models.AnswerScopeJob)); got.Answer != "this job" {
+		t.Fatalf("a much-used answer for every job must not beat this job's, got %+v", got)
+	}
+	weak := other("weak family", models.AnswerScopeRoleFamily)
+	weak.RoleFamily = "backend" // the job's family, with no stack in common
+	if got := resolve(busy, weak); got.Answer != "weak family" {
+		t.Fatalf("the role family's answer comes before one for every job, got %+v", got)
 	}
 }
 
