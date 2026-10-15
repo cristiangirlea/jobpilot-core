@@ -40,6 +40,7 @@ services:
       # (and ADMIN_EMAILS) before sharing it with anyone.
       REGISTRATION: ${REGISTRATION:-open}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      USER_AGENT_TOKENS: ${USER_AGENT_TOKENS:-off}
       CLIENT_IP_HEADER: ${CLIENT_IP_HEADER:-}
       # Optional sign-in with Google, off while GOOGLE_CLIENT_ID is empty.
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}

@@ -43,12 +43,6 @@ func (s *Store) CreateUser(ctx context.Context, email, hash string) (models.User
 	return u, err
 }
 
-// UserEmail is the sign-in email of an account.
-func (s *Store) UserEmail(ctx context.Context, id string) (string, error) {
-	var email string
-	err := s.DB.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, id).Scan(&email)
-	return email, err
-}
 func (s *Store) Credentials(ctx context.Context, email string) (models.User, string, error) {
 	var u models.User
 	var hash string

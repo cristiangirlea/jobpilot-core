@@ -222,6 +222,16 @@ type DiscoveredJob struct {
 	Input      JobInput
 }
 
+// CatalogSummary is what a user who does not run discovery sees of it: how
+// fresh the shared catalog is and how many open jobs fit them.
+type CatalogSummary struct {
+	LastJobAt   *time.Time `json:"last_job_at"`
+	JobsLast24h int        `json:"jobs_last_24h"`
+	JobsLast7d  int        `json:"jobs_last_7d"`
+	OpenJobs    int        `json:"open_jobs"`
+	OpenMatches int        `json:"open_matches"`
+}
+
 type DiscoveryRun struct {
 	ID                   string     `json:"id"`
 	Status               string     `json:"status"`

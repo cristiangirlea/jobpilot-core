@@ -83,7 +83,7 @@ func TestEmailVerificationAgainstPostgres(t *testing.T) {
 		t.Fatalf("the link should point at the web app's page: %q", m.Body)
 	}
 
-	w := call(t, h, "GET", "/api/account", session, ``)
+	w := call(t, h, "GET", "/api/me", session, ``)
 	if w.Code != 200 || !strings.Contains(w.Body.String(), `"email_verified":false`) || !strings.Contains(w.Body.String(), `"verification_required":true`) {
 		t.Fatalf("the account should say it needs verifying: %d %s", w.Code, w.Body.String())
 	}
@@ -161,7 +161,7 @@ func TestNoMailMeansNoVerificationAgainstPostgres(t *testing.T) {
 	s := &Server{Store: st, Secret: "nomail-test-secret", TokenTTL: time.Hour, Registration: config.RegistrationOpen}
 	h := s.Handler()
 	session := signUp(t, s, "nomail-"+run+"@example.test", "nomail-password")
-	if w := call(t, h, "GET", "/api/account", session, ``); !strings.Contains(w.Body.String(), `"verification_required":false`) {
+	if w := call(t, h, "GET", "/api/me", session, ``); !strings.Contains(w.Body.String(), `"verification_required":false`) {
 		t.Fatalf("verification should not be required without mail: %s", w.Body.String())
 	}
 	if w := call(t, h, "POST", "/api/tokens", session, `{"name":"no mail","scopes":["read"]}`); w.Code != 201 {
@@ -237,5 +237,34 @@ func TestPasswordResetAgainstPostgres(t *testing.T) {
 	call(t, h, "POST", "/api/auth/password-reset", "", `{"email":"`+email+`"}`)
 	if w := call(t, h, "POST", "/api/auth/password-reset", "", `{"email":"`+email+`"}`); w.Code != 429 {
 		t.Fatalf("the fourth request for one email in an hour should be limited: %d", w.Code)
+	}
+}
+
+// While the server sends email, an account whose address ADMIN_EMAILS names
+// is an admin only once the address is verified, so signing up with an
+// admin's address before its owner gains nothing.
+func TestAdminNeedsAVerifiedAddressAgainstPostgres(t *testing.T) {
+	st := accountsStore(t)
+	run := time.Now().Format("20060102150405.000000")
+	sent := newFakeMail()
+	email := "would-be-admin-" + run + "@example.test"
+	s := &Server{Store: st, Secret: "admin-verify-secret", TokenTTL: time.Hour, Registration: config.RegistrationOpen, AdminEmails: []string{email}, FrontendURL: "https://jobs.example.test", Mailer: sent}
+	h := s.Handler()
+	session := signUp(t, s, email, "admin-password")
+	_, token := sent.next(t, email)
+	if w := call(t, h, "GET", "/api/me", session, ``); w.Code != 200 || !strings.Contains(w.Body.String(), `"admin":false`) {
+		t.Fatalf("an unverified address must not make an admin: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(t, h, "GET", "/api/invites", session, ``); w.Code != 403 {
+		t.Fatalf("an unverified admin address must not manage invites: %d", w.Code)
+	}
+	if w := call(t, h, "POST", "/api/auth/verify-email", "", `{"token":"`+token+`"}`); w.Code != 200 {
+		t.Fatalf("verify: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(t, h, "GET", "/api/me", session, ``); !strings.Contains(w.Body.String(), `"admin":true`) || !strings.Contains(w.Body.String(), `"email_verified":true`) {
+		t.Fatalf("once verified the account is an admin: %s", w.Body.String())
+	}
+	if w := call(t, h, "GET", "/api/invites", session, ``); w.Code != 200 {
+		t.Fatalf("a verified admin manages invites: %d", w.Code)
 	}
 }

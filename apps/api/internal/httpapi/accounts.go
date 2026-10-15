@@ -9,7 +9,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -179,15 +178,16 @@ func signUpRefused(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// requireAdmin lets through only the accounts ADMIN_EMAILS names.
+// requireAdmin lets through only the accounts ADMIN_EMAILS names (with a
+// verified address while email is on); with no ADMIN_EMAILS, nobody.
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email, err := s.Store.UserEmail(r.Context(), auth.UserID(r.Context()))
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		ok, err := s.namedAdmin(r.Context(), auth.UserID(r.Context()))
+		if err != nil {
 			internal(w, err)
 			return
 		}
-		if err != nil || !slices.Contains(s.AdminEmails, strings.ToLower(email)) {
+		if !ok {
 			problem(w, 403, invitesNeedAdmin)
 			return
 		}

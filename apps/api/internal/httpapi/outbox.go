@@ -108,8 +108,9 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// The letter.
-	entry.CoverLetter, entry.CoverLetterSource = generator.CoverLetter(ctx, s.LLM, profile, job.Job, job.Match)
-	if entry.CoverLetterSource == generator.LetterSourceTemplate && s.LLM.Enabled() {
+	ai := s.llmFor(ctx)
+	entry.CoverLetter, entry.CoverLetterSource = generator.CoverLetter(ctx, ai, profile, job.Job, job.Match)
+	if entry.CoverLetterSource == generator.LetterSourceTemplate && ai.Enabled() {
 		// Worth knowing, but the letter is still usable, so it does not block.
 		entry.Notices = append(entry.Notices, "The cover letter fell back to the deterministic template because the AI provider did not respond.")
 	}
@@ -208,7 +209,7 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 // letter fields are filled from the composed application rather than the answer
 // bank, and demographic questions never reach here at all.
 func (s *Server) answerForm(ctx context.Context, uid string, form ats.Form, profile models.Profile, job models.JobWithMatch) ([]models.OutboxAnswer, int) {
-	service := s.answerService()
+	service := s.answerService(ctx)
 	subject := answers.Subject{
 		Profile:   profile,
 		Job:       job.Job,

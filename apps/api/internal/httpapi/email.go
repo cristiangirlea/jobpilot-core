@@ -130,17 +130,6 @@ func (s *Server) requireVerified(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// account is the signed-in user's own record, with whether this server asks
-// for a verified address.
-func (s *Server) account(w http.ResponseWriter, r *http.Request) {
-	u, err := s.Store.User(r.Context(), auth.UserID(r.Context()))
-	if err != nil {
-		internal(w, err)
-		return
-	}
-	write(w, 200, map[string]any{"email": u.Email, "email_verified": u.EmailVerified, "verification_required": s.verificationRequired()})
-}
-
 // resendVerification sends a new link; the earlier ones stop working.
 func (s *Server) resendVerification(w http.ResponseWriter, r *http.Request) {
 	if !s.verificationRequired() {

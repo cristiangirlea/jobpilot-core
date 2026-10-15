@@ -29,6 +29,10 @@ type Config struct {
 	// or closed. AdminEmails are the accounts that may create invites.
 	Registration string
 	AdminEmails  []string
+	// UserAgentTokens is what agent tokens accounts other than the admins may
+	// hold and use (#128): off (the default), read or write. It matters only
+	// with AdminEmails set; without admins every account has full access.
+	UserAgentTokens string
 	// ClientIPHeader names a request header that holds the caller's address,
 	// set by a proxy in front of the API that overwrites it (CF-Connecting-IP
 	// behind a Cloudflare Tunnel). Empty uses the connection's address. Never
@@ -67,6 +71,11 @@ const (
 // Validate refuses settings the API cannot run with, so a typo fails at
 // startup instead of opening sign-up.
 func (c Config) Validate() error {
+	switch c.UserAgentTokens {
+	case "off", "read", "write":
+	default:
+		return fmt.Errorf("USER_AGENT_TOKENS must be off, read or write, not %q", c.UserAgentTokens)
+	}
 	switch c.Registration {
 	case RegistrationInvite, RegistrationOpen, RegistrationClosed:
 		return nil
@@ -116,6 +125,7 @@ func Load() Config {
 		LLM:              loadLLM(),
 		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
+		UserAgentTokens:  strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
 		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
 		Mail:             loadMail(),
 		Google: GoogleConfig{

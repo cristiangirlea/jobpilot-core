@@ -669,7 +669,6 @@ Authorization: Bearer <token>
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/api/account` | The signed-in account's `email`, `email_verified`, and whether this server requires verification |
 | `POST` | `/api/account/verification` | Send a new verification link; earlier links stop working |
 
 ### Invite endpoints
@@ -715,8 +714,13 @@ Both job lists take optional parameters: `state` (`accepted`, `rejected` or `all
 
 ### Discovery endpoints
 
+With `ADMIN_EMAILS` set, these and `/api/ai/status` are for admins (signed in or through their agent tokens); members get 403. `/api/jobs/find` and `/api/catalog/summary` are for every account.
+
 | Method | Path | Purpose |
 |---|---|---|
+| `POST` | `/api/jobs/find` | Score the catalog's open jobs the caller has no match for yet against their profile and filters; fetches nothing |
+| `GET` | `/api/catalog/summary` | When jobs last arrived, how many in 24 hours and 7 days, open jobs, and the caller's open matches |
+| `GET` | `/api/me` | Whether the caller is an admin, whether roles are on, the caller's agent token policy, `email`, `email_verified`, and whether this server requires verification |
 | `GET`, `PUT` | `/api/discovery/settings` | Read or save scheduler and auto-prepare settings |
 | `GET`, `POST` | `/api/discovery/sources` | List or create sources |
 | `PUT`, `DELETE` | `/api/discovery/sources/{id}` | Edit, pause/resume, or remove a source |
@@ -907,6 +911,11 @@ JobPilot's own login is the only gate in front of it, so sign-up and login are g
 
 - **Sign-up mode.** `REGISTRATION=invite` (the default) needs a single-use invite code; `open` lets anyone register; `closed` refuses every sign-up. An unknown value stops the API at startup. A new server has no admin and no invites yet: start it with `open`, register the owner's account, name it in `ADMIN_EMAILS`, then restart with `invite`. Every way of creating an account goes through one gate, `checkSignUp` (then `createAccount` for the form) in `internal/httpapi/accounts.go`; Google sign-up asks it without an invite, so it creates accounts only while sign-up is open.
 - **Invites.** An account listed in `ADMIN_EMAILS` creates them under **Settings > Invites**, or with `POST /api/invites`. A code (`jpi_` prefix) is shown once, stored only as its SHA-256 digest, lasts 1 to 90 days (14 by default), and is claimed in the same transaction that creates the account, so it works once and a refused sign-up does not spend it. A missing, unknown, used or expired code all get the same 403. Fifty open invites per admin. The register page reads `?invite=` from its address, so a link can carry the code.
+- **Roles** (#128). With `ADMIN_EMAILS` set, the accounts it names are admins and every other account is a member. A member works with its own data (profile, CV, filters, jobs, matches, applications, answers, outbox), as every account always has. What is shared or spends the server owner's resources belongs to the admins:
+  - **Discovery:** sources, boards, settings, runs and the scheduler. Member requests get 403, and the scheduler skips members' schedules. Every new job an admin's run stores is scored for every account against its own profile and filters. A member's jobs page shows how fresh the catalog is, with **Find jobs for my profile** to score anything new; nothing is fetched on their behalf. Only discovered jobs are shared this way: a job someone imports by link stays with them, so no account can place a posting in another's inbox.
+  - **The AI provider:** members draft with the deterministic templates; `/api/ai/status` is for admins.
+  - **Agent tokens:** members hold and use them only as `USER_AGENT_TOKENS` allows (`off` by default, `read` or `write`). This is checked at use as well as at creation, so lowering it applies to tokens already issued. Admins' tokens reach discovery too, for an admin's MCP server.
+  Without `ADMIN_EMAILS` there are no roles and every account has full access, as a single-user install always had. Admin is decided by email. While the server sends email, an account counts as admin (and may manage invites) only once its address is verified; without email nothing is verified, so register each admin account before naming it in `ADMIN_EMAILS`, or someone who signs up first with that address on an open server becomes admin. `GET /api/me` tells the web app which applies, and it hides what a member cannot use.
 - **Rate limits.** Login: 30 attempts per client address and 10 per email in 15 minutes; a successful login clears the email's count. Sign-up: 10 per address and 5 per email an hour. Past a limit the answer is 429 with `Retry-After`, before any database or bcrypt work. Emails are counted by their SHA-256 digest, so the table's size does not depend on what a caller sends. Counts are kept in memory (`internal/ratelimit`), which suits the single API replica; a restart forgets them. The address is the connection's unless `CLIENT_IP_HEADER` names a header the proxy in front overwrites (`CF-Connecting-IP` behind a Cloudflare Tunnel); IPv6 addresses count by their /64.
 - **Equal answers.** A login for an unknown email runs a bcrypt comparison against a fixed hash of the same cost and gets the same 401 text as a wrong password, so neither the time nor the text tells whether an account exists.
 - **Email.** Verification and reset emails go through an SMTP relay over TLS (`SMTP_HOST` and friends; the relay is the operator's choice, Brevo's free one works). Without `SMTP_HOST` no email is prepared or sent and verification is not required, which is how tests, CI and local runs work; the startup log says `email=false`. Email work (the lookup for a reset, minting the link, sending) runs on four workers fed by a queue of 64; when the queue is full a job is dropped and logged, and failures are logged with the recipient and subject, never the link. Links point at `FRONTEND_URL` and carry their token in the fragment, so it never reaches a server log; only a token's SHA-256 digest is stored.
@@ -988,7 +997,8 @@ When changing schema:
 | `FRONTEND_URL` | Allowed CORS origin; Compose uses `http://localhost:3000` |
 | `TOKEN_TTL_HOURS` | Defaults to `168` (7 days) |
 | `REGISTRATION` | `invite` (default), `open` or `closed`; Compose defaults to `open` for local development. See "Accounts and sign-up" |
-| `ADMIN_EMAILS` | Comma-separated accounts that may create invites |
+| `ADMIN_EMAILS` | Comma-separated accounts that may create invites. Set, it also turns on roles: other accounts are members, without discovery or the AI provider (see "Accounts and sign-up") |
+| `USER_AGENT_TOKENS` | `off` (default), `read` or `write`: the agent tokens members may hold and use. Admins are unaffected; without `ADMIN_EMAILS` it has no effect |
 | `CLIENT_IP_HEADER` | Header holding the caller's address, set by the proxy in front (`CF-Connecting-IP` behind a Cloudflare Tunnel); empty uses the connection's address |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | SMTP relay for verification and reset emails (port 587 by default, TLS required); unset sends nothing. In Kubernetes they come from the optional `jobpilot-smtp` Secret. See "Accounts and sign-up" |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |

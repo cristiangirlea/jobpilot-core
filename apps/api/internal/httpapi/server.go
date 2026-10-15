@@ -52,11 +52,17 @@ import (
 //	8: registering needs an invite unless the server allows open sign-up
 //	   (403 otherwise); login and registration answer 429 with Retry-After
 //	   when rate-limited.
-//	9: users carry email_verified; while the server sends email, an
-//	   unverified account is refused with 403 on running discovery,
+//	9: with ADMIN_EMAILS set, discovery and the AI status answer 403 to
+//	   other accounts, which also draft without the AI provider and hold
+//	   agent tokens only as USER_AGENT_TOKENS allows; GET /api/me says which
+//	   applies to the caller.
+//	10: users carry email_verified, and GET /api/me says whether the
+//	   caller's address is verified and whether this server requires it;
+//	   while the server sends email, an unverified account is refused with
+//	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-const Contract = 9
+const Contract = 10
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -80,9 +86,12 @@ type Server struct {
 	// Registration is config.RegistrationInvite (also when empty), Open or
 	// Closed; AdminEmails may manage invites; ClientIPHeader is
 	// config.Config's, the proxy header rate limits read the address from.
-	Registration   string
-	AdminEmails    []string
-	ClientIPHeader string
+	Registration string
+	AdminEmails  []string
+	// UserAgentTokens is what agent tokens members may hold and use:
+	// TokensOff (the default), TokensRead or TokensWrite. Admins hold any.
+	UserAgentTokens string
+	ClientIPHeader  string
 	// Mailer sends verification and reset emails; nil sends nothing, and
 	// then no account has to verify its address.
 	Mailer mailer.Sender
@@ -119,9 +128,20 @@ func (s *Server) Handler() http.Handler {
 	// siblings or revoke itself. consent: browser logins only too, because
 	// approving an application is the user's consent to send it, which no
 	// agent gives, whatever its scopes.
-	p := func(h http.HandlerFunc) http.Handler { return auth.Middleware(s.Secret, s.Store, h) }
+	p := func(h http.HandlerFunc) http.Handler {
+		return auth.Middleware(s.Secret, s.Store, s.agentPolicy(false, h))
+	}
 	w := func(h http.HandlerFunc) http.Handler {
-		return auth.Middleware(s.Secret, s.Store, auth.RequireScope(auth.ScopeWrite, h))
+		return auth.Middleware(s.Secret, s.Store, auth.RequireScope(auth.ScopeWrite, s.agentPolicy(true, h)))
+	}
+	// ap and aw: admins only (#128), signed in or through their agent tokens,
+	// so an admin's MCP server keeps running discovery; aw also needs the
+	// write scope. With no ADMIN_EMAILS every account passes.
+	ap := func(h http.HandlerFunc) http.Handler {
+		return auth.Middleware(s.Secret, s.Store, s.adminOnly(needsAdmin, h))
+	}
+	aw := func(h http.HandlerFunc) http.Handler {
+		return auth.Middleware(s.Secret, s.Store, auth.RequireScope(auth.ScopeWrite, s.adminOnly(needsAdmin, h)))
 	}
 	session := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireSession("Use the web app to manage agent tokens.", h))
@@ -133,9 +153,9 @@ func (s *Server) Handler() http.Handler {
 	admin := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireSession("Use the web app to manage invites.", s.requireAdmin(h)))
 	}
-	m.Handle("GET /api/account", p(s.account))
 	m.Handle("POST /api/account/verification", w(s.resendVerification))
-	m.Handle("GET /api/ai/status", p(s.aiStatus))
+	m.Handle("GET /api/ai/status", ap(s.aiStatus))
+	m.Handle("GET /api/me", p(s.me))
 	m.Handle("GET /api/answers", p(s.listAnswers))
 	m.Handle("POST /api/answers", w(s.saveAnswer))
 	m.Handle("PATCH /api/answers/{id}", w(s.updateAnswer))
@@ -174,6 +194,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("PUT /api/filters/{id}", w(s.saveFilter))
 	m.Handle("DELETE /api/filters/{id}", w(s.deleteFilter))
 	m.Handle("GET /api/jobs", p(s.listJobs))
+	m.Handle("POST /api/jobs/find", w(s.findJobs))
+	m.Handle("GET /api/catalog/summary", p(s.catalogSummary))
 	m.Handle("POST /api/jobs", w(s.importJob))
 	m.Handle("GET /api/jobs/{id}", p(s.getJob))
 	m.Handle("POST /api/jobs/{id}/report", w(s.reportJob))
@@ -187,18 +209,18 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))
-	m.Handle("GET /api/discovery/settings", p(s.discoverySettings))
-	m.Handle("PUT /api/discovery/settings", w(s.saveDiscoverySettings))
-	m.Handle("GET /api/discovery/sources", p(s.discoverySources))
-	m.Handle("POST /api/discovery/sources", w(s.addDiscoverySource))
-	m.Handle("PUT /api/discovery/sources/{id}", w(s.updateDiscoverySource))
-	m.Handle("POST /api/discovery/validate", p(s.validateDiscoverySource))
-	m.Handle("DELETE /api/discovery/sources/{id}", w(s.deleteDiscoverySource))
-	m.Handle("GET /api/discovery/runs", p(s.discoveryRuns))
-	m.Handle("POST /api/discovery/run", w(s.requireVerified(s.runDiscovery)))
-	m.Handle("POST /api/discovery/recommended", w(s.requireVerified(s.runRecommendedDiscovery)))
-	m.Handle("GET /api/discovery/suggestions", p(s.boardSuggestions))
-	m.Handle("POST /api/discovery/detect", p(s.detectBoard))
+	m.Handle("GET /api/discovery/settings", ap(s.discoverySettings))
+	m.Handle("PUT /api/discovery/settings", aw(s.saveDiscoverySettings))
+	m.Handle("GET /api/discovery/sources", ap(s.discoverySources))
+	m.Handle("POST /api/discovery/sources", aw(s.addDiscoverySource))
+	m.Handle("PUT /api/discovery/sources/{id}", aw(s.updateDiscoverySource))
+	m.Handle("POST /api/discovery/validate", ap(s.validateDiscoverySource))
+	m.Handle("DELETE /api/discovery/sources/{id}", aw(s.deleteDiscoverySource))
+	m.Handle("GET /api/discovery/runs", ap(s.discoveryRuns))
+	m.Handle("POST /api/discovery/run", aw(s.requireVerified(s.runDiscovery)))
+	m.Handle("POST /api/discovery/recommended", aw(s.requireVerified(s.runRecommendedDiscovery)))
+	m.Handle("GET /api/discovery/suggestions", ap(s.boardSuggestions))
+	m.Handle("POST /api/discovery/detect", ap(s.detectBoard))
 	m.Handle("POST /api/jobs/{id}/outbound", w(s.outbound))
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.requireVerified(s.createToken)))
@@ -540,6 +562,11 @@ func (s *Server) deleteFilter(w http.ResponseWriter, r *http.Request) {
 // goes away: a page reload mid-request would otherwise leave every match scored
 // against the old profile.
 func (s *Server) reevaluateJobs(r *http.Request) error {
+	// After the change is stored and before reading it back, so a catalog
+	// pass that read the old exclusions cannot save after this one. The
+	// deadline starts once the lock is held, so waiting for a long pass
+	// cannot leave this repair without time to run.
+	defer s.Discovery.LockMatching(auth.UserID(r.Context()))()
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
 	defer cancel()
 	uid := auth.UserID(ctx)
