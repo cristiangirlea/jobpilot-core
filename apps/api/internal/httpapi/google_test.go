@@ -223,4 +223,19 @@ func TestGoogleSignInAgainstPostgres(t *testing.T) {
 	if stranger.Header().Get("Location") != googleFrontend+"/login?error=google_no_account" {
 		t.Fatalf("someone without an account was sent to %q", stranger.Header().Get("Location"))
 	}
+
+	// With sign-up on, the same stranger gets a new account of their own,
+	// while an existing account's email still needs linking.
+	h = googleServer(t, p, st, true)
+	if rec := flow("/api/auth/google/start", "sub-other-"+run, email); rec.Header().Get("Location") != googleFrontend+"/login?error=google_link" {
+		t.Fatalf("sign-up on joined an existing account by email: %q", rec.Header().Get("Location"))
+	}
+	joined := flow("/api/auth/google/start", "sub-stranger-"+run, "stranger-"+run+"@example.test")
+	created := post(h, "/api/auth/google/exchange", `{"code":"`+codeOf(joined, googleFrontend+"/login/google?code=")+`"}`, "", cookieNamed(joined, "jobpilot_oidc_bind"))
+	if created.Code != 200 || json.Unmarshal(created.Body.Bytes(), &body) != nil {
+		t.Fatalf("sign-up exchange = %d %s", created.Code, created.Body)
+	}
+	if id, err := auth.Parse(body.Token, googleSecret); err != nil || id == "" || id == user.ID {
+		t.Fatalf("sign-up token is for %q (%v)", id, err)
+	}
 }

@@ -31,6 +31,7 @@ type Provider struct {
 	challenge string
 	claims    map[string]any
 	exchanges int
+	noIDToken bool
 }
 
 func New(t *testing.T) *Provider {
@@ -53,7 +54,11 @@ func New(t *testing.T) *Provider {
 			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 3600, "id_token": p.Sign(p.claims)})
+		body := map[string]any{"access_token": "at", "token_type": "Bearer", "expires_in": 3600}
+		if !p.noIDToken {
+			body["id_token"] = p.Sign(p.claims)
+		}
+		_ = json.NewEncoder(w).Encode(body)
 	})
 	m.HandleFunc("GET /jwks", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{"keys": []map[string]string{{
@@ -74,6 +79,13 @@ func (p *Provider) Expect(challenge string, claims map[string]any) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.challenge, p.claims = challenge, claims
+}
+
+// OmitIDToken makes the token endpoint answer without an ID token.
+func (p *Provider) OmitIDToken(omit bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.noIDToken = omit
 }
 
 // Exchanges counts the calls to the token endpoint.

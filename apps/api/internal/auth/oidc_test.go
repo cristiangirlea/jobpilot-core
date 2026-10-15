@@ -155,6 +155,7 @@ func TestOIDCIDTokenChecks(t *testing.T) {
 		"email not verified":    func(c map[string]any) { c["email_verified"] = false },
 		"email_verified absent": func(c map[string]any) { delete(c, "email_verified") },
 		"no email":              func(c map[string]any) { delete(c, "email") },
+		"no subject":            func(c map[string]any) { delete(c, "sub") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			claims := goodClaims(p, q.Get("nonce"))
@@ -172,6 +173,14 @@ func TestOIDCIDTokenChecks(t *testing.T) {
 		p.Key = real
 		if _, err := o.verify(context.Background(), forged, q.Get("nonce")); !errors.Is(err, ErrSignIn) {
 			t.Fatalf("a token signed by another key was accepted: %v", err)
+		}
+	})
+	t.Run("no ID token in the response", func(t *testing.T) {
+		p.Expect(q.Get("code_challenge"), goodClaims(p, q.Get("nonce")))
+		p.OmitIDToken(true)
+		defer p.OmitIDToken(false)
+		if _, _, err := callback(o, cookie, "code="+oidctest.Code+"&state="+state); !errors.Is(err, ErrSignIn) {
+			t.Fatalf("err = %v, want ErrSignIn", err)
 		}
 	})
 	t.Run("string email_verified", func(t *testing.T) {
