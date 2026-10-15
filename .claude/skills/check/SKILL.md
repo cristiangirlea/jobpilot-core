@@ -39,8 +39,8 @@ step's result in one line; on a failure, show the error text and fix it before r
      with `DATABASE_URL` pointing at `host.docker.internal:55432`)
    - in `apps/api`: `JOBPILOT_TEST_DATABASE_URL=<same URL> go test -count=1 -run Postgres ./...`
    - start the API natively with `API_ADDR=:18080`, that `DATABASE_URL`, a throwaway `JWT_SECRET`,
-     `LLM_PROVIDER=none`, and `ATS_GREENHOUSE_URL`, `ATS_ASHBY_URL` and `ATS_RECRUITEE_URL` all
-     `http://localhost:18999`
+     `LLM_PROVIDER=none`, `ATS_GREENHOUSE_URL`, `ATS_ASHBY_URL` and `ATS_RECRUITEE_URL` all
+     `http://localhost:18999`, `OUTBOX_SENDER_ENABLED=true` and `OUTBOX_SEND_DELAY_SECONDS=3`
    - `JOBPILOT_API_URL=http://localhost:18080/api pwsh -File scripts/smoke.ps1`, the same for
      `scripts/seniority-filter-smoke.ps1` (on Windows without `pwsh`:
      `powershell -ExecutionPolicy Bypass -File ...`)

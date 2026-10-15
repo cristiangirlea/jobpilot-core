@@ -436,6 +436,7 @@ func TestEndToEnd(t *testing.T) {
 	// be approved. Serving the form here reaches the approval path, and the
 	// rule that rebuilding an approved entry withdraws the approval out loud.
 	atsPort := os.Getenv("JOBPILOT_E2E_ATS_PORT")
+	sent := false // whether the API sent the approved application
 	if atsPort == "" {
 		t.Log("JOBPILOT_E2E_ATS_PORT not set; skipping the employer-form section, which CI runs")
 	} else {
@@ -502,13 +503,13 @@ func TestEndToEnd(t *testing.T) {
 		}
 		ghOutbox, _ := out["id"].(string)
 		formAnswers, _ := out["answers"].([]any)
-		if len(formAnswers) != 4 {
-			t.Fatalf("expected all four form fields answered: %s", text)
+		if len(formAnswers) != 5 {
+			t.Fatalf("expected all five form fields answered: %s", text)
 		}
 		for _, a := range formAnswers {
 			m, _ := a.(map[string]any)
-			if m["source"] != "profile" || m["answer"] == "" {
-				t.Fatalf("every field on this form is answerable from the profile, got %v", m)
+			if (m["source"] != "profile" && m["source"] != "cv") || m["answer"] == "" {
+				t.Fatalf("every field on this form is answerable from the profile or the CV, got %v", m)
 			}
 		}
 
@@ -548,16 +549,21 @@ func TestEndToEnd(t *testing.T) {
 		}
 
 		composeOtherBoards(t, call, fake, atsPort, email)
+		sent = sendThroughForms(t, r, call, fake, ghOutbox)
 	}
 
 	// The employer-form section imports five more jobs when it runs: the
 	// Greenhouse one, and an open and a gone posting on Ashby and Recruitee.
-	expectedJobs := float64(2)
+	// Sending imports one more, behind a CAPTCHA, and marks the sent one applied.
+	expectedJobs, expectedApplied := float64(2), float64(1)
 	if atsPort != "" {
 		expectedJobs += 5
 	}
+	if sent {
+		expectedJobs, expectedApplied = expectedJobs+1, expectedApplied+1
+	}
 	out, text, isErr = call("get_dashboard", nil)
-	if isErr || out["applications_applied"] != float64(1) || out["jobs_imported"] != expectedJobs {
+	if isErr || out["applications_applied"] != expectedApplied || out["jobs_imported"] != expectedJobs {
 		t.Fatalf("get_dashboard: %s", text)
 	}
 
@@ -958,13 +964,104 @@ func composeOtherBoards(t *testing.T, call func(string, map[string]any) (map[str
 	}
 }
 
+// sendThroughForms follows the approved Greenhouse entry to the employer's
+// form, where the API sends it when sending is on (CI turns it on with a
+// short delay): it arrives once, with the profile's answers and the CV. A
+// second job, whose form page loads a CAPTCHA, is approved and comes back
+// unsent. It reports whether sending ran.
+func sendThroughForms(t *testing.T, r *rest, call func(string, map[string]any) (map[string]any, string, bool), fake *fakeATS, ghOutbox string) bool {
+	t.Helper()
+	var health struct {
+		Sending bool `json:"sending"`
+	}
+	r.call("GET", "/api/health", nil, &health)
+	if !health.Sending {
+		t.Log("the API does not send approved applications (OUTBOX_SENDER_ENABLED); skipping the sending section, which CI runs")
+		return false
+	}
+	type entry struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		SentAt string `json:"sent_at"`
+	}
+	settled := func(id string) entry {
+		t.Helper()
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			var e entry
+			r.call("GET", "/api/outbox/"+id, nil, &e)
+			if e.Status != "approved" && e.Status != "sending" {
+				return e
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("the approved entry was not sent within 90 seconds; is OUTBOX_SEND_DELAY_SECONDS short? status %s", e.Status)
+			}
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	if e := settled(ghOutbox); e.Status != "sent" || e.SentAt == "" {
+		t.Fatalf("the approved entry should have been sent, got %+v", e)
+	}
+	posts := fake.submissions("/fakeco/jobs/12345/applications")
+	if len(posts) != 1 {
+		t.Fatalf("the application should reach the employer's form exactly once, got %d", len(posts))
+	}
+	post := posts[0]
+	if post["first_name"] == "" || post["email"] == "" || post["phone"] == "" || post["source"] != "board" || !strings.HasPrefix(post["resume"], "file ") {
+		t.Fatalf("the post should carry the answers, the page's hidden value and the CV, got %v", post)
+	}
+
+	out, text, isErr := call("import_job", map[string]any{
+		"title": "Senior Backend Engineer", "company": "Fake Guarded Co",
+		"description": "Build reliable backend services with Go and PostgreSQL.",
+		"apply_url":   "https://boards.greenhouse.io/fakeco/jobs/" + fakeCaptchaJob, "remote_type": "remote",
+		"location": "Bucharest, Romania", "employment_type": "full-time",
+		"salary_min": 95000, "salary_max": 120000, "currency": "EUR",
+		"posted_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if isErr {
+		t.Fatalf("import_job (captcha): %s", text)
+	}
+	job, _ := out["job"].(map[string]any)
+	jobID, _ := job["id"].(string)
+	out, text, isErr = call("compose_application", map[string]any{"job_id": jobID})
+	if isErr {
+		t.Fatalf("compose_application (captcha): %s", text)
+	}
+	if out["status"] != "ready" {
+		// A CV tailored for this role waits for approval first.
+		cvID, _ := out["cv_document_id"].(string)
+		if _, text, isErr = call("approve_cv", map[string]any{"cv_id": cvID}); isErr {
+			t.Fatalf("approve_cv (captcha): %s", text)
+		}
+		if out, text, isErr = call("compose_application", map[string]any{"job_id": jobID}); isErr || out["status"] != "ready" {
+			t.Fatalf("the guarded job's entry should be ready to approve: %s", text)
+		}
+	}
+	guarded, _ := out["id"].(string)
+	r.call("POST", "/api/outbox/"+guarded+"/approve", nil, nil)
+	if e := settled(guarded); e.Status != "failed" || !strings.Contains(e.Error, "CAPTCHA") {
+		t.Fatalf("a form behind a CAPTCHA must come back to the user unsent, got %+v", e)
+	}
+	if posts := fake.submissions("/fakeco/jobs/" + fakeCaptchaJob + "/applications"); len(posts) != 0 {
+		t.Fatalf("nothing may be posted to a form behind a CAPTCHA, got %v", posts)
+	}
+	if _, text, isErr = call("get_outbox_entry", map[string]any{"outbox_id": guarded}); isErr || !strings.Contains(text, "CAPTCHA") {
+		t.Fatalf("the agent must see why the entry came back: %s", text)
+	}
+	return true
+}
+
 // fakeUnansweredQuestion is a required question on the fake Ashby and
 // Recruitee forms that nothing in the profile answers.
 const fakeUnansweredQuestion = "Which conference talk did you enjoy most this year?"
 
 // serveFakeATS answers the Greenhouse board API: a listing of five postings
 // for any board, and for any job one form of four required text fields the
-// profile can answer, so the composed entry carries no blockers. On the same
+// profile can answer and the CV upload, so the composed entry carries no
+// blockers, and the hosted page of that form, where the sender posts it (job
+// fakeCaptchaJob's page loads a CAPTCHA). On the same
 // port, told apart by path, it answers Ashby's posting query and Recruitee's
 // offer API: on board fakeco every posting whose id starts ashby-open- or
 // whose slug starts backend-engineer- is open, with a form holding one
@@ -1016,7 +1113,39 @@ func serveFakeATS(t *testing.T, port string) *fakeATS {
 			`{"label":"First Name","required":true,"fields":[{"name":"first_name","type":"input_text","values":[]}]},` +
 			`{"label":"Last Name","required":true,"fields":[{"name":"last_name","type":"input_text","values":[]}]},` +
 			`{"label":"Email","required":true,"fields":[{"name":"email","type":"input_text","values":[]}]},` +
-			`{"label":"Phone","required":true,"fields":[{"name":"phone","type":"input_text","values":[]}]}]}`))
+			`{"label":"Phone","required":true,"fields":[{"name":"phone","type":"input_text","values":[]}]},` +
+			`{"label":"Resume/CV","required":true,"fields":[{"name":"resume","type":"input_file","values":[]},{"name":"resume_text","type":"textarea","values":[]}]}]}`))
+	})
+	// The hosted form page the sender fills, beside the board API as
+	// ATS_GREENHOUSE_URL makes it. Job fakeCaptchaJob's page loads a CAPTCHA.
+	mux.HandleFunc("GET /{board}/jobs/{job}", func(w http.ResponseWriter, r *http.Request) {
+		fake.record("page " + r.URL.Path)
+		guard := ""
+		if r.PathValue("job") == fakeCaptchaJob {
+			guard = `<script src="https://www.recaptcha.net/recaptcha/enterprise.js"></script>`
+		}
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<!doctype html><html><body><form method="post" action="` + r.URL.Path + `/applications" enctype="multipart/form-data">` +
+			`<input type="hidden" name="source" value="board">` +
+			`<input name="first_name" required><input name="last_name" required><input name="email" type="email" required><input name="phone" required>` +
+			`<input type="file" name="resume" required><textarea name="resume_text"></textarea>` + guard +
+			`<button type="submit">Submit application</button></form></body></html>`))
+	})
+	mux.HandleFunc("POST /{board}/jobs/{job}/applications", func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseMultipartForm(4 << 20); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		submission := map[string]string{}
+		for name, values := range r.MultipartForm.Value {
+			submission[name] = values[0]
+		}
+		for name, files := range r.MultipartForm.File {
+			submission[name] = "file " + files[0].Filename
+		}
+		fake.submit(r.URL.Path, submission)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte(`<p>Thank you for applying.</p>`))
 	})
 	// Ashby's public job page reads a posting through one GraphQL query, and
 	// answers a posting it no longer has with null.
@@ -1065,11 +1194,31 @@ func serveFakeATS(t *testing.T, port string) *fakeATS {
 	return fake
 }
 
+// fakeCaptchaJob is the Greenhouse job whose form page loads a CAPTCHA.
+const fakeCaptchaJob = "12346"
+
 // fakeATS remembers which forms were requested, so the flow can prove the
-// apply URL was routed to the right board and job, not merely to a form.
+// apply URL was routed to the right board and job, not merely to a form, and
+// what was posted to each form.
 type fakeATS struct {
 	mu        sync.Mutex
 	requested []string
+	submitted map[string][]map[string]string
+}
+
+func (f *fakeATS) submit(path string, fields map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.submitted == nil {
+		f.submitted = map[string][]map[string]string{}
+	}
+	f.submitted[path] = append(f.submitted[path], fields)
+}
+
+func (f *fakeATS) submissions(path string) []map[string]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]map[string]string(nil), f.submitted[path]...)
 }
 
 func (f *fakeATS) record(path string) {
