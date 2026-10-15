@@ -50,7 +50,7 @@ It intentionally does **not**:
 - Append fabricated referral codes to employer links.
 - Guarantee referral revenue merely because an outbound click was recorded.
 
-An external submission integration should only be added later for an official, authorized employer or ATS API with explicit user consent. The current app prepares the application, opens the real apply URL, and lets the user record the result.
+The one submission path is the outbox sender (see "Sending approved applications"): it sends only an application the user approved in the web app, through the employer's own Greenhouse form, over plain HTTP that says what it is, and hands back anything behind a CAPTCHA unsent. Everything else is prepared here and applied to by the user on the employer's page.
 
 ## Quick start
 
@@ -603,7 +603,16 @@ An entry records two separate things:
 Approval is the user's consent to send exactly what the entry says, so it is checked again at that moment, not taken from compose time: only an entry waiting for approval (`ready`, or `needs_review` with its blockers cleared) can be approved, and one already approved stays as it is; its CV must still exist and be approved; every required answer a model or the template drafted must have been reviewed (an AI draft approved in the answer bank with the wording the entry carries; template wording never counts, so the user saves their own answer and prepares the entry again); and the posting must still be open. The entry stays locked from the checks to the approval. Only a signed-in browser session can approve: the route refuses agent tokens, whatever their scopes, because the consent cannot come from an agent.
 - **Notices** inform without blocking: voluntary demographic questions left blank, or a cover letter that fell back to the template. Treating these as blockers would make an application permanently unapprovable, since there is nothing for the user to fix.
 
-Statuses are `needs_review`, `ready`, `approved`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten.
+Statuses are `needs_review`, `ready`, `approved`, `sending`, `sent`, `failed`, and `cancelled`. Recomposing an entry the user already approved resets it to await approval again: a prior approval was given for what the entry said then, not for whatever it says now. A sent entry is never overwritten, and one being sent can be neither composed, approved nor cancelled (409).
+
+### Sending approved applications
+
+With `OUTBOX_SENDER_ENABLED=true`, the API sends approved entries through the employer's own form (`internal/sender`). It is off by default, so an instance whose approvals predate sending never sends them on upgrade.
+
+- **Which entries.** Only `approved` ones, oldest first, once `OUTBOX_SEND_DELAY_SECONDS` (default 120) have passed since the approval, so the user can still remove one. An approval wakes the sender for that moment; otherwise it sweeps every minute, ten entries at most, two seconds apart. Taking an entry moves it to `sending` in the same transaction that checks the approval again: the CV still approved, the reviewed answers unchanged, the posting open, and the job not excluded by the user's rules. An entry that fails a check is marked `failed` with the reason.
+- **How a form is filled.** Greenhouse only, for now: the board API's form schema is not a way to submit (that needs the employer's key), so the sender reads the job's hosted form page (`job-boards.greenhouse.io/<board>/jobs/<id>`; under a fake `ATS_GREENHOUSE_URL`, that origin) and fills it as an applicant would. Each answer goes into the field the form schema named at compose time, a select gets the option whose label matches, the approved CV is uploaded as the file, the cover letter goes into its box (or as a text file), and the page's hidden values are sent as the page set them. Declarations, personal choices and other uploads are never filled, and neither is an optional answer a model or the template drafted that the user has not approved. A form page over 4 MiB is handed back rather than read in part. The post goes only to the page's own origin, with a `User-Agent` that names JobPilot; nothing pretends to be a browser.
+- **What comes back to the user.** Anything the sender may not or cannot fill is never forced, and nothing is posted: a page that loads a CAPTCHA or bot check (reCAPTCHA, hCaptcha, Turnstile and the like; every live Greenhouse and Lever form checked on 2026-10-15 has one), a form built by script rather than plain HTML, a field the entry carries that the form no longer has, a required field it does not carry, an answer the form does not offer as a choice, a page that moved off Greenhouse. The entry is marked `failed` with the reason in `error`, and the web app shows it as a task: open the employer's form, apply, and record it with "I applied". Other ATS forms (Ashby, Recruitee, Personio) are handed back the same way; Lever is not read yet (jobpilot#105).
+- **Never twice.** Just before the post, the entry records `submit_attempted_at`, which nothing clears, not even composing it again: an entry posted once is never posted again. A refusal from the form (4xx), or the form answering with itself again, is a hand-back; a server error, no answer, or an answer that confirms nothing (a redirect back to the form or to nowhere, a challenge, a page too large to read) is `failed` with a reason saying it may have arrived. Only a page that is not the form again, or a redirect onward, counts as sent. An entry left `sending` for ten minutes (a stopped API) is written off the same way, saying whether it was posted. A sent entry is `sent` with `sent_at`, and its application moves to `applied` unless it has moved on already.
 
 Measured against a real Greenhouse posting with a 17-field form, 14 fields resolved without a single model call: 10 from stored profile facts, 2 from the answer bank, plus the CV and the cover letter.
 
@@ -828,7 +837,7 @@ List tools return summaries without the job description so a page of matches sta
 
 **Deliberately absent, and worth keeping absent:**
 
-- `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Nothing sends today, but the gate that will authorise sending belongs with the user, and the REST route enforces it too: it refuses agent tokens.
+- `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Approval is what lets the sender send an application, so the gate belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
 - CV upload, which is multipart and belongs in the web app.
 - Registration, deletes, and profile or filter edits.
@@ -897,6 +906,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `018_job_reports.sql` | Reports that a posting is no longer available, one per person per job |
 | `019_answer_scope.sql` | Where an answer is reused: every job, its role family (existing answers), or one job |
 | `020_notifications.sql` | The per-user notification feed (what waits for the user, open or resolved), the triggers that keep it current, and a backfill of what already waits |
+| `021_outbox_sending.sql` | When an outbox entry was posted to the employer, so it is never sent twice |
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 
 Core entities:
@@ -947,6 +957,8 @@ When changing schema:
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL` | Sign-in with Google; off while `GOOGLE_CLIENT_ID` is unset; with it set, the API refuses to start without the other two. The redirect URL is the API's `/api/auth/google/callback`, registered in the Google OAuth client. The web app and the API must be on the same site (the same host, or subdomains of one domain; `localhost` ports count as one site), because the handoff's binding cookie is `SameSite=Lax` |
 | `GOOGLE_ALLOW_SIGNUP` | `true` lets a Google account create a JobPilot account when no account has its email; unset, Google signs in only accounts it was linked to under Settings |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
+| `OUTBOX_SENDER_ENABLED` | `true` sends approved outbox entries through the employer's form ("Sending approved applications"); anything else, the default, leaves them queued. `GET /api/health` reports it as `sending` |
+| `OUTBOX_SEND_DELAY_SECONDS` | How long an approval waits before it is sent, so it can still be removed; defaults to `120` |
 
 ### AI environment
 
@@ -1136,7 +1148,7 @@ These are known gaps, not hidden surprises:
 1. **Provider pagination:** Arbeitnow currently uses the first page, SmartRecruiters is capped at 25, and Remotive at 100. Add bounded pagination only with clear per-run limits and cancellation.
 2. **Source management depth:** sources can be added, edited, validated, paused/resumed, and deleted. Per-source schedules and richer per-provider diagnostics can still be improved.
 3. **Catalog scale:** the job lists search, filter and page on the server, and both the web job list (50 summaries at a time, with Load more) and the MCP server use that.
-4. **Automated submission:** still not implemented. Applications are composed and queued; nothing sends them. The next step is a sender that picks up `approved` entries. Nothing may bypass CAPTCHA or automate job-board portals.
+4. **Automated submission:** the sender sends approved entries through Greenhouse's hosted form when `OUTBOX_SENDER_ENABLED` is on, but every live Greenhouse and Lever form checked carries a CAPTCHA, so real entries mostly come back as one-click tasks. Lever forms are not read yet (jobpilot#105). Nothing may bypass CAPTCHA or automate job-board portals.
 5. **Aggregator coverage:** measured on live feeds, only 1 of 18 Remotive postings and 0 of 175 Arbeitnow postings expose an apply email, and both keep the applicant on their own domain rather than reaching the employer. Employer-direct ATS boards are the viable path; email apply is a small supplementary slice.
 6. **Referral operations:** outbound attribution exists, but there is no partner administration, agreement workflow, payout ledger, or disclosure management UI.
 7. **Production auth and operations:** see the security section above.

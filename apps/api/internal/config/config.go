@@ -25,6 +25,13 @@ type Config struct {
 	TokenTTL        time.Duration
 	LLM             LLMConfig
 	Google          GoogleConfig
+	// OutboxSending turns on sending approved outbox entries through the
+	// employer's form (OUTBOX_SENDER_ENABLED=true). It is off unless asked
+	// for, so an instance whose approvals predate sending never sends them
+	// on upgrade. OutboxSendDelay is how long an approval waits before it
+	// goes, so the user can still withdraw it.
+	OutboxSending   bool
+	OutboxSendDelay time.Duration
 }
 
 // GoogleConfig turns on "Sign in with Google". With no client id it is off;
@@ -53,6 +60,10 @@ type LLMConfig struct {
 
 func Load() Config {
 	hours, _ := strconv.Atoi(env("TOKEN_TTL_HOURS", "168"))
+	delay, err := strconv.Atoi(env("OUTBOX_SEND_DELAY_SECONDS", "120"))
+	if err != nil || delay < 0 {
+		delay = 120
+	}
 	return Config{
 		Addr:             env("API_ADDR", ":8080"),
 		DatabaseURL:      env("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable"),
@@ -69,6 +80,8 @@ func Load() Config {
 			RedirectURL:  env("GOOGLE_REDIRECT_URL", ""),
 			AllowSignup:  env("GOOGLE_ALLOW_SIGNUP", "") == "true",
 		},
+		OutboxSending:   env("OUTBOX_SENDER_ENABLED", "false") == "true",
+		OutboxSendDelay: time.Duration(delay) * time.Second,
 	}
 }
 
