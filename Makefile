@@ -1,4 +1,6 @@
 GOCACHE ?= $(CURDIR)/.cache/go-build
+# The version CI's govulncheck step runs; keep the two in step.
+GOVULNCHECK_VERSION ?= v1.9.0
 # No tags yet, so this is a short commit SHA, or "dev" outside a checkout.
 MCP_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
@@ -13,7 +15,7 @@ TEST_MCP = cd apps/mcp && GOCACHE="$(GOCACHE)" go test ./...
 TEST_WEB = cd apps/web && npm run typecheck
 endif
 
-.PHONY: dev test migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs
+.PHONY: dev test vulncheck migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs
 
 dev:
 	docker compose up --build
@@ -22,6 +24,10 @@ test:
 	$(TEST_API)
 	$(TEST_MCP)
 	$(TEST_WEB)
+
+vulncheck:
+	cd apps/api && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
+	cd apps/mcp && go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 migrate:
 	docker compose run --rm --build migrate

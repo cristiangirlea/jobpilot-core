@@ -49,6 +49,10 @@ jobs:
         run: go vet ./...
       - name: go test
         run: go test -race ./...
+      # Known vulnerabilities the code reaches, in the standard library and the modules; built by
+      # the toolchain above, which must be the module's own. The version matches the Makefile's.
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   web:
     name: web (typecheck)
@@ -138,7 +142,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          # Go 1.25 builds both modules; the go job already proves the API's own toolchain.
+          # Both modules name the same Go release.
           go-version-file: apps/mcp/go.mod
           cache-dependency-path: |
             apps/api/go.sum
