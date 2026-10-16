@@ -25,6 +25,9 @@ type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
 	Links   *LinkChecker
+	// VerifiedOnly skips scheduled runs for accounts whose email is not
+	// verified; it is set while the API sends email.
+	VerifiedOnly bool
 	// MayDiscover, when set, says whose schedule may run: accounts it refuses
 	// keep their sources but are skipped by the scheduler (#128).
 	MayDiscover func(ctx context.Context, userID string) bool
@@ -549,7 +552,7 @@ func (s *Service) CheckJob(ctx context.Context, job store.LinkToCheck, timeout t
 	return result
 }
 func (s *Service) runDue(ctx context.Context) {
-	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10)
+	ids, err := s.Store.ClaimDueDiscoveryUsers(ctx, 10, s.VerifiedOnly)
 	if err != nil {
 		slog.Error("claim discovery schedules", "error", err)
 		return

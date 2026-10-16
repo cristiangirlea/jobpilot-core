@@ -32,7 +32,7 @@ func (s *Store) SignInWithIdentity(ctx context.Context, provider, subject, email
 		return u, err
 	}
 	defer tx.Rollback(ctx)
-	err = tx.QueryRow(ctx, `SELECT u.id,u.email,u.created_at FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.provider=$1 AND i.subject=$2`, provider, subject).Scan(&u.ID, &u.Email, &u.CreatedAt)
+	err = tx.QueryRow(ctx, `SELECT u.id,u.email,u.created_at,u.email_verified_at IS NOT NULL FROM user_identities i JOIN users u ON u.id=i.user_id WHERE i.provider=$1 AND i.subject=$2`, provider, subject).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified)
 	if err == nil {
 		return u, tx.Commit(ctx)
 	}
@@ -49,7 +49,9 @@ func (s *Store) SignInWithIdentity(ctx context.Context, provider, subject, email
 	if !allowSignup {
 		return models.User{}, ErrNoAccount
 	}
-	if err = tx.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),'') RETURNING id,email,created_at`, email).Scan(&u.ID, &u.Email, &u.CreatedAt); err != nil {
+	// The provider vouched for the address (the ID token's email_verified),
+	// so the account starts verified.
+	if err = tx.QueryRow(ctx, `INSERT INTO users(email,password_hash,email_verified_at) VALUES(lower($1),'',now()) RETURNING `+userColumns, email).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified); err != nil {
 		return models.User{}, err
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO user_identities(user_id,provider,subject,email) VALUES($1,$2,$3,lower($4))`, u.ID, provider, subject, email); err != nil {

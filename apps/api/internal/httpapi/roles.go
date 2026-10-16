@@ -42,14 +42,24 @@ func (s *Server) admin(ctx context.Context, userID string) (bool, error) {
 	if !s.rolesOn() {
 		return true, nil
 	}
-	email, err := s.Store.UserEmail(ctx, userID)
+	return s.namedAdmin(ctx, userID)
+}
+
+// namedAdmin reports whether ADMIN_EMAILS names the account's address. While
+// the server sends email the address must also be verified, so registering
+// an admin's address before its owner does gains nothing.
+func (s *Server) namedAdmin(ctx context.Context, userID string) (bool, error) {
+	u, err := s.Store.User(ctx, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	return slices.Contains(s.AdminEmails, strings.ToLower(email)), nil
+	if s.verificationRequired() && !u.EmailVerified {
+		return false, nil
+	}
+	return slices.Contains(s.AdminEmails, strings.ToLower(u.Email)), nil
 }
 
 // IsAdmin is admin for callers that cannot handle an error, such as the
@@ -149,5 +159,11 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
-	write(w, 200, map[string]any{"admin": ok, "roles": s.rolesOn(), "agent_tokens": policy})
+	u, err := s.Store.User(ctx, uid)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	write(w, 200, map[string]any{"admin": ok, "roles": s.rolesOn(), "agent_tokens": policy,
+		"email": u.Email, "email_verified": u.EmailVerified, "verification_required": s.verificationRequired()})
 }

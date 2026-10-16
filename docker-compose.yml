@@ -47,6 +47,12 @@ services:
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_REDIRECT_URL: ${GOOGLE_REDIRECT_URL:-}
       GOOGLE_ALLOW_SIGNUP: ${GOOGLE_ALLOW_SIGNUP:-}
+      # Verification and reset emails; unset sends nothing (see .env.example).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
       # Optional AI adapter; defaults keep the container fully deterministic.
       # LLM_PROVIDER=cli needs the CLI installed inside the container, so for
       # subscription-billed CLI use, run the API natively instead of in Compose.

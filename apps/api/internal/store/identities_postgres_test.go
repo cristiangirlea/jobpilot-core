@@ -79,10 +79,13 @@ func TestSignInWithIdentityAgainstPostgres(t *testing.T) {
 	if err != nil || created.Email != stranger {
 		t.Fatalf("sign-up on: %+v, %v", created, err)
 	}
+	if !created.EmailVerified {
+		t.Fatal("Google vouched for the address, so the account should start verified")
+	}
 	if _, h, err := st.Credentials(ctx, stranger); err != nil || auth.Verify(h, "") || auth.Verify(h, "anything at all") {
 		t.Fatalf("an account created through Google accepts a password (err %v)", err)
 	}
-	if back, err := st.SignInWithIdentity(ctx, "google", "sub-new-"+run, stranger, false); err != nil || back.ID != created.ID {
+	if back, err := st.SignInWithIdentity(ctx, "google", "sub-new-"+run, stranger, false); err != nil || back.ID != created.ID || !back.EmailVerified {
 		t.Fatalf("a created account is found again with sign-up off: %+v, %v", back, err)
 	}
 

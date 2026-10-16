@@ -9,6 +9,9 @@ type User struct {
 	ID        string    `json:"id"`
 	Email     string    `json:"email"`
 	CreatedAt time.Time `json:"created_at"`
+	// EmailVerified is false until the user opens the link sent to them;
+	// accounts older than verification count as verified.
+	EmailVerified bool `json:"email_verified"`
 }
 
 type WorkExperience struct {

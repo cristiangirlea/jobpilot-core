@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -149,5 +150,17 @@ func TestEmailRateLimitKeysAreFixedSize(t *testing.T) {
 	short, long := emailKey("a@example.test"), emailKey(strings.Repeat("a", 1<<20)+"@example.test")
 	if len(short) != len(long) || len(long) > 80 || short == long {
 		t.Fatalf("keys should be distinct digests of one size: %d and %d bytes", len(short), len(long))
+	}
+}
+
+// A full email queue drops the job instead of holding the request up.
+func TestFullMailQueueDoesNotBlock(t *testing.T) {
+	s := &Server{mailJobs: make(chan mailJob)} // no workers, no room
+	done := make(chan struct{})
+	go func() { s.enqueue(func(context.Context) {}); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("enqueue blocked on a full queue")
 	}
 }

@@ -663,6 +663,15 @@ Authorization: Bearer <token>
 | `GET` | `/api/auth/google/callback` | Google's redirect back; ends on the web app's `/login/google?code=...` (with a binding cookie) or `/login?error=...` |
 | `POST` | `/api/auth/google/exchange` | Exchange the single-use code from the callback for a token; needs the binding cookie |
 | `POST` | `/api/auth/google/link` | Link the Google account from a `?link=1` flow to the signed-in account (browser session only; needs the binding cookie) |
+| `POST` | `/api/auth/verify-email` | Verify an address with the emailed link's `token` |
+| `POST` | `/api/auth/password-reset` | Email a reset link; answers 202 alike whether or not the email has an account |
+| `POST` | `/api/auth/password-reset/confirm` | Set a new `password` with the emailed link's `token` |
+
+### Account endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/api/account/verification` | Send a new verification link; earlier links stop working |
 
 ### Invite endpoints
 
@@ -713,7 +722,7 @@ With `ADMIN_EMAILS` set, these and `/api/ai/status` are for admins (signed in or
 |---|---|---|
 | `POST` | `/api/jobs/find` | Score the catalog's open jobs the caller has no match for yet against their profile and filters; fetches nothing |
 | `GET` | `/api/catalog/summary` | When jobs last arrived, how many in 24 hours and 7 days, open jobs, and the caller's open matches |
-| `GET` | `/api/me` | Whether the caller is an admin, whether roles are on, and the caller's agent token policy |
+| `GET` | `/api/me` | Whether the caller is an admin, whether roles are on, the caller's agent token policy, `email`, `email_verified`, and whether this server requires verification |
 | `GET`, `PUT` | `/api/discovery/settings` | Read or save scheduler and auto-prepare settings |
 | `GET`, `POST` | `/api/discovery/sources` | List or create sources |
 | `PUT`, `DELETE` | `/api/discovery/sources/{id}` | Edit, pause/resume, or remove a source |
@@ -910,9 +919,12 @@ JobPilot's own login is the only gate in front of it, so sign-up and login are g
   - **Discovery:** sources, boards, settings, runs and the scheduler. Member requests get 403, and the scheduler skips members' schedules. Every new job an admin's run stores is scored for every account against its own profile and filters. A member's jobs page shows how fresh the catalog is, with **Find jobs for my profile** to score anything new; nothing is fetched on their behalf. Only discovered jobs are shared this way: a job someone imports by link stays with them, so no account can place a posting in another's inbox.
   - **The AI provider:** members draft with the deterministic templates; `/api/ai/status` is for admins.
   - **Agent tokens:** members hold and use them only as `USER_AGENT_TOKENS` allows (`off` by default, `read` or `write`). This is checked at use as well as at creation, so lowering it applies to tokens already issued. Admins' tokens reach discovery too, for an admin's MCP server.
-  Without `ADMIN_EMAILS` there are no roles and every account has full access, as a single-user install always had. Admin is decided by email, and sign-up does not verify addresses yet (#82): register each admin account before naming it in `ADMIN_EMAILS`, or someone who signs up first with that address on an open server becomes admin. `GET /api/me` tells the web app which applies, and it hides what a member cannot use.
+  Without `ADMIN_EMAILS` there are no roles and every account has full access, as a single-user install always had. Admin is decided by email. While the server sends email, an account counts as admin (and may manage invites) only once its address is verified; without email nothing is verified, so register each admin account before naming it in `ADMIN_EMAILS`, or someone who signs up first with that address on an open server becomes admin. `GET /api/me` tells the web app which applies, and it hides what a member cannot use.
 - **Rate limits.** Login: 30 attempts per client address and 10 per email in 15 minutes; a successful login clears the email's count. Sign-up: 10 per address and 5 per email an hour. Past a limit the answer is 429 with `Retry-After`, before any database or bcrypt work. Emails are counted by their SHA-256 digest, so the table's size does not depend on what a caller sends. Counts are kept in memory (`internal/ratelimit`), which suits the single API replica; a restart forgets them. The address is the connection's unless `CLIENT_IP_HEADER` names a header the proxy in front overwrites (`CF-Connecting-IP` behind a Cloudflare Tunnel); IPv6 addresses count by their /64.
 - **Equal answers.** A login for an unknown email runs a bcrypt comparison against a fixed hash of the same cost and gets the same 401 text as a wrong password, so neither the time nor the text tells whether an account exists.
+- **Email.** Verification and reset emails go through an SMTP relay over TLS (`SMTP_HOST` and friends; the relay is the operator's choice, Brevo's free one works). Without `SMTP_HOST` no email is prepared or sent and verification is not required, which is how tests, CI and local runs work; the startup log says `email=false`. Email work (the lookup for a reset, minting the link, sending) runs on four workers fed by a queue of 64; when the queue is full a job is dropped and logged, and failures are logged with the recipient and subject, never the link. Links point at `FRONTEND_URL` and carry their token in the fragment, so it never reaches a server log; only a token's SHA-256 digest is stored.
+- **Verification.** While email is on, a new account gets a link valid for 24 hours. Until it is opened the account can sign in and use the app, but running discovery, generating, tailoring or composing documents, resolving a job's form answers, creating agent tokens, and linking a Google identity (which a password reset would not undo) answer 403, and its scheduled discovery waits. A new link (Settings banner, `POST /api/account/verification`, three an hour) retires the earlier ones. Accounts that existed before verification count as verified.
+- **Password reset.** `POST /api/auth/password-reset` answers 202 with the same text at once whether or not the email has an account; the lookup and the email happen afterwards. The link works once, for one hour, and a newer link or a completed reset retires the others. Opening it also verifies the address. Requests: 10 per address and 3 per email an hour; the two link pages: 20 per address an hour. Sessions signed in before a reset stay valid until they expire (`TOKEN_TTL_HOURS`; #124).
 
 ## Database and migrations
 
@@ -943,6 +955,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `021_outbox_sending.sql` | When an outbox entry was posted to the employer, so it is never sent twice |
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 | `023_invites.sql` | Single-use sign-up invite codes, stored as digests |
+| `024_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
 
 Core entities:
 
@@ -991,6 +1004,7 @@ When changing schema:
 | `ADMIN_EMAILS` | Comma-separated accounts that may create invites. Set, it also turns on roles: other accounts are members, without discovery or the AI provider (see "Accounts and sign-up") |
 | `USER_AGENT_TOKENS` | `off` (default), `read` or `write`: the agent tokens members may hold and use. Admins are unaffected; without `ADMIN_EMAILS` it has no effect |
 | `CLIENT_IP_HEADER` | Header holding the caller's address, set by the proxy in front (`CF-Connecting-IP` behind a Cloudflare Tunnel); empty uses the connection's address |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `MAIL_FROM` | SMTP relay for verification and reset emails (port 587 by default, TLS required); unset sends nothing. In Kubernetes they come from the optional `jobpilot-smtp` Secret. See "Accounts and sign-up" |
 | `ATS_GREENHOUSE_URL` | Greenhouse board API origin; defaults to the public service. Point it at a fake to exercise composed applications without the network |
 | `ATS_ASHBY_URL` | Origin of Ashby's public job pages, whose posting query the form reader calls; defaults to `https://jobs.ashbyhq.com`. Point it at a fake as above |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL` | Sign-in with Google; off while `GOOGLE_CLIENT_ID` is unset; with it set, the API refuses to start without the other two. The redirect URL is the API's `/api/auth/google/callback`, registered in the Google OAuth client. The web app and the API must be on the same site (the same host, or subdomains of one domain; `localhost` ports count as one site), because the handoff's binding cookie is `SameSite=Lax` |
@@ -1173,12 +1187,12 @@ Local-MVP limitations:
 
 - Browser tokens are stored in `localStorage`, not secure HTTP-only cookies, and cannot be revoked individually; rotating `JWT_SECRET` invalidates all of them. Agent tokens are revocable one by one and can be limited to read access.
 - Local Compose uses HTTP and a development database password.
-- There is no email verification, password reset, MFA, or rate limiter.
+- There is no MFA. Login and sign-up rate limits are kept in memory, for one API instance; email verification and password reset need an SMTP relay (see "Accounts and sign-up"), and sessions outlive a password reset (#124).
 - The scheduler lock is process-local and is intended for one API instance.
 - Discovery APIs can change or rate-limit without notice.
 - This deployment is not hardened for an internet-facing production environment.
 
-Before public production use, add secure cookies or another hardened token strategy, TLS, secret management, rate limiting, account recovery, audit/observability, backups, provider terms review, privacy controls, and a cross-instance scheduler lock.
+Before public production use, add secure cookies or another hardened token strategy, TLS, secret management, audit/observability, backups, provider terms review, privacy controls, and a cross-instance scheduler lock.
 
 ## Known limitations and best next tasks
 

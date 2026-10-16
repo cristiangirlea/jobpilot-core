@@ -25,25 +25,28 @@ var ErrDuplicateDiscoverySource = errors.New("a discovery source with the same p
 
 func New(db *pgxpool.Pool) *Store { return &Store{DB: db} }
 
+const userColumns = `id,email,created_at,email_verified_at IS NOT NULL`
+
+// User reads one account.
+func (s *Store) User(ctx context.Context, id string) (models.User, error) {
+	var u models.User
+	err := s.DB.QueryRow(ctx, `SELECT `+userColumns+` FROM users WHERE id=$1`, id).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified)
+	return u, err
+}
+
 func (s *Store) CreateUser(ctx context.Context, email, hash string) (models.User, error) {
 	var u models.User
-	err := s.DB.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),$2) RETURNING id,email,created_at`, email, hash).Scan(&u.ID, &u.Email, &u.CreatedAt)
+	err := s.DB.QueryRow(ctx, `INSERT INTO users(email,password_hash) VALUES(lower($1),$2) RETURNING `+userColumns, email, hash).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified)
 	if isUniqueViolation(err) {
 		err = ErrEmailTaken
 	}
 	return u, err
 }
 
-// UserEmail is the sign-in email of an account.
-func (s *Store) UserEmail(ctx context.Context, id string) (string, error) {
-	var email string
-	err := s.DB.QueryRow(ctx, `SELECT email FROM users WHERE id=$1`, id).Scan(&email)
-	return email, err
-}
 func (s *Store) Credentials(ctx context.Context, email string) (models.User, string, error) {
 	var u models.User
 	var hash string
-	err := s.DB.QueryRow(ctx, `SELECT id,email,created_at,password_hash FROM users WHERE email=lower($1)`, email).Scan(&u.ID, &u.Email, &u.CreatedAt, &hash)
+	err := s.DB.QueryRow(ctx, `SELECT `+userColumns+`,password_hash FROM users WHERE email=lower($1)`, email).Scan(&u.ID, &u.Email, &u.CreatedAt, &u.EmailVerified, &hash)
 	return u, hash, err
 }
 
@@ -1024,8 +1027,12 @@ func (s *Store) SaveDiscoverySettings(ctx context.Context, u string, x models.Di
 	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_settings(user_id,enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,next_run_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $2 THEN now() ELSE NULL END) ON CONFLICT(user_id) DO UPDATE SET enabled=EXCLUDED.enabled,interval_minutes=EXCLUDED.interval_minutes,auto_prepare=EXCLUDED.auto_prepare,min_score=EXCLUDED.min_score,max_jobs_per_run=EXCLUDED.max_jobs_per_run,next_run_at=CASE WHEN EXCLUDED.enabled THEN COALESCE(discovery_settings.next_run_at,now()) ELSE NULL END,updated_at=now() RETURNING enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at`, u, x.Enabled, x.IntervalMinutes, x.AutoPrepare, x.MinScore, x.MaxJobsPerRun).Scan(&x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
 	return x, err
 }
-func (s *Store) ClaimDueDiscoveryUsers(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT user_id FROM discovery_settings WHERE enabled=true AND COALESCE(next_run_at,now())<=now() ORDER BY next_run_at NULLS FIRST FOR UPDATE SKIP LOCKED LIMIT $1) UPDATE discovery_settings s SET next_run_at=now()+(s.interval_minutes||' minutes')::interval FROM due WHERE s.user_id=due.user_id RETURNING s.user_id`, limit)
+
+// ClaimDueDiscoveryUsers claims up to limit users whose scheduled discovery
+// is due. With verifiedOnly, accounts whose email is not verified are left
+// unclaimed, so their schedule waits until they verify.
+func (s *Store) ClaimDueDiscoveryUsers(ctx context.Context, limit int, verifiedOnly bool) ([]string, error) {
+	rows, err := s.DB.Query(ctx, `WITH due AS (SELECT d.user_id FROM discovery_settings d JOIN users u ON u.id=d.user_id WHERE d.enabled=true AND COALESCE(d.next_run_at,now())<=now() AND (NOT $2 OR u.email_verified_at IS NOT NULL) ORDER BY d.next_run_at NULLS FIRST FOR UPDATE OF d SKIP LOCKED LIMIT $1) UPDATE discovery_settings s SET next_run_at=now()+(s.interval_minutes||' minutes')::interval FROM due WHERE s.user_id=due.user_id RETURNING s.user_id`, limit, verifiedOnly)
 	if err != nil {
 		return nil, err
 	}

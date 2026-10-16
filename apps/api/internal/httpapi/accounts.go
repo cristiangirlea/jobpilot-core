@@ -9,7 +9,6 @@ import (
 	"math"
 	"net"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -43,6 +42,9 @@ var (
 // package ratelimit).
 type authLimits struct {
 	loginIP, loginEmail, registerIP, registerEmail *ratelimit.Limiter
+	// Password reset requests per address and per email, the two link
+	// pages (verify, reset) per address, and verification resends per user.
+	resetIP, resetEmail, linkIP, resendUser *ratelimit.Limiter
 }
 
 func newAuthLimits() *authLimits {
@@ -51,6 +53,10 @@ func newAuthLimits() *authLimits {
 		loginEmail:    ratelimit.New(10, 15*time.Minute),
 		registerIP:    ratelimit.New(10, time.Hour),
 		registerEmail: ratelimit.New(5, time.Hour),
+		resetIP:       ratelimit.New(10, time.Hour),
+		resetEmail:    ratelimit.New(3, time.Hour),
+		linkIP:        ratelimit.New(20, time.Hour),
+		resendUser:    ratelimit.New(3, time.Hour),
 	}
 }
 
@@ -172,15 +178,16 @@ func signUpRefused(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// requireAdmin lets through only the accounts ADMIN_EMAILS names.
+// requireAdmin lets through only the accounts ADMIN_EMAILS names (with a
+// verified address while email is on); with no ADMIN_EMAILS, nobody.
 func (s *Server) requireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		email, err := s.Store.UserEmail(r.Context(), auth.UserID(r.Context()))
-		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		ok, err := s.namedAdmin(r.Context(), auth.UserID(r.Context()))
+		if err != nil {
 			internal(w, err)
 			return
 		}
-		if err != nil || !slices.Contains(s.AdminEmails, strings.ToLower(email)) {
+		if !ok {
 			problem(w, 403, invitesNeedAdmin)
 			return
 		}

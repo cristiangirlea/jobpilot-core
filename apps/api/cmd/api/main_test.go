@@ -54,6 +54,25 @@ func TestFormReaderUsesTheConfiguredOrigins(t *testing.T) {
 	}
 }
 
+// Without SMTP_HOST nothing is sent and verification is not required; with
+// it, a bad port or sender address stops startup.
+func TestMailSenderFollowsTheConfiguration(t *testing.T) {
+	if s, err := mailSender(config.MailConfig{}); err != nil || s.Enabled() {
+		t.Fatalf("no host should give the disabled sender, got %T %v", s, err)
+	}
+	if s, err := mailSender(config.MailConfig{SMTPHost: "smtp-relay.example.test", SMTPPort: 587, From: "JobPilot <jobs@example.test>"}); err != nil || !s.Enabled() {
+		t.Fatalf("a configured relay should send, got %T %v", s, err)
+	}
+	for _, c := range []config.MailConfig{
+		{SMTPHost: "smtp-relay.example.test", SMTPPort: -1, From: "jobs@example.test"},
+		{SMTPHost: "smtp-relay.example.test", SMTPPort: 587, From: "not an address"},
+	} {
+		if _, err := mailSender(c); err == nil {
+			t.Errorf("%+v should be refused", c)
+		}
+	}
+}
+
 // Google sign-in is off without a client id, refuses to start with a client
 // id but no secret or redirect URL, and starts with all three, without calling
 // Google.

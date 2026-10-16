@@ -38,7 +38,10 @@ type Config struct {
 	// behind a Cloudflare Tunnel). Empty uses the connection's address. Never
 	// name a header the client can set unchecked, such as X-Forwarded-For.
 	ClientIPHeader string
-	Google         GoogleConfig
+	// Mail is the SMTP relay for verification and reset emails. Sending is
+	// off while SMTPHost is empty.
+	Mail   MailConfig
+	Google GoogleConfig
 	// OutboxSending turns on sending approved outbox entries through the
 	// employer's form (OUTBOX_SENDER_ENABLED=true). It is off unless asked
 	// for, so an instance whose approvals predate sending never sends them
@@ -46,6 +49,16 @@ type Config struct {
 	// goes, so the user can still withdraw it.
 	OutboxSending   bool
 	OutboxSendDelay time.Duration
+}
+
+// MailConfig is read from SMTP_HOST, SMTP_PORT (587 by default),
+// SMTP_USERNAME, SMTP_PASSWORD (a secret) and MAIL_FROM.
+type MailConfig struct {
+	SMTPHost     string
+	SMTPPort     int
+	SMTPUsername string
+	SMTPPassword string
+	From         string
 }
 
 // Registration modes.
@@ -114,6 +127,7 @@ func Load() Config {
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
 		UserAgentTokens:  strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
 		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
+		Mail:             loadMail(),
 		Google: GoogleConfig{
 			ClientID:     env("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: env("GOOGLE_CLIENT_SECRET", ""),
@@ -136,6 +150,20 @@ func loadLLM() LLMConfig {
 		OllamaURL:    env("LLM_OLLAMA_URL", "http://localhost:11434"),
 		Timeout:      time.Duration(seconds) * time.Second,
 		CallsPerHour: calls,
+	}
+}
+
+func loadMail() MailConfig {
+	port, err := strconv.Atoi(env("SMTP_PORT", "587"))
+	if err != nil {
+		port = -1 // refused by the sender's validation at startup
+	}
+	return MailConfig{
+		SMTPHost:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
+		SMTPPort:     port,
+		SMTPUsername: os.Getenv("SMTP_USERNAME"),
+		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
+		From:         strings.TrimSpace(os.Getenv("MAIL_FROM")),
 	}
 }
 
