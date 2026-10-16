@@ -172,9 +172,11 @@ var (
 )
 
 // unwrapRoleHeaders rejoins piped role headers that PDF text wrapped: the end
-// year pushed onto the next line ("... Dec 2022 - Oct" / "2023"), or the header
+// year pushed onto the next line ("... Dec 2022 - Oct" / "2023"), the header
 // split in the middle so that the dates arrive on a second piped line
-// ("Company | Title | City" / "(remote) | Aug 2022 - Jan 2023").
+// ("Company | Title | City" / "(remote) | Aug 2022 - Jan 2023"), or a layout
+// that sets the dates on a line of their own under the header ("Company |
+// Title" / "Aug 2022 - Jan 2023 | Remote").
 func unwrapRoleHeaders(lines []string) []string {
 	out := make([]string, 0, len(lines))
 	for i := 0; i < len(lines); i++ {
@@ -182,7 +184,8 @@ func unwrapRoleHeaders(lines []string) []string {
 		if i+1 < len(lines) && strings.Contains(line, "|") && !strings.HasPrefix(line, "-") && !datePeriod.MatchString(line) {
 			next := lines[i+1]
 			if (danglingRange.MatchString(line) && leadingYear.MatchString(next)) ||
-				(strings.Contains(next, "|") && datePeriod.MatchString(next) && continuesHeader(line, next)) {
+				(strings.Contains(next, "|") && datePeriod.MatchString(next) && continuesHeader(line, next)) ||
+				(roleWords.MatchString(line) && !isAcademic(line) && startsWithDatePeriod(next) && !roleWords.MatchString(next)) {
 				line += " " + next
 				i++
 			}
@@ -201,6 +204,15 @@ func continuesHeader(line, next string) bool {
 	}
 	first := []rune(strings.TrimSpace(next))
 	return len(first) > 0 && (first[0] == '|' || first[0] == '(' || (first[0] >= 'a' && first[0] <= 'z'))
+}
+
+// startsWithDatePeriod reports whether a line opens with a period, as the
+// dates line under a "Company | Title" header does. That line carries notes
+// (where, what platform), not a title: a dated line that names a role is a
+// dates-first header of its own.
+func startsWithDatePeriod(line string) bool {
+	location := datePeriod.FindStringIndex(line)
+	return location != nil && location[0] == 0
 }
 
 // bareDateRange matches a line that is nothing but a period, such as

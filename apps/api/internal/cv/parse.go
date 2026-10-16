@@ -89,10 +89,14 @@ func Parse(text string) Parsed {
 	sections := groupSections(lines)
 	parsed.parseContacts(text, lines)
 	parsed.parseIdentity(lines, sections)
-	if parsed.Location == "" {
-		// After the identity, so a contact line that opens with the name or
-		// the title does not report either as the place.
-		parsed.Location = contactLinePlace(lines[:min(len(lines), 25)], parsed.Name)
+	// The place on a contact line beats a "City, Country" line elsewhere near
+	// the top, which can be a wrapped list ("CloudWatch, QuickSight"). After
+	// the identity, so a contact line that opens with the name or the title
+	// does not report either as the place.
+	// A "City, Country" line that spells out the contact line's place ("Lisbon,
+	// Portugal" over "Portugal") is the same place, given in full.
+	if place := contactLinePlace(lines[:min(len(lines), 25)], parsed.Name); place != "" && !namesPlace(parsed.Location, place) {
+		parsed.Location = place
 	}
 	parsed.parseSummary(sections)
 	parsed.parseSkills(lines, sections["skills"])
@@ -249,7 +253,22 @@ func looksLikePlace(segment string) bool {
 	if segment == "" || !isUpperRune([]rune(segment)[0]) || strings.ContainsAny(segment, "@/.:0123456789") {
 		return false
 	}
-	return !strings.HasPrefix(strings.ToLower(segment), "remote") && len(strings.Fields(segment)) <= 4
+	return !notAPlace.MatchString(segment) && len(strings.Fields(segment)) <= 4
+}
+
+// notAPlace matches the other capitalised words a contact line carries: link
+// labels standing in for a URL, and how or where the candidate will work.
+var notAPlace = regexp.MustCompile(`(?i)^(remote|hybrid|on-?site|open to|willing to|available|full-?time|part-?time|contract|freelance|linkedin|github|gitlab|portfolio|website|web|blog|twitter|x|email|e-mail|phone|mobile|cv|resume)\b`)
+
+// namesPlace reports whether a "City, Country" line names the given place as
+// one of its parts.
+func namesPlace(line, place string) bool {
+	for _, part := range strings.Split(line, ",") {
+		if strings.EqualFold(strings.TrimSpace(part), place) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseIdentity reads the name and headline from the top of the CV, which is

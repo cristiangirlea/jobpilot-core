@@ -131,6 +131,63 @@ func TestParseKeepsPipedBodyLinesApartFromTheNextRole(t *testing.T) {
 	}
 }
 
+// Some layouts set the dates on their own line under a "Company | Title"
+// header, with notes after them; the notes are not the title (#144).
+func TestParseReadsDatesUnderAPipedHeader(t *testing.T) {
+	text := "EXPERIENCE\nGlobex | Senior Engineer, Payments and Backend\nDec 2022 - Present | Remote contract\n" +
+		"- Built the queue consumers and their autoscaling.\nInitech | Backend Developer\nApr 2020 - Mar 2021 | Remote | Billing platform\n" +
+		"- Rebuilt the billing service and its reconciliation jobs.\n"
+	p := Parse(text)
+	type role struct{ company, title, start, end string }
+	want := []role{{"Globex", "Senior Engineer, Payments and Backend", "Dec 2022", ""}, {"Initech", "Backend Developer", "Apr 2020", "Mar 2021"}}
+	if len(p.Experiences) != len(want) {
+		t.Fatalf("roles = %+v, want Globex then Initech", p.Experiences)
+	}
+	for i, w := range want {
+		e := p.Experiences[i]
+		if e.Company != w.company || e.Title != w.title || e.StartDate != w.start || e.EndDate != w.end || !strings.HasPrefix(e.Description, "- ") {
+			t.Errorf("role %d = %+v, want %+v with its bullet", i, e, w)
+		}
+	}
+}
+
+// A dated line that names a role is a dates-first header of its own, and an
+// academic line above dates is a qualification: neither joins the line above.
+func TestParseKeepsDatesFirstHeadersApart(t *testing.T) {
+	p := Parse("EXPERIENCE\nAcme | Backend Engineer | 2019 - 2019\n- Rebuilt the billing service and its jobs.\n" +
+		"Team: 4 engineers | reporting to the CTO\nJan 2020 - Present | Globex | Platform Engineer\n- Built the queue consumers and their autoscaling.\n")
+	if len(p.Experiences) != 2 || p.Experiences[1].Company != "Globex" || p.Experiences[1].Title != "Platform Engineer" {
+		t.Errorf("roles = %+v, want Acme then Globex", p.Experiences)
+	}
+	p = Parse("EDUCATION\nExample University | Student Ambassador Lead\n2009 - 2011\n")
+	if len(p.Experiences) != 0 {
+		t.Errorf("a university became an employer: %+v", p.Experiences)
+	}
+}
+
+// Trap 4 (#144): a wrapped skills line reads like "City, Country"; the place on
+// the contact line is the candidate's location.
+func TestParsePrefersTheContactLinePlace(t *testing.T) {
+	text := "JANE EXAMPLE\nPlatform Engineer\nLisbon | Remote | +351 912 000 111 | jane@example.com\n" +
+		"SKILLS\nAWS: Lambda, S3, EKS, EventBridge,\nCloudWatch, QuickSight\n"
+	if p := Parse(text); p.Location != "Lisbon" {
+		t.Errorf("location = %q, want Lisbon from the contact line", p.Location)
+	}
+	cases := map[string]string{
+		// Without a contact line, a "City, Country" line is still the place.
+		"JANE EXAMPLE\nPlatform Engineer\nBerlin, Germany\njane@example.com\n": "Berlin, Germany",
+		// Link labels and ways of working are not places.
+		"JANE EXAMPLE\nPlatform Engineer\nBerlin, Germany\n+49 151 0000000 | jane@example.com | LinkedIn | GitHub | Open to relocation\n": "Berlin, Germany",
+		// The same place given in full keeps its city.
+		"JANE EXAMPLE\nPlatform Engineer\nBerlin, Germany\nGermany | +49 151 0000000 | jane@example.com\n": "Berlin, Germany",
+	}
+	for text, want := range cases {
+		if p := Parse(text); p.Location != want {
+			t.Errorf("location = %q, want %q from %q", p.Location, want, text)
+		}
+	}
+}
+
 // Sidebar headings (skills, languages, contact) can land between a role and
 // its bullets in a two-column PDF, so only sections that follow the role list
 // end a role.
