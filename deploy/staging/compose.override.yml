@@ -1,0 +1,43 @@
+# Staging on demand (#158): applied by scripts/staging.sh on top of the docker-compose.yml of the
+# commit being staged, as the Compose project jobpilot-staging. Loopback only, on ports that are
+# never the owner's stack's (3000, 8080, 5432). Every setting that could reach the outside or the
+# owner's accounts is pinned here as well (the script also runs Compose with a stripped environment):
+# no outbox sending, no email, no Google sign-in, no AI provider. Sign-up is open because only this
+# PC can reach it.
+services:
+  postgres:
+    ports: !reset []
+    restart: "no"
+
+  api:
+    environment:
+      JWT_SECRET: staging-only-not-a-secret
+      FRONTEND_URL: http://localhost:${STAGING_WEB_PORT:-13000}
+      REGISTRATION: open
+      ADMIN_EMAILS: staging@jobpilot.test
+      USER_AGENT_TOKENS: write
+      CLIENT_IP_HEADER: ""
+      GOOGLE_CLIENT_ID: ""
+      GOOGLE_CLIENT_SECRET: ""
+      GOOGLE_REDIRECT_URL: ""
+      GOOGLE_ALLOW_SIGNUP: ""
+      SMTP_HOST: ""
+      SMTP_USERNAME: ""
+      SMTP_PASSWORD: ""
+      MAIL_FROM: ""
+      LLM_PROVIDER: none
+      LLM_MODEL: ""
+      LLM_CLI_COMMAND: ""
+      LLM_CLI_ARGS: ""
+      OUTBOX_SENDER_ENABLED: "false"
+    ports: !override
+      - "127.0.0.1:${STAGING_API_PORT:-18081}:8080"
+    restart: "no"
+
+  web:
+    build:
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:${STAGING_API_PORT:-18081}/api
+    ports: !override
+      - "127.0.0.1:${STAGING_WEB_PORT:-13000}:3000"
+    restart: "no"

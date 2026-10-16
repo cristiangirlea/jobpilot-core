@@ -83,6 +83,18 @@ Open:
 
 On first startup, Compose builds the API and web images, waits for PostgreSQL, applies the migrations not applied yet, and starts the services. PostgreSQL data persists in the `jobpilot_postgres` Docker volume.
 
+### Staging on demand
+
+Before a release, try the exact commit in a throwaway copy with invented data:
+
+```bash
+make staging-up REF=master    # or a branch on origin, pr/123, or a commit
+make staging-status
+make staging-down
+```
+
+`staging-up` checks the commit out in `.git/jobpilot-staging/src`, builds it as the Compose project `jobpilot-staging` with `deploy/staging/compose.override.yml`, creates `staging@jobpilot.test` with a random password, adds the sample profile (`cmd/seed`), and prints the URL ([http://localhost:13000](http://localhost:13000)) and where the login is kept (`.git/jobpilot-staging/login.txt`; it is never printed). A branch name means the branch on origin when origin has it. It listens on loopback only, never on 3000, 8080 or 5432 (`STAGING_WEB_PORT` and `STAGING_API_PORT` change 13000 and 18081). Compose runs with a stripped environment and the override turns off outbox sending, email, Google sign-in and the AI provider, so nothing in the shell or a `.env` reaches staging. `staging-down` deletes its containers, database and built images and the checkout. There is one staging per clone: every worktree sees the same one in `make staging-status`. It needs Docker Compose 2.24 or later, and stages commits whose `docker-compose.yml` has the `postgres`, `api` and `web` services.
+
 ### First-use workflow
 
 1. Register a user. The Compose stack allows open sign-up; before anyone else can reach the server, name your account in `ADMIN_EMAILS`, set `REGISTRATION=invite` and restart (see "Accounts and sign-up").

@@ -15,7 +15,7 @@ TEST_MCP = cd apps/mcp && GOCACHE="$(GOCACHE)" go test ./...
 TEST_WEB = cd apps/web && npm run typecheck
 endif
 
-.PHONY: dev test vulncheck migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs
+.PHONY: dev test vulncheck migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs staging-up staging-down staging-status
 
 dev:
 	docker compose up --build
@@ -58,3 +58,14 @@ down:
 
 logs:
 	docker compose logs -f api web
+
+# Staging on demand (#158): a throwaway copy of REF (a branch on origin, pr/N or a commit) on
+# 127.0.0.1:13000, with invented sample data; staging-down deletes it. See scripts/staging.sh.
+staging-up:
+	sh scripts/staging.sh up $(REF)
+
+staging-down:
+	sh scripts/staging.sh down
+
+staging-status:
+	sh scripts/staging.sh status

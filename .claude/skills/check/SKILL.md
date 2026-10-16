@@ -31,6 +31,9 @@ step's result in one line; on a failure, show the error text and fix it before r
    workflow's publish or infra-bump job changed: `sh scripts/infra-bump-test.sh` (needs git and jq;
    without jq, as on Windows, run it as CI does, under dash:
    `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src:ro ubuntu:22.04 sh -c 'apt-get update -qq && apt-get install -y -qq git jq >/dev/null && sh /src/scripts/infra-bump-test.sh'`).
+   When `scripts/staging*` or `deploy/staging/` changed (CI runs it in the images job):
+   `sh scripts/staging-test.sh` (needs git; Docker Compose 2.24+ for the rendered part, which it
+   skips without Compose).
 5. Integration, when runtime code, SQL or migrations changed: `bash scripts/check-integration.sh`
    from the repository root (Git Bash on Windows; it takes a few minutes, so run it in the
    background where a tool call has a time limit). Other sessions run it at the same time from

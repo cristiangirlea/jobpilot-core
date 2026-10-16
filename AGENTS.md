@@ -17,7 +17,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 | `apps/mcp` | Separate Go module `jobpilot/core/mcp`: stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |
-| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`; `check-integration.sh`, `/check`'s integration step on a stack of its own. |
+| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`; `check-integration.sh`, `/check`'s integration step on a stack of its own; `staging.sh` (`make staging-up REF=...`, `staging-down`), staging on demand, tested by `staging-test.sh`. |
 | `deploy/base/` | Kustomize base for the API and web. The lab overlay lives in the private `infra` repo (`apps/jobpilot`). |
 | `Makefile`, `docker-compose.yml` | Local stack and dev commands (`make dev`, `make test`, `make mcp`, smoke targets). |
 
@@ -52,8 +52,11 @@ and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and conc
 
 ## The owner's data
 
-The owner's own stack (Compose Postgres on 5432, API on 8080, and the lab cluster) holds the
-owner's real profile, CV, applications and tokens.
+The owner's own stacks (production on a home server and Compose on
+this PC's 5432 and 8080 when running) hold the owner's real profile, CV, applications and tokens.
+Staging (`make staging-up`, 127.0.0.1:13000 and 18081) holds only the seed's invented profile. There
+is one per clone, shared by every worktree: check `make staging-status` before `staging-up` or
+`staging-down`, since another session may be using it.
 
 - Never read, query or print real data or the profile, in tests or while debugging. Tests use
   fakes or a throwaway `postgres:16-alpine` container. Local integration runs
