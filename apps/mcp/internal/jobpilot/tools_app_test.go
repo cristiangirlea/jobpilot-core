@@ -27,11 +27,11 @@ func (f *fakeAPI) recordAppRequest(w http.ResponseWriter, r *http.Request, send 
 	_ = json.Unmarshal(raw, &body)
 	f.appRequests = append(f.appRequests, appRequest{r.Method + " " + r.URL.Path, body})
 	if f.member && strings.HasPrefix(r.URL.Path, "/api/discovery/") {
-		send(w, 403, `{"error":"Discovery is managed by an administrator."}`)
+		send(w, 403, `{"error":"Discovery access denied by fixture M403."}`)
 		return true
 	}
 	if f.appWriteDenied && r.Method != http.MethodGet {
-		send(w, 403, `{"error":"Token is missing the write scope."}`)
+		send(w, 403, `{"error":"This account's agent tokens can only read. Policy fixture W403."}`)
 		return true
 	}
 	if f.appSource != "" && r.Method == http.MethodGet && r.URL.Path == "/api/discovery/sources" {
@@ -167,8 +167,11 @@ func TestAppToolsWriteForbidden(t *testing.T) {
 			f.appWriteDenied = true
 			f.mu.Unlock()
 			res, text := call(t, cs, c.name, c.args)
-			if !res.IsError || !strings.Contains(text, "403") || !strings.Contains(text, "write scope") {
+			if !res.IsError || !strings.Contains(text, "403") || !strings.Contains(text, "Policy fixture W403") {
 				t.Fatalf("write denial: %s", text)
+			}
+			if !strings.Contains(text, "administrator setting") || strings.Contains(text, "create a token") || strings.Contains(text, "-Write") {
+				t.Fatalf("account policy must not suggest minting a write token: %s", text)
 			}
 		})
 	}
@@ -224,7 +227,7 @@ func TestAppToolsMemberForbidden(t *testing.T) {
 			f.member = true
 			f.mu.Unlock()
 			res, text := call(t, cs, c.name, c.args)
-			if !res.IsError || !strings.Contains(text, "403") || !strings.Contains(text, "administrator") {
+			if !res.IsError || !strings.Contains(text, "403") || !strings.Contains(text, "Discovery access denied by fixture M403") {
 				t.Fatalf("member error: %s", text)
 			}
 			f.mu.Lock()
@@ -248,6 +251,9 @@ func TestUpdateDiscoverySourceNotFound(t *testing.T) {
 		}
 		if id == "unknown" {
 			appRequests(t, f, appRequest{"GET /api/discovery/sources", nil})
+		} else {
+			want := map[string]any{"provider": "remotive", "name": "Remote Go", "identifier": "", "search_query": "go backend", "excluded_search_query": "", "active": false}
+			appRequests(t, f, appRequest{"GET /api/discovery/sources", nil}, appRequest{"PUT /api/discovery/sources/s-1", want})
 		}
 	}
 }
@@ -270,4 +276,20 @@ func TestFindJobsAndCatalogSummary(t *testing.T) {
 		t.Fatal(text)
 	}
 	appRequests(t, f, appRequest{"POST /api/jobs/find", nil}, appRequest{"GET /api/catalog/summary", nil})
+}
+
+func TestUpdateDiscoverySourceRemotiveExclusion(t *testing.T) {
+	cs, f := session(t)
+	res, text := call(t, cs, "update_discovery_source", map[string]any{"id": "s-1", "excluded_search_query": "Sales"})
+	if res.IsError {
+		t.Fatal(text)
+	}
+	want := map[string]any{"provider": "remotive", "name": "Remote Go", "identifier": "", "search_query": "go backend", "excluded_search_query": "", "active": true}
+	appRequests(t, f, appRequest{"GET /api/discovery/sources", nil}, appRequest{"PUT /api/discovery/sources/s-1", want})
+	if got := structured[DiscoverySource](t, res); got.Provider != "remotive" || got.ExcludedSearchQuery != "" {
+		t.Fatalf("remotive exclusion must be cleared: %s", text)
+	}
+	if !strings.Contains(text, "excluded_search_query does not apply to remotive") {
+		t.Fatalf("must explain ignored exclusion: %s", text)
+	}
 }

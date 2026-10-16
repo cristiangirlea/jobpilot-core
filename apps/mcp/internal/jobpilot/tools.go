@@ -445,6 +445,9 @@ func toolError(err error) error {
 	case http.StatusUnauthorized:
 		return hinted{err, "JOBPILOT_TOKEN is invalid, expired, or revoked; the user can mint a new agent token under Settings, or with pwsh -File scripts/agent-token.ps1, and update the MCP server's configuration."}
 	case http.StatusForbidden:
+		if strings.Contains(apiErr.Message, "account's agent tokens can only read") {
+			return hinted{err, "Read-only account access is an administrator setting; ask the administrator to allow agent-token writes."}
+		}
 		return hinted{err, "This is a permission limit, not a product rule: the API requires the appropriate account role and token scope. An admin-only action needs an administrator; for a missing write scope, create a token with write access under Settings, or with pwsh -File scripts/agent-token.ps1 -Write."}
 	}
 	return err

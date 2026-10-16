@@ -852,7 +852,7 @@ The catalog an agent host downloads at the start of every session is about 33 KB
 | `get_discovery_settings` | read | Admin only: discovery schedule, limits and automatic draft settings |
 | `set_discovery_settings` | write | Admin only: change the supplied settings, preserving omitted fields |
 | `update_discovery_source` | write | Admin only: pause, resume, rename or change queries by id, preserving omitted fields |
-| `find_jobs_for_profile` | write | Score open shared-catalog jobs with no match yet for the user's profile; returns scored count and freshness, available to members |
+| `find_jobs_for_profile` | write | Score open shared-catalog jobs with no match yet for the user's profile; returns scored count and freshness; members need a write token |
 | `get_catalog_summary` | read | Catalog freshness and the user's open-match count without scoring; available to members |
 | `validate_discovery_source` | read | Sample-fetch a provider to check a board token before saving it |
 | `generate_documents` | write | Deterministic documents for a job; refused for rejected jobs |

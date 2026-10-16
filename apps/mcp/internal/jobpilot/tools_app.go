@@ -31,6 +31,11 @@ type updateSourceInput struct {
 	ExcludedSearchQuery *string `json:"excluded_search_query,omitempty"`
 }
 
+type sourceUpdateResult struct {
+	DiscoverySource
+	Note string `json:"note,omitempty"`
+}
+
 func addAppTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name: "list_blacklist", Title: "List excluded companies",
@@ -98,17 +103,17 @@ func addAppTools(s *mcp.Server, c *Client) {
 		Name: "update_discovery_source", Title: "Change a discovery source",
 		Description: "Admin only. Pause or resume a source by id, rename it or change its queries. Omitted fields keep their values; remotive ignores excluded_search_query.",
 		Annotations: writeTool("Change a discovery source", true),
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateSourceInput) (*mcp.CallToolResult, DiscoverySource, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in updateSourceInput) (*mcp.CallToolResult, sourceUpdateResult, error) {
 		id := strings.TrimSpace(in.ID)
 		if id == "" {
-			return nil, DiscoverySource{}, errors.New("id is required; call list_discovery_sources for ids")
+			return nil, sourceUpdateResult{}, errors.New("id is required; call list_discovery_sources for ids")
 		}
 		if in.Name != nil && strings.TrimSpace(*in.Name) == "" {
-			return nil, DiscoverySource{}, errors.New("name cannot be empty")
+			return nil, sourceUpdateResult{}, errors.New("name cannot be empty")
 		}
 		sources, err := c.DiscoverySources(ctx)
 		if err != nil {
-			return nil, DiscoverySource{}, toolError(err)
+			return nil, sourceUpdateResult{}, toolError(err)
 		}
 		for _, base := range sources {
 			if base.ID != id {
@@ -129,16 +134,20 @@ func addAppTools(s *mcp.Server, c *Client) {
 			normalized, err := normalizeSource(sourceInput{Provider: base.Provider, Name: base.Name,
 				Identifier: base.Identifier, SearchQuery: base.SearchQuery, ExcludedSearchQuery: base.ExcludedSearchQuery, Active: &base.Active})
 			if err != nil {
-				return nil, DiscoverySource{}, err
+				return nil, sourceUpdateResult{}, err
 			}
 			out, err := c.UpdateDiscoverySource(ctx, id, normalized)
-			return nil, out, toolError(err)
+			result := sourceUpdateResult{DiscoverySource: out}
+			if err == nil && normalized.Provider == "remotive" && in.ExcludedSearchQuery != nil && strings.TrimSpace(*in.ExcludedSearchQuery) != "" {
+				result.Note = "excluded_search_query does not apply to remotive and was cleared."
+			}
+			return nil, result, toolError(err)
 		}
-		return nil, DiscoverySource{}, &APIError{Status: http.StatusNotFound, Message: "Source not found. Call list_discovery_sources for ids."}
+		return nil, sourceUpdateResult{}, &APIError{Status: http.StatusNotFound, Message: "Source not found. Call list_discovery_sources for ids."}
 	})
 	addTool(s, &mcp.Tool{
 		Name: "find_jobs_for_profile", Title: "Find jobs for my profile",
-		Description: "Score open shared-catalog jobs with no match yet for this user's profile and rules. Available to members; fetches no new postings. Returns scored count and catalog freshness summary.",
+		Description: "Score open shared-catalog jobs with no match yet for this user's profile and rules. Members need a write token; fetches no new postings. Returns scored count and catalog freshness summary.",
 		Annotations: writeTool("Find jobs for my profile", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, FindJobsResult, error) {
 		out, err := c.FindJobsForProfile(ctx)
