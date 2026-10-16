@@ -125,6 +125,9 @@ func TestReadCVFileRefuses(t *testing.T) {
 		{"a file over the API's limit", allowed, "big.pdf", "at most 12 MB"},
 		{"a missing file", allowed, "gone.pdf", "no file"},
 		{"a missing folder", filepath.Join(allowed, "nope"), "cv.pdf", "cannot be opened"},
+		// Relative to whatever folder the host started the server in.
+		{"a relative folder", "cvs", "cv.pdf", "absolute path"},
+		{"a home-relative folder", filepath.Join("~", "cvs"), "cv.pdf", "absolute path"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := readCVFile(tc.dir, tc.path)
@@ -168,6 +171,18 @@ func TestReadCVFileRefusesALinkOutOfTheFolder(t *testing.T) {
 	// A link that stays inside the folder is just another name for a CV in it.
 	if got, err := readCVFile(allowed, "alias.pdf"); err != nil || !bytes.Equal(got.data, fakePDF) {
 		t.Errorf("a link to a CV inside the folder should be read: %v", err)
+	}
+}
+
+// os.Root refuses every absolute link, even one that points back inside the
+// folder, so the refusal has to say that links must be relative.
+func TestReadCVFileSaysLinksMustBeRelative(t *testing.T) {
+	allowed, _ := cvFolders(t)
+	if err := os.Symlink(filepath.Join(allowed, "cv.pdf"), filepath.Join(allowed, "absolute.pdf")); err != nil {
+		t.Skipf("cannot create a symbolic link here: %v", err)
+	}
+	if _, err := readCVFile(allowed, "absolute.pdf"); err == nil || !strings.Contains(err.Error(), "must be relative") {
+		t.Errorf("readCVFile(absolute link inside the folder) = %v, want it to say links must be relative", err)
 	}
 }
 
