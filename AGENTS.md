@@ -71,6 +71,9 @@ owner's real profile, CV, applications and tokens.
   form over plain HTTP: no browser, no CAPTCHA solving, and an entry that may have reached the
   employer is never sent again. Composing fills the outbox; approving an outbox entry is consent to
   send, so the MCP server has no `approve_outbox`, send, upload or delete tool (a test checks).
+  The one exception, the owner's choice (2026-10-16), is `upload_cv`: it stores a CV in the user's
+  own JobPilot, unapproved, sends nothing to an employer, and is off unless `JOBPILOT_CV_DIR` names
+  the single folder it may read (README, "Deliberately absent").
 - Hard-rule rejections (current or previous employer, excluded company, an active filter) are
   final: documents, applications and the applied status are refused with 409, and `apply_url` /
   `employer_url` are withheld centrally in the store scanners. Never weaken this to the frontend.

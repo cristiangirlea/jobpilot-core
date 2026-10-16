@@ -9,6 +9,8 @@
 //	                   short-lived token from /api/auth/login
 //	JOBPILOT_EMAIL     with JOBPILOT_PASSWORD: log in instead of, or to
 //	JOBPILOT_PASSWORD  refresh, a token
+//	JOBPILOT_CV_DIR    the one folder upload_cv may read a CV from; unset,
+//	                   upload_cv refuses
 //
 // stdout carries the protocol, so every log line goes to stderr.
 package main
@@ -46,6 +48,7 @@ func main() {
 		Token:    os.Getenv("JOBPILOT_TOKEN"),
 		Email:    os.Getenv("JOBPILOT_EMAIL"),
 		Password: os.Getenv("JOBPILOT_PASSWORD"),
+		CVDir:    os.Getenv("JOBPILOT_CV_DIR"),
 	})
 	if err != nil {
 		// Start anyway. Exiting here would show the host only a closed
@@ -93,6 +96,8 @@ Serves JobPilot to an MCP host over stdio. Environment:
   JOBPILOT_TOKEN     agent token from Settings (preferred), or a login token
   JOBPILOT_EMAIL     with JOBPILOT_PASSWORD, logs in and refreshes the token
   JOBPILOT_PASSWORD  prefer a token: the host stores -e values in plaintext
+  JOBPILOT_CV_DIR    the one folder upload_cv may read a .pdf or .docx from;
+                     unset (the default), upload_cv refuses
 
 Register with Claude Code:
   claude mcp add jobpilot -e JOBPILOT_TOKEN=<token> -- <path to jobpilot-mcp>

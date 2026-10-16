@@ -28,6 +28,7 @@ type fakeAPI struct {
 	answerPatches []map[string]any
 	resolves      []map[string]any
 	cvApprovals   []map[string]any
+	cvUploads     []cvUpload
 	// detailGets counts reads of one application, so a test can prove the
 	// status tool no longer needs a read-back round trip.
 	detailGets atomic.Int32
@@ -316,10 +317,18 @@ func sessionUnchecked(t *testing.T, oldAPI bool) (*mcp.ClientSession, *fakeAPI) 
 
 func connectWith(t *testing.T, token string, logger *slog.Logger, host *mcp.Client, oldAPI, check bool) (*mcp.ClientSession, *fakeAPI) {
 	t.Helper()
+	return connectOptions(t, Options{Token: token}, logger, host, oldAPI, check)
+}
+
+// connectOptions is connectWith for a client that needs more settings, such
+// as a CV folder; BaseURL is filled in with the fake API's.
+func connectOptions(t *testing.T, o Options, logger *slog.Logger, host *mcp.Client, oldAPI, check bool) (*mcp.ClientSession, *fakeAPI) {
+	t.Helper()
 	fake := &fakeAPI{noContract: oldAPI}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
-	client, err := NewClient(Options{BaseURL: srv.URL, Token: token})
+	o.BaseURL = srv.URL
+	client, err := NewClient(o)
 	if err != nil {
 		t.Fatal(err)
 	}

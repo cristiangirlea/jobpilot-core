@@ -8,6 +8,7 @@ package main
 //	go test -run TestEndToEnd -v . -args -api http://localhost:8080
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -189,7 +190,7 @@ func TestEndToEnd(t *testing.T) {
 		"run_discovery": true, "import_job": true, "add_discovery_source": true,
 		"get_ai_status": true, "list_answers": true, "resolve_screening_answers": true,
 		"save_answer": true, "approve_answer": true, "list_cvs": true, "get_cv": true,
-		"approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
+		"upload_cv": true, "approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
 		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
@@ -671,6 +672,109 @@ func TestEndToEnd(t *testing.T) {
 		discoveryRecognisesReposts(t, r, call)
 	}
 	filterPresetsFromTheAgent(t, call, accepted.Job.ID)
+}
+
+// TestEndToEndUploadCV sends a generated DOCX through upload_cv to the live
+// API's CV route, as its own user so the CV cannot change what the main test
+// composes. The fixture is generated here; no real CV is ever used.
+func TestEndToEndUploadCV(t *testing.T) {
+	api := strings.TrimSuffix(strings.TrimSuffix(strings.TrimSpace(*apiFlag), "/"), "/api")
+	if api == "" {
+		t.Skip("pass -api <origin> or set JOBPILOT_E2E_API_URL to run against a live API")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	r := &rest{t: t, ctx: ctx, http: &http.Client{Timeout: 30 * time.Second}, base: api}
+	var registered struct {
+		Token string `json:"token"`
+	}
+	email := fmt.Sprintf("mcp-e2e-cv-%d@example.test", time.Now().UnixNano())
+	r.call("POST", "/api/auth/register", map[string]string{"email": email, "password": "mcp-e2e-password"}, &registered)
+	r.token = registered.Token
+	var agent struct {
+		Token string `json:"token"`
+	}
+	r.call("POST", "/api/tokens", map[string]any{"name": "mcp-e2e-cv", "scopes": []string{"read", "write"}}, &agent)
+
+	dir := t.TempDir()
+	var docx bytes.Buffer
+	z := zip.NewWriter(&docx)
+	w, err := z.Create("word/document.xml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = w.Write([]byte(`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+		`<w:p><w:r><w:t>Test Candidate</w:t></w:r></w:p><w:p><w:r><w:t>Platform Engineer</w:t></w:r></w:p>` +
+		`<w:p><w:r><w:t>` + email + `</w:t></w:r></w:p><w:p><w:r><w:t>Skills: Go, Kubernetes, PostgreSQL</w:t></w:r></w:p>` +
+		`</w:body></w:document>`))
+	if err = z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "generated.docx"), docx.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	bin := filepath.Join(t.TempDir(), "jobpilot-mcp")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build: %v\n%s", err, out)
+	}
+	cmd := exec.Command(bin)
+	cmd.Env = append(os.Environ(), "JOBPILOT_API_URL="+api, "JOBPILOT_TOKEN="+agent.Token, "JOBPILOT_EMAIL=", "JOBPILOT_PASSWORD=", "JOBPILOT_CV_DIR="+dir)
+	cmd.Stderr = os.Stderr
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "e2e-cv", Version: "0"}, nil).Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "upload_cv", Arguments: map[string]any{"path": "generated.docx", "label": "Platform"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(res.StructuredContent)
+	if res.IsError {
+		raw, _ = json.Marshal(res.Content)
+	}
+	var uploaded struct {
+		ID       string         `json:"id"`
+		Label    string         `json:"label"`
+		Format   string         `json:"format"`
+		Approved bool           `json:"approved"`
+		Parsed   map[string]any `json:"parsed"`
+	}
+	if res.IsError || json.Unmarshal(raw, &uploaded) != nil {
+		t.Fatalf("upload_cv: %v %s", res.IsError, raw)
+	}
+	if uploaded.ID == "" || uploaded.Label != "Platform" || uploaded.Format != "docx" || uploaded.Approved {
+		t.Fatalf("the upload should be a new, unapproved DOCX labelled Platform: %s", raw)
+	}
+	if uploaded.Parsed["email"] != email {
+		t.Fatalf("the API should have parsed the generated CV: %s", raw)
+	}
+	var stored []struct {
+		ID       string `json:"id"`
+		Approved bool   `json:"approved"`
+	}
+	r.call("GET", "/api/cv", nil, &stored)
+	if len(stored) != 1 || stored[0].ID != uploaded.ID || stored[0].Approved {
+		t.Fatalf("the API should hold exactly the uploaded CV, unapproved: %+v", stored)
+	}
+
+	// Outside the folder is refused before anything reaches the API.
+	outside := filepath.Join(t.TempDir(), "elsewhere.docx")
+	if err = os.WriteFile(outside, docx.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "upload_cv", Arguments: map[string]any{"path": outside}}); err != nil || !res.IsError {
+		t.Fatalf("a file outside JOBPILOT_CV_DIR must be refused: %v", err)
+	}
+	r.call("GET", "/api/cv", nil, &stored)
+	if len(stored) != 1 {
+		t.Fatalf("a refused upload reached the API: %+v", stored)
+	}
 }
 
 // filterPresetsFromTheAgent creates a preset, changes one rule of it, and

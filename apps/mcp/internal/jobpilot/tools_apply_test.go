@@ -3,7 +3,9 @@ package jobpilot
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -59,6 +61,28 @@ func (f *fakeAPI) applyRoutes(m *http.ServeMux, send func(http.ResponseWriter, i
 			return
 		}
 		send(w, 200, `{"id":"cv-1","kind":"base","filename":"cv.pdf","format":"pdf","size_bytes":120000,"extracted_text":"Octavian Pirvan, backend engineer.","parsed":{"name":"Octavian Pirvan","warnings":["Could not read the education section"]},"approved":true,"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"}`)
+	})
+	m.HandleFunc("POST /api/cv", func(w http.ResponseWriter, r *http.Request) {
+		if r.ParseMultipartForm(1<<20) != nil {
+			send(w, 400, `{"error":"Upload a CV file as multipart form data under the field name \"file\"."}`)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			send(w, 400, `{"error":"No file was uploaded under the field name \"file\"."}`)
+			return
+		}
+		data, _ := io.ReadAll(file)
+		_ = file.Close()
+		if header.Filename == "scanned.pdf" {
+			send(w, 400, `{"error":"This PDF is a scanned image with no text layer; there is no OCR."}`)
+			return
+		}
+		f.mu.Lock()
+		f.cvUploads = append(f.cvUploads, cvUpload{filename: header.Filename, contentType: header.Header.Get("Content-Type"), data: data,
+			label: r.FormValue("label"), fields: len(r.MultipartForm.File) + len(r.MultipartForm.Value), auth: r.Header.Get("Authorization")})
+		f.mu.Unlock()
+		send(w, 201, `{"id":"cv-up","kind":"base","label":"`+r.FormValue("label")+`","filename":"`+header.Filename+`","format":"pdf","size_bytes":`+strconv.Itoa(len(data))+`,"extracted_text":"Ana Test, platform engineer.","parsed":{"name":"Ana Test","current_title":"Platform Engineer","warnings":["No phone number was found."],"text":"Ana Test, platform engineer."},"role_family":"platform","approved":false,"created_at":"2026-10-16T00:00:00Z","updated_at":"2026-10-16T00:00:00Z"}`)
 	})
 	m.HandleFunc("POST /api/cv/{id}/approve", func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
@@ -139,7 +163,7 @@ func TestApplyToolCatalog(t *testing.T) {
 	}
 	for _, want := range []string{
 		"get_ai_status", "list_answers", "resolve_screening_answers", "save_answer", "approve_answer",
-		"list_cvs", "get_cv", "approve_cv", "tailor_cv_for_job",
+		"list_cvs", "get_cv", "upload_cv", "approve_cv", "tailor_cv_for_job",
 		"compose_application", "list_outbox", "get_outbox_entry", "cancel_outbox_entry",
 		"detect_board", "list_board_suggestions",
 	} {
@@ -148,8 +172,14 @@ func TestApplyToolCatalog(t *testing.T) {
 		}
 	}
 	// Approving an outbox entry is consent to send, and that belongs to the
-	// user in the web app. Uploading and deleting stay out too.
+	// user in the web app. Uploading and deleting stay out too, with one
+	// exception the owner chose: upload_cv puts a CV into the user's own
+	// JobPilot, unapproved, from the one folder they allowed. It sends
+	// nothing to an employer.
 	for name := range names {
+		if name == "upload_cv" {
+			continue
+		}
 		if strings.Contains(name, "approve_outbox") || strings.HasPrefix(name, "send") || strings.HasPrefix(name, "upload") || strings.HasPrefix(name, "delete") {
 			t.Errorf("%s must not be exposed", name)
 		}

@@ -43,6 +43,9 @@ type Options struct {
 	Email    string
 	Password string
 	Timeout  time.Duration
+	// CVDir is the one folder upload_cv may read from; empty turns the
+	// tool off.
+	CVDir string
 }
 
 // requiredContract is the API behaviour this server was written against:
@@ -77,6 +80,7 @@ type Client struct {
 	password string
 	timeout  time.Duration
 	maxBytes int64
+	cvDir    string
 
 	// configErr is set when the server started without usable settings.
 	// Every request then fails with it instead of reaching the network.
@@ -144,7 +148,7 @@ func NewClient(o Options) (*Client, error) {
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
-	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, maxBytes: maxResponseBytes, token: o.Token, contract: contractUnknown}, nil
+	return &Client{base: u.String(), http: &http.Client{}, email: o.Email, password: o.Password, timeout: timeout, maxBytes: maxResponseBytes, token: o.Token, contract: contractUnknown, cvDir: o.CVDir}, nil
 }
 
 func (c *Client) BaseURL() string { return c.base }
@@ -241,7 +245,13 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	var reader io.Reader
-	if body != nil {
+	contentType := "application/json"
+	switch b := body.(type) {
+	case nil:
+	case rawBody:
+		// Read afresh on every send, so the retry after a 401 sends it whole.
+		reader, contentType = bytes.NewReader(b.data), b.contentType
+	default:
 		raw, err := json.Marshal(body)
 		if err != nil {
 			return err
@@ -254,7 +264,7 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -301,6 +311,12 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any, t
 		return fmt.Errorf("jobpilot api: decode %s %s: %w", method, path, err)
 	}
 	return nil
+}
+
+// rawBody is a request body sent as it is rather than as JSON.
+type rawBody struct {
+	data        []byte
+	contentType string
 }
 
 // withTotal decodes a list into into and keeps the X-Total-Count the API sent
