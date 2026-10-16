@@ -162,6 +162,9 @@ func TestToolCatalogV2(t *testing.T) {
 		"generate_documents": false, "create_application": false, "update_application_status": false,
 		"run_discovery": false, "import_job": false, "add_discovery_source": false,
 		"report_job_unavailable": false, "set_filters": false,
+		"list_blacklist": true, "add_to_blacklist": false,
+		"get_discovery_settings": true, "set_discovery_settings": false,
+		"update_discovery_source": false, "find_jobs_for_profile": false, "get_catalog_summary": true,
 	}
 	// The core tools and their hints. The apply-engine set, and which tools
 	// must never exist, are covered by TestApplyToolCatalog.

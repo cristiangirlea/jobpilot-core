@@ -387,6 +387,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	})
 
 	addCatalogTools(s, c)
+	addAppTools(s, c)
 	addApplyTools(s, c)
 	addNotificationTools(s, c)
 	return s
@@ -444,7 +445,7 @@ func toolError(err error) error {
 	case http.StatusUnauthorized:
 		return hinted{err, "JOBPILOT_TOKEN is invalid, expired, or revoked; the user can mint a new agent token under Settings, or with pwsh -File scripts/agent-token.ps1, and update the MCP server's configuration."}
 	case http.StatusForbidden:
-		return hinted{err, "This is a permission limit, not a product rule: the configured token lacks the scope this action needs, and the user can create one with write access under Settings, or with pwsh -File scripts/agent-token.ps1 -Write."}
+		return hinted{err, "This is a permission limit, not a product rule: the API requires the appropriate account role and token scope. An admin-only action needs an administrator; for a missing write scope, create a token with write access under Settings, or with pwsh -File scripts/agent-token.ps1 -Write."}
 	}
 	return err
 }

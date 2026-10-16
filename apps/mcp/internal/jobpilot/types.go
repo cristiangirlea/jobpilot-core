@@ -337,6 +337,42 @@ type SourceList struct {
 	Sources []DiscoverySource `json:"sources"`
 }
 
+type BlacklistEntry struct {
+	ID             string    `json:"id,omitempty"`
+	CompanyName    string    `json:"company_name"`
+	CompanyDomain  string    `json:"company_domain,omitempty"`
+	NormalizedName string    `json:"normalized_name,omitempty"`
+	Reason         string    `json:"reason,omitempty"`
+	CreatedAt      time.Time `json:"created_at,omitempty"`
+}
+
+type Blacklist struct {
+	Entries []BlacklistEntry `json:"entries"`
+}
+
+type DiscoverySettings struct {
+	Enabled         bool       `json:"enabled"`
+	IntervalMinutes int        `json:"interval_minutes"`
+	AutoPrepare     bool       `json:"auto_prepare"`
+	MinScore        int        `json:"min_score"`
+	MaxJobsPerRun   int        `json:"max_jobs_per_run"`
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt       *time.Time `json:"next_run_at,omitempty"`
+}
+
+type CatalogSummary struct {
+	LastJobAt   *time.Time `json:"last_job_at"`
+	JobsLast24h int        `json:"jobs_last_24h"`
+	JobsLast7d  int        `json:"jobs_last_7d"`
+	OpenJobs    int        `json:"open_jobs"`
+	OpenMatches int        `json:"open_matches"`
+}
+
+type FindJobsResult struct {
+	Scored  int            `json:"scored"`
+	Summary CatalogSummary `json:"summary"`
+}
+
 // JobInput is the manual-import request body. The API decodes it with unknown
 // fields disallowed, so this must carry exactly the fields it accepts.
 type JobInput struct {

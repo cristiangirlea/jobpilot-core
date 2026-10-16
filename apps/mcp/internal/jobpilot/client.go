@@ -478,3 +478,47 @@ func (c *Client) AddDiscoverySource(ctx context.Context, in DiscoverySource) (Di
 	var out DiscoverySource
 	return out, c.do(ctx, http.MethodPost, "/api/discovery/sources", in, &out, c.timeout)
 }
+
+func (c *Client) Blacklist(ctx context.Context) ([]BlacklistEntry, error) {
+	var out []BlacklistEntry
+	return out, c.get(ctx, "/api/blacklist", &out)
+}
+
+func (c *Client) AddToBlacklist(ctx context.Context, in blacklistInput) (BlacklistEntry, error) {
+	var out BlacklistEntry
+	return out, c.do(ctx, http.MethodPost, "/api/blacklist", in, &out, rescoreTimeout)
+}
+
+func (c *Client) DiscoverySettings(ctx context.Context) (DiscoverySettings, error) {
+	var out DiscoverySettings
+	return out, c.get(ctx, "/api/discovery/settings", &out)
+}
+
+func (c *Client) SaveDiscoverySettings(ctx context.Context, in DiscoverySettings) (DiscoverySettings, error) {
+	var out DiscoverySettings
+	return out, c.do(ctx, http.MethodPut, "/api/discovery/settings", in, &out, c.timeout)
+}
+
+func (c *Client) UpdateDiscoverySource(ctx context.Context, id string, in DiscoverySource) (DiscoverySource, error) {
+	var out DiscoverySource
+	// Send the editable fields only, without crawl metadata or the URL's id.
+	body := struct {
+		Provider            string `json:"provider"`
+		Name                string `json:"name"`
+		Identifier          string `json:"identifier"`
+		SearchQuery         string `json:"search_query"`
+		ExcludedSearchQuery string `json:"excluded_search_query"`
+		Active              bool   `json:"active"`
+	}{in.Provider, in.Name, in.Identifier, in.SearchQuery, in.ExcludedSearchQuery, in.Active}
+	return out, c.do(ctx, http.MethodPut, "/api/discovery/sources/"+url.PathEscape(id), body, &out, c.timeout)
+}
+
+func (c *Client) FindJobsForProfile(ctx context.Context) (FindJobsResult, error) {
+	var out FindJobsResult
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/find", nil, &out, rescoreTimeout)
+}
+
+func (c *Client) CatalogSummary(ctx context.Context) (CatalogSummary, error) {
+	var out CatalogSummary
+	return out, c.get(ctx, "/api/catalog/summary", &out)
+}

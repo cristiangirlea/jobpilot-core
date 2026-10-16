@@ -10,7 +10,9 @@ import (
 // session. It was 60 KB, about fifteen thousand tokens, before the inferred
 // output schemas were dropped; the budget sits above the new size with room
 // for a few more tools, and below the old one, so the regression is loud.
-const catalogBudget = 30 * 1024
+// #143 adds seven thin tools across four app areas; their compact input
+// schemas and descriptions need 4 KiB beyond the original 30 KiB limit.
+const catalogBudget = 34 * 1024
 
 func TestCatalogStaysWithinBudget(t *testing.T) {
 	cs, _ := session(t)

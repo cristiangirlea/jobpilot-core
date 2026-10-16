@@ -42,8 +42,13 @@ type fakeAPI struct {
 	// reports records which jobs were reported as no longer available.
 	reports []string
 	// filterSaves records each filter preset save as "METHOD path" and body.
-	filterSaves  []string
-	filterBodies []map[string]any
+	filterSaves    []string
+	filterBodies   []map[string]any
+	appRequests    []appRequest
+	member         bool
+	sourceGone     bool
+	appSource      string
+	appWriteDenied bool
 }
 
 func (f *fakeAPI) lastJobQuery() string {
@@ -250,6 +255,7 @@ func (f *fakeAPI) handler() http.Handler {
 	})
 	f.applyRoutes(m, send)
 	f.notificationRoutes(m, send)
+	f.appRoutes(m, send)
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if f.noContract {
 			send(w, 200, `{"status":"ok"}`)
@@ -264,6 +270,9 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			send(w, 401, `{"error":"unauthorized"}`)
+			return
+		}
+		if f.recordAppRequest(w, r, send) {
 			return
 		}
 		m.ServeHTTP(w, r)
