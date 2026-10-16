@@ -118,7 +118,8 @@ down() {
   if [ -e "$src/docker-compose.yml" ]; then
     compose down -v --rmi local --remove-orphans
   else
-    # No checkout left: name the project only, from a directory without a compose file or .env.
+    # No checkout left: name the project only. Compose may still find a docker-compose.yml and .env
+    # in a parent directory (the main checkout); -p limits down to jobpilot-staging's resources.
     if [ -n "$dry" ]; then
       docker_clean docker compose -p "$project" down -v --rmi local --remove-orphans
     else
