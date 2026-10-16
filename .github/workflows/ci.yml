@@ -87,6 +87,12 @@ jobs:
         run: docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web
       - name: Build the migrate image
         run: docker build migrations
+      # make staging-up's refusals and commands, and the staging override rendered against this
+      # docker-compose.yml with a hostile environment (#158).
+      - name: staging.sh
+        env:
+          STAGING_TEST_REQUIRE_COMPOSE: "1"
+        run: sh scripts/staging-test.sh
 
   manifests:
     name: deploy manifests
