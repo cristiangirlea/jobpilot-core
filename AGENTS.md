@@ -17,7 +17,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 | `apps/mcp` | Separate Go module `jobpilot/core/mcp`: stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |
-| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`. |
+| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`; `check-integration.sh`, `/check`'s integration step on a stack of its own. |
 | `deploy/base/` | Kustomize base for the API and web. The lab overlay lives in the private `infra` repo (`apps/jobpilot`). |
 | `Makefile`, `docker-compose.yml` | Local stack and dev commands (`make dev`, `make test`, `make mcp`, smoke targets). |
 
@@ -56,8 +56,9 @@ The owner's own stack (Compose Postgres on 5432, API on 8080, and the lab cluste
 owner's real profile, CV, applications and tokens.
 
 - Never read, query or print real data or the profile, in tests or while debugging. Tests use
-  fakes or a throwaway `postgres:16-alpine` container; local integration runs use other ports
-  (for example Postgres 55432, API 18080, fake ATS 18999), never 5432/8080.
+  fakes or a throwaway `postgres:16-alpine` container. Local integration runs
+  (`scripts/check-integration.sh`) use a uniquely named container and free random ports, never
+  5432/8080 and never fixed ports: other sessions run them at the same time.
 - The smoke scripts, `make seed`, `make migrate` and the MCP end-to-end test write to whatever API
   or database they point at, and their defaults are the owner's (`localhost:8080`, and the API's
   `DATABASE_URL` defaults to `localhost:5432`): always set the target to a throwaway stack.
