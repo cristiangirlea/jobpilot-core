@@ -26,6 +26,9 @@ type cvUpload struct {
 // real CV.
 var fakePDF = []byte("%PDF-1.4\n% generated test fixture, not a CV\n%%EOF\n")
 
+// approvedPDF is the file the fake API lists as cv-1, the user's approved CV.
+var approvedPDF = []byte("%PDF-1.4\n% generated test fixture: the approved CV, not a real one\n%%EOF\n")
+
 func fakeDOCX(t *testing.T) []byte {
 	t.Helper()
 	var buf bytes.Buffer
@@ -331,6 +334,49 @@ func TestUploadCVRefusalsNeverReachTheAPI(t *testing.T) {
 				t.Fatalf("a refused upload reached the API %d times", len(fake.cvUploads))
 			}
 		})
+	}
+}
+
+// The API replaces a CV uploaded again with the same bytes and clears its
+// approval, which sends the applications using it back to review. upload_cv
+// refuses that for an approved CV and changes nothing (#155).
+func TestUploadCVRefusesTheFileOfAnApprovedCV(t *testing.T) {
+	allowed, _ := cvFolders(t)
+	if err := os.WriteFile(filepath.Join(allowed, "approved.pdf"), approvedPDF, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	uploads := func(fake *fakeAPI) int {
+		fake.mu.Lock()
+		defer fake.mu.Unlock()
+		return len(fake.cvUploads)
+	}
+
+	cs, fake := connectOptions(t, Options{Token: "test-token", CVDir: allowed}, nil, nil, false, true)
+	res, text := call(t, cs, "upload_cv", map[string]any{"path": "approved.pdf"})
+	if !res.IsError || !strings.Contains(text, "already") || !strings.Contains(text, "approved") || !strings.Contains(text, "cv-1") {
+		t.Fatalf("uploading an approved CV's file should be refused, naming the CV: %v: %s", res.IsError, text)
+	}
+	if n := uploads(fake); n != 0 {
+		t.Fatalf("the refused upload reached the API %d times", n)
+	}
+
+	// The same bytes as a CV that is not approved yet replace it, as before:
+	// there is no approval to lose.
+	fake.listedCVUnapproved.Store(true)
+	if res, text = call(t, cs, "upload_cv", map[string]any{"path": "approved.pdf"}); res.IsError {
+		t.Fatalf("uploading an unapproved CV's file again should go through: %s", text)
+	}
+	if n := uploads(fake); n != 1 {
+		t.Fatalf("want one upload, got %d", n)
+	}
+
+	// Without the list there is no telling, so nothing is sent.
+	fake.cvListFails.Store(true)
+	if res, text = call(t, cs, "upload_cv", map[string]any{"path": "cv.pdf"}); !res.IsError || !strings.Contains(text, "nothing was uploaded") {
+		t.Fatalf("upload_cv should refuse when the CVs cannot be listed: %v: %s", res.IsError, text)
+	}
+	if n := uploads(fake); n != 1 {
+		t.Fatalf("an upload went out without the check: %d uploads", n)
 	}
 }
 

@@ -2,6 +2,8 @@ package jobpilot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -53,7 +55,12 @@ func (f *fakeAPI) applyRoutes(m *http.ServeMux, send func(http.ResponseWriter, i
 		send(w, 200, `{"ai_enabled":false,"provider":"none","needs_review":1,"resolutions":[{"question":"Tell us about yourself","question_key":"about_you","answer":"I build backends.","source":"bank","approved":true,"needs_review":false,"entry_id":"a-1","reused":true},{"question":"Why this role?","question_key":"why_role","answer":"Template text.","source":"template","approved":false,"needs_review":true,"entry_id":"a-2","reused":false}]}`)
 	})
 	m.HandleFunc("GET /api/cv", func(w http.ResponseWriter, r *http.Request) {
-		send(w, 200, `[{"id":"cv-1","kind":"base","filename":"cv.pdf","format":"pdf","size_bytes":120000,"approved":true,"created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"}]`)
+		if f.cvListFails.Load() {
+			send(w, 503, `{"error":"The database is unavailable."}`)
+			return
+		}
+		sum := sha256.Sum256(approvedPDF)
+		send(w, 200, `[{"id":"cv-1","kind":"base","filename":"cv.pdf","format":"pdf","size_bytes":120000,"approved":`+boolJSON(!f.listedCVUnapproved.Load())+`,"fingerprint":"`+hex.EncodeToString(sum[:])+`","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"}]`)
 	})
 	m.HandleFunc("GET /api/cv/{id}", func(w http.ResponseWriter, r *http.Request) {
 		if r.PathValue("id") != "cv-1" {
