@@ -194,6 +194,9 @@ func TestEndToEnd(t *testing.T) {
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
 		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
+		"list_blacklist": true, "add_to_blacklist": true,
+		"get_discovery_settings": true, "set_discovery_settings": true,
+		"update_discovery_source": true, "find_jobs_for_profile": true, "get_catalog_summary": true,
 	}
 	for _, tool := range tools.Tools {
 		if !want[tool.Name] {
@@ -671,7 +674,110 @@ func TestEndToEnd(t *testing.T) {
 		discoveryShareAndCounters(t, r, call)
 		discoveryRecognisesReposts(t, r, call)
 	}
+	remainingAppTools(t, call)
 	filterPresetsFromTheAgent(t, call, accepted.Job.ID)
+}
+
+// remainingAppTools uses only this test's invented account. The extra job is
+// imported after the dashboard count assertions and has its own company, so
+// blacklisting it cannot affect the earlier application flow.
+func remainingAppTools(t *testing.T, call func(string, map[string]any) (map[string]any, string, bool)) {
+	t.Helper()
+	settings, text, isErr := call("get_discovery_settings", nil)
+	if isErr {
+		t.Fatalf("get_discovery_settings: %s", text)
+	}
+	changed, text, isErr := call("set_discovery_settings", map[string]any{"enabled": false, "interval_minutes": 720, "max_jobs_per_run": 6})
+	if isErr || changed["enabled"] != false || changed["interval_minutes"] != float64(720) || changed["max_jobs_per_run"] != float64(6) || changed["min_score"] != settings["min_score"] || changed["auto_prepare"] != settings["auto_prepare"] {
+		t.Fatalf("settings merge: %s", text)
+	}
+	source, text, isErr := call("add_discovery_source", map[string]any{"provider": "arbeitnow", "name": "MCP paused source", "search_query": "Go", "excluded_search_query": "PHP", "active": false})
+	if isErr {
+		t.Fatalf("add source for edits: %s", text)
+	}
+	id, _ := source["id"].(string)
+	if id == "" {
+		t.Fatal("added source has no id")
+	}
+	source, text, isErr = call("update_discovery_source", map[string]any{"id": id, "name": "MCP renamed source", "active": true})
+	if isErr || source["name"] != "MCP renamed source" || source["active"] != true || source["provider"] != "arbeitnow" || source["search_query"] != "Go" || source["excluded_search_query"] != "PHP" {
+		t.Fatalf("source rename/resume must keep queries: %s", text)
+	}
+	source, text, isErr = call("update_discovery_source", map[string]any{"id": id, "search_query": "Rust", "excluded_search_query": "Sales", "active": false})
+	if isErr || source["active"] != false || source["search_query"] != "Rust" || source["excluded_search_query"] != "Sales" || source["name"] != "MCP renamed source" {
+		t.Fatalf("source pause/query edit must keep name: %s", text)
+	}
+	// Restore the schedule after pausing our source. Pass only editable fields.
+	restore := map[string]any{}
+	for _, key := range []string{"enabled", "interval_minutes", "auto_prepare", "min_score", "max_jobs_per_run"} {
+		restore[key] = settings[key]
+	}
+	if _, text, isErr = call("set_discovery_settings", restore); isErr {
+		t.Fatalf("restore settings: %s", text)
+	}
+	if _, text, isErr = call("update_discovery_source", map[string]any{"id": "00000000-0000-0000-0000-000000000000", "active": false}); !isErr || !strings.Contains(text, "404") {
+		t.Fatalf("unknown source: %s", text)
+	}
+
+	before, text, isErr := call("get_catalog_summary", nil)
+	if isErr {
+		t.Fatalf("get_catalog_summary: %s", text)
+	}
+	for _, key := range []string{"last_job_at", "jobs_last_24h", "jobs_last_7d", "open_jobs", "open_matches"} {
+		if _, ok := before[key]; !ok {
+			t.Fatalf("catalog summary missing %s: %s", key, text)
+		}
+	}
+	found, text, isErr := call("find_jobs_for_profile", nil)
+	if isErr {
+		t.Fatalf("find_jobs_for_profile: %s", text)
+	}
+	if _, ok := found["scored"].(float64); !ok {
+		t.Fatalf("missing scored count: %s", text)
+	}
+	if summary, ok := found["summary"].(map[string]any); !ok || summary["open_jobs"] != before["open_jobs"] {
+		t.Fatalf("find jobs freshness: %s", text)
+	}
+
+	imported, text, isErr := call("import_job", map[string]any{
+		"title": "Senior Backend Engineer", "company": "MCP Blacklist Fixture Ltd", "location": "Romania", "remote_type": "remote",
+		"description": "Build backend services with Go and PostgreSQL.", "salary_min": 95000, "salary_max": 110000, "currency": "EUR",
+		"employment_type": "full-time", "industry": "Software", "posted_at": time.Now().UTC().Format(time.RFC3339),
+	})
+	if isErr {
+		t.Fatalf("blacklist fixture import: %s", text)
+	}
+	job := imported["job"].(map[string]any)
+	jobID := job["id"]
+	listed, text, isErr := call("list_jobs", map[string]any{"limit": 100})
+	contains := func(out map[string]any) bool {
+		items, _ := out["jobs"].([]any)
+		for _, item := range items {
+			if item.(map[string]any)["job"].(map[string]any)["id"] == jobID {
+				return true
+			}
+		}
+		return false
+	}
+	if isErr || !contains(listed) {
+		t.Fatalf("blacklist fixture must start accepted: %s", text)
+	}
+	entry, text, isErr := call("add_to_blacklist", map[string]any{"company_name": "MCP Blacklist Fixture Ltd", "reason": "E2E exclusion"})
+	if isErr || entry["id"] == nil {
+		t.Fatalf("add_to_blacklist: %s", text)
+	}
+	blacklist, text, isErr := call("list_blacklist", nil)
+	if isErr || !strings.Contains(text, "MCP Blacklist Fixture Ltd") || len(blacklist["entries"].([]any)) == 0 {
+		t.Fatalf("list_blacklist: %s", text)
+	}
+	listed, text, isErr = call("list_jobs", map[string]any{"limit": 100})
+	if isErr || contains(listed) {
+		t.Fatalf("blacklisted job must leave accepted list: %s", text)
+	}
+	detail, text, isErr := call("get_job", map[string]any{"job_id": jobID})
+	if isErr || detail["match"].(map[string]any)["rejected"] != true {
+		t.Fatalf("blacklisted job must be rejected: %s", text)
+	}
 }
 
 // TestEndToEndUploadCV sends a generated DOCX through upload_cv to the live

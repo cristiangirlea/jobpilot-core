@@ -829,7 +829,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 30 KB for 35 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
+The catalog an agent host downloads at the start of every session is about 34 KB for 42 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
 
 ### Tools
 
@@ -841,12 +841,19 @@ The catalog an agent host downloads at the start of every session is about 30 KB
 | `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history, and `after` the following page |
 | `report_job_unavailable` | write | Report a posting as no longer available when the user says so; the link is checked at once, and the result says whether it closed for everyone or is hidden from this user until a second report. Taking a report back is web-only |
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
+| `list_blacklist` | read | The user's excluded companies and reasons |
+| `add_to_blacklist` | write | Exclude a company and re-score the user's jobs; removal stays in the web app |
 | `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
 | `list_discovery_runs` | read | Recent run history |
 | `list_discovery_sources` | read | Configured sources with their queries and last crawl error |
+| `get_discovery_settings` | read | Admin only: discovery schedule, limits and automatic draft settings |
+| `set_discovery_settings` | write | Admin only: change the supplied settings, preserving omitted fields |
+| `update_discovery_source` | write | Admin only: pause, resume, rename or change queries by id, preserving omitted fields |
+| `find_jobs_for_profile` | write | Score open shared-catalog jobs with no match yet for the user's profile; returns scored count and freshness; members need a write token |
+| `get_catalog_summary` | read | Catalog freshness and the user's open-match count without scoring; available to members |
 | `validate_discovery_source` | read | Sample-fetch a provider to check a board token before saving it |
 | `generate_documents` | write | Deterministic documents for a job; refused for rejected jobs |
 | `create_application` | write | Draft application record; idempotent; refused for rejected jobs |
@@ -881,7 +888,7 @@ List tools return summaries without the job description so a page of matches sta
 - `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Approval is what lets the sender send an application, so the gate belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
 - Any other upload, send or delete tool. `upload_cv` is the one exception, chosen by the owner on 2026-10-16: it puts a CV into the user's own JobPilot, where it waits unapproved like a web upload, and sends nothing to an employer. Because the server holds the user's token on their machine, it is off unless `JOBPILOT_CV_DIR` names a folder, and it reads only a `.pdf` or `.docx` within the API's 12 MB limit from inside that folder. The file is opened through Go's `os.Root`, which refuses `..`, symbolic links and Windows junctions that lead out of the folder as it opens, so nothing can be swapped in between a check and the read; a link inside the folder must be relative, since `os.Root` refuses every absolute one. Anything but a regular file (a named pipe, a device) is refused before it is opened, and the file's first bytes must match its extension. A prompt-injected agent can therefore send at most a PDF or DOCX that is in that folder, never an arbitrary file it can name. The host's own file tools are outside this server's reach, so the folder should be one the agent is not also allowed to write to.
-- Registration, deletes, and profile or filter edits.
+- Registration, deletes, and profile edits.
 
 Server instructions tell the host that composing does not send, that blockers and anything marked `needs_review` must be shown to the user verbatim, and that an application must never be described as approved or sent. Protected-characteristic questions are never answered and declarations the user must make personally are left blank; both are enforced by the API, not by the model.
 

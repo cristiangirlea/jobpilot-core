@@ -46,8 +46,13 @@ type fakeAPI struct {
 	// reports records which jobs were reported as no longer available.
 	reports []string
 	// filterSaves records each filter preset save as "METHOD path" and body.
-	filterSaves  []string
-	filterBodies []map[string]any
+	filterSaves    []string
+	filterBodies   []map[string]any
+	appRequests    []appRequest
+	member         bool
+	sourceGone     bool
+	appSource      string
+	appWriteDenied bool
 }
 
 func (f *fakeAPI) lastJobQuery() string {
@@ -254,6 +259,7 @@ func (f *fakeAPI) handler() http.Handler {
 	})
 	f.applyRoutes(m, send)
 	f.notificationRoutes(m, send)
+	f.appRoutes(m, send)
 	m.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
 		if f.noContract {
 			send(w, 200, `{"status":"ok"}`)
@@ -268,6 +274,9 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			send(w, 401, `{"error":"unauthorized"}`)
+			return
+		}
+		if f.recordAppRequest(w, r, send) {
 			return
 		}
 		m.ServeHTTP(w, r)
@@ -663,6 +672,9 @@ func TestToolErrorHintsReadAsSentences(t *testing.T) {
 		message, want string
 	}{
 		{http.StatusForbidden, "This token does not have the write scope.", "agent-token.ps1"},
+		// A read-only account can only hold read tokens, and the API refuses on scope first,
+		// so the same refusal must also say that the limit may be the administrator's.
+		{http.StatusForbidden, "This token does not have the write scope.", "administrator setting"},
 		{http.StatusUnauthorized, "Invalid or expired token.", "agent-token.ps1"},
 		{http.StatusConflict, blockedMessage, "get_job"},
 	} {
