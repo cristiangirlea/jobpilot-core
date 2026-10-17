@@ -29,6 +29,10 @@ type fakeAPI struct {
 	resolves      []map[string]any
 	cvApprovals   []map[string]any
 	cvUploads     []cvUpload
+	// listedCVUnapproved lists cv-1, whose bytes are approvedPDF, as not yet
+	// approved; cvListFails makes listing CVs fail.
+	listedCVUnapproved atomic.Bool
+	cvListFails        atomic.Bool
 	// detailGets counts reads of one application, so a test can prove the
 	// status tool no longer needs a read-back round trip.
 	detailGets atomic.Int32

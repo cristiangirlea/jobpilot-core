@@ -531,7 +531,7 @@ The approval gate:
 3. `POST /api/cv/{id}/import` copies reviewed values into the profile. Only non-empty values are written, so a field the parser missed can never blank out something entered by hand. Importing experience is opt-in and reports which employers it just added, because those employers become hard exclusions.
 4. `POST /api/cv/{id}/approve` marks the CV as sendable.
 
-The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ.
+The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ. The MCP server's `upload_cv` refuses the file of a CV that is already approved instead, so an agent's copy cannot quietly send the applications using it back to review (#155).
 
 ## CV tailoring and reuse
 
@@ -868,7 +868,7 @@ Apply engine:
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
 | `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording, for every job, a role family or one job |
 | `approve_answer` | write | Approve a saved answer, optionally replacing its text and choosing its scope |
-| `upload_cv` | write | Upload a `.pdf` or `.docx` from the `JOBPILOT_CV_DIR` folder; stored unapproved, returns the parse and its warnings |
+| `upload_cv` | write | Upload a `.pdf` or `.docx` from the `JOBPILOT_CV_DIR` folder; stored unapproved, returns the parse and its warnings. The file of an approved CV is refused |
 | `approve_cv` | write | Approve a CV for reuse |
 | `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
 | `compose_application` | write | Assemble a whole application into the outbox for review |

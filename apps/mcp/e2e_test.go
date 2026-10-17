@@ -775,6 +775,19 @@ func TestEndToEndUploadCV(t *testing.T) {
 	if len(stored) != 1 {
 		t.Fatalf("a refused upload reached the API: %+v", stored)
 	}
+
+	// Once approved, the same file again is refused, which keeps the approval
+	// the API would otherwise clear.
+	if res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "approve_cv", Arguments: map[string]any{"cv_id": uploaded.ID}}); err != nil || res.IsError {
+		t.Fatalf("approve_cv: %v %+v", err, res)
+	}
+	if res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "upload_cv", Arguments: map[string]any{"path": "generated.docx"}}); err != nil || !res.IsError {
+		t.Fatalf("uploading the file of an approved CV must be refused: %v", err)
+	}
+	r.call("GET", "/api/cv", nil, &stored)
+	if len(stored) != 1 || !stored[0].Approved {
+		t.Fatalf("the approved CV should stand, unchanged: %+v", stored)
+	}
 }
 
 // filterPresetsFromTheAgent creates a preset, changes one rule of it, and
