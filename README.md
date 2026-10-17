@@ -531,7 +531,7 @@ The approval gate:
 3. `POST /api/cv/{id}/import` copies reviewed values into the profile. Only non-empty values are written, so a field the parser missed can never blank out something entered by hand. Importing experience is opt-in and reports which employers it just added, because those employers become hard exclusions.
 4. `POST /api/cv/{id}/approve` marks the CV as sendable.
 
-The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ.
+The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ. The MCP server's `upload_cv` refuses the file of a CV that is already approved instead, so an agent's copy cannot quietly send the applications using it back to review (#155).
 
 ## CV tailoring and reuse
 
@@ -823,13 +823,13 @@ Drop `-Write` for a read-only token, and pass `-ExpiresInDays 90` for one that l
 | `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
 | `JOBPILOT_TOKEN` | An agent token created under **Settings > Agent tokens**, or a short-lived login token |
 | `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Fallback when no token is set; the server logs in on first use and once more after a `401`. Prefer an agent token: it is revocable and can be read-only, while a password is not and gives away the account |
-| `JOBPILOT_CV_DIR` | The one folder `upload_cv` may read a CV from. Unset, the default, turns the tool off. Point it at a folder holding only CV files, never your home folder |
+| `JOBPILOT_CV_DIR` | The one folder `upload_cv` may read a CV from, as an absolute path (`~` is not expanded, and a relative path is refused). Unset, the default, turns the tool off. Point it at a folder holding only CV files, never your home folder |
 
 The transport is stdio, so the binary logs to stderr only. Each tool call is logged with its name, duration and whether it failed; arguments are never logged, because they carry profile facts and application text. `make mcp` stamps the build with `git describe`, which `--version` prints.
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 33 KB for 42 tools, within a 34 KiB budget (raised from 30 KiB for #143's seven tools). Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way.
+The catalog an agent host downloads at the start of every session is about 34 KB for 42 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
 
 ### Tools
 
@@ -875,7 +875,7 @@ Apply engine:
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
 | `save_answer` | write | Add an answer to the bank, unapproved unless the user confirmed the wording, for every job, a role family or one job |
 | `approve_answer` | write | Approve a saved answer, optionally replacing its text and choosing its scope |
-| `upload_cv` | write | Upload a `.pdf` or `.docx` from the `JOBPILOT_CV_DIR` folder; stored unapproved, returns the parse and its warnings |
+| `upload_cv` | write | Upload a `.pdf` or `.docx` from the `JOBPILOT_CV_DIR` folder; stored unapproved, returns the parse and its warnings. The file of an approved CV is refused |
 | `approve_cv` | write | Approve a CV for reuse |
 | `tailor_cv_for_job` | write | Keep, reuse, or write a CV for a posting |
 | `compose_application` | write | Assemble a whole application into the outbox for review |
@@ -887,7 +887,7 @@ List tools return summaries without the job description so a page of matches sta
 
 - `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Approval is what lets the sender send an application, so the gate belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
-- Any other upload, send or delete tool. `upload_cv` is the one exception, chosen by the owner on 2026-10-16: it puts a CV into the user's own JobPilot, where it waits unapproved like a web upload, and sends nothing to an employer. Because the server holds the user's token on their machine, it is off unless `JOBPILOT_CV_DIR` names a folder, and it reads only a `.pdf` or `.docx` within the API's 12 MB limit from inside that folder. The file is opened through Go's `os.Root`, which refuses `..`, symbolic links and Windows junctions that lead out of the folder as it opens, so nothing can be swapped in between a check and the read; the file's first bytes must match its extension. A prompt-injected agent can therefore send at most a PDF or DOCX that is in that folder, never an arbitrary file it can name. The host's own file tools are outside this server's reach, so the folder should be one the agent is not also allowed to write to.
+- Any other upload, send or delete tool. `upload_cv` is the one exception, chosen by the owner on 2026-10-16: it puts a CV into the user's own JobPilot, where it waits unapproved like a web upload, and sends nothing to an employer. Because the server holds the user's token on their machine, it is off unless `JOBPILOT_CV_DIR` names a folder, and it reads only a `.pdf` or `.docx` within the API's 12 MB limit from inside that folder. The file is opened through Go's `os.Root`, which refuses `..`, symbolic links and Windows junctions that lead out of the folder as it opens, so nothing can be swapped in between a check and the read; a link inside the folder must be relative, since `os.Root` refuses every absolute one. Anything but a regular file (a named pipe, a device) is refused before it is opened, and the file's first bytes must match its extension. A prompt-injected agent can therefore send at most a PDF or DOCX that is in that folder, never an arbitrary file it can name. The host's own file tools are outside this server's reach, so the folder should be one the agent is not also allowed to write to.
 - Registration, deletes, and profile edits.
 
 Server instructions tell the host that composing does not send, that blockers and anything marked `needs_review` must be shown to the user verbatim, and that an application must never be described as approved or sent. Protected-characteristic questions are never answered and declarations the user must make personally are left blank; both are enforced by the API, not by the model.

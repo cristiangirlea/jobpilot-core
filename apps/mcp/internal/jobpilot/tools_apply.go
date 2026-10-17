@@ -2,6 +2,8 @@ package jobpilot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -246,11 +248,14 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:  "upload_cv",
 		Title: "Upload a CV",
 		Description: "Upload a .pdf or .docx CV the user asked for, from the folder JOBPILOT_CV_DIR allows (off when unset; nothing outside it). " +
-			"It is stored unapproved: show its parsed warnings in the exact words returned, and approve it only after the user reads it. Re-uploading the same file clears its approval.",
+			"It is stored unapproved: show its parsed warnings in the exact words returned, and approve it only after the user reads it. The file of an approved CV is refused.",
 		Annotations: writeTool("Upload a CV", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in uploadCVInput) (*mcp.CallToolResult, CVDocument, error) {
 		file, err := readCVFile(c.cvDir, in.Path)
 		if err != nil {
+			return nil, CVDocument{}, err
+		}
+		if err = refuseApprovedCopy(ctx, c, file); err != nil {
 			return nil, CVDocument{}, err
 		}
 		out, err := c.UploadCV(ctx, file, in.Label)
@@ -267,7 +272,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "approve_cv",
 		Title:       "Approve a CV",
-		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. Re-uploading a CV clears its approval.",
+		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. A changed file uploads as a new, unapproved CV.",
 		Annotations: writeTool("Approve a CV", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveCVInput) (*mcp.CallToolResult, CVDocument, error) {
 		if strings.TrimSpace(in.CVID) == "" {
@@ -388,4 +393,27 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		}
 		return nil, BoardSuggestionList{Suggestions: suggestions}, nil
 	})
+}
+
+// refuseApprovedCopy refuses a file whose bytes are those of a CV the user
+// already approved. The API would replace that CV and clear its approval,
+// which sends every approved application using it back to review; the web
+// app keeps that behaviour, but an agent uploading a copy should not.
+func refuseApprovedCopy(ctx context.Context, c *Client, file cvFile) error {
+	cvs, err := c.CVs(ctx)
+	if err != nil {
+		return fmt.Errorf("could not check the CVs already stored, so nothing was uploaded: %w", toolError(err))
+	}
+	sum := sha256.Sum256(file.data)
+	fingerprint := hex.EncodeToString(sum[:])
+	for _, cv := range cvs {
+		if cv.Approved && cv.Fingerprint == fingerprint {
+			name := cv.Label
+			if name == "" {
+				name = cv.Filename
+			}
+			return fmt.Errorf("this exact file is already stored and approved as CV %s (%s); nothing was uploaded, so its approval and the applications using it stay as they are. To replace it, upload a changed file", cv.ID, name)
+		}
+	}
+	return nil
 }

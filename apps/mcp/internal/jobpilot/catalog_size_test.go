@@ -8,11 +8,12 @@ import (
 
 // catalogBudget bounds what an agent host downloads at the start of every
 // session. It was 60 KB, about fifteen thousand tokens, before the inferred
-// output schemas were dropped; the budget sits above the new size with room
-// for a few more tools, and below the old one, so the regression is loud.
-// #143 adds seven thin tools across four app areas; their compact input
-// schemas and descriptions need 4 KiB beyond the original 30 KiB limit.
-const catalogBudget = 34 * 1024
+// output schemas were dropped. The budget was 30 KB until the catalog reached
+// it at 35 tools (30,048 bytes, #156); it is raised on purpose to 40 KB so the
+// tools #143 adds fit with room to spare, and stays well below the old 60 KB,
+// so an advertised output schema is still loud. A tool averages under 900
+// bytes; raise it again only deliberately, with this comment and the README.
+const catalogBudget = 40 * 1024
 
 func TestCatalogStaysWithinBudget(t *testing.T) {
 	cs, _ := session(t)

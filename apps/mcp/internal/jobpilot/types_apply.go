@@ -63,8 +63,10 @@ type CVDocument struct {
 	Approved      bool           `json:"approved"`
 	ApprovedAt    *time.Time     `json:"approved_at,omitempty"`
 	ParentID      string         `json:"parent_id,omitempty"`
-	CreatedAt     time.Time      `json:"created_at"`
-	UpdatedAt     time.Time      `json:"updated_at"`
+	// Fingerprint is the SHA-256 of the file's bytes, as the API stores it.
+	Fingerprint string    `json:"fingerprint,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type CVList struct {
