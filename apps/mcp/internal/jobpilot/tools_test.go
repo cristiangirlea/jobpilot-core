@@ -672,6 +672,9 @@ func TestToolErrorHintsReadAsSentences(t *testing.T) {
 		message, want string
 	}{
 		{http.StatusForbidden, "This token does not have the write scope.", "agent-token.ps1"},
+		// A read-only account can only hold read tokens, and the API refuses on scope first,
+		// so the same refusal must also say that the limit may be the administrator's.
+		{http.StatusForbidden, "This token does not have the write scope.", "administrator setting"},
 		{http.StatusUnauthorized, "Invalid or expired token.", "agent-token.ps1"},
 		{http.StatusConflict, blockedMessage, "get_job"},
 	} {

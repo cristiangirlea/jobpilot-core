@@ -170,8 +170,8 @@ func TestAppToolsWriteForbidden(t *testing.T) {
 			if !res.IsError || !strings.Contains(text, "403") || !strings.Contains(text, "Policy fixture W403") {
 				t.Fatalf("write denial: %s", text)
 			}
-			if !strings.Contains(text, "administrator setting") || strings.Contains(text, "create a token") || strings.Contains(text, "-Write") {
-				t.Fatalf("account policy must not suggest minting a write token: %s", text)
+			if !strings.Contains(text, "administrator setting") {
+				t.Fatalf("a read-only account must be named as the administrator's setting: %s", text)
 			}
 		})
 	}
