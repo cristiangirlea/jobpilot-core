@@ -55,8 +55,8 @@ func TestReviewEligibility(t *testing.T) {
 		{"You must be a U.S. citizen or green card holder and security clearance is required.", true, true},
 		{"This role requires US citizenship.", true, true},
 		{"Applicants are restricted to US citizens.", true, true},
-		{"Federal clearance required.", true, true},
-		{"Government clearance is mandatory.", true, true},
+		{"Federal clearance required.", false, false},
+		{"Government clearance is mandatory.", false, false},
 	} {
 		t.Run(tc.text, func(t *testing.T) {
 			e := Evaluate(models.Profile{}, nil, &models.FilterPreset{RejectEligibilityRequirements: true}, models.JobInput{Description: tc.text}, time.Time{})

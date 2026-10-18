@@ -13,19 +13,28 @@ import (
 const personnelClearance = `(?:security|secret|top secret|confidential|ts/sci|sc|dv|baseline|nv1|nv2|public trust)`
 const securityQualifier = `(?:` + personnelClearance + `|government|federal)`
 const clearanceModifiers = `(?:(?:a|an|the|active|current|valid|uk|us|eligible) ){0,2}`
+const statusModifiers = `(?:(?:a|an|the|dual|full|valid|eu|us|uk|(?-i:[A-Z][A-Za-z.]*)) ){0,2}`
 
 var eligibilityRules = []struct {
 	required *regexp.Regexp
 	negated  *regexp.Regexp
 }{
-	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:(?:be|become) (?:a |an )?(?:(?-i:[A-Z][A-Za-z.-]*) ){0,2}citizens?(?: of (?-i:\p{Lu})| to apply\b| or (?:a )?(?:green card holder|(?:lawful )?permanent resident)\b|[.!?,;]|$)|(?:have|hold|possess) (?:[a-z.-]+ ){0,3}citizenship\b)|citizenship (?:is )?(?:required|mandatory|essential)|requires? (?:[a-z.-]+ ){0,2}citizenship\b|restricted to (?:[a-z.-]+ ){0,2}citizens\b|citizens only\b|only (?:[a-z.-]+ ){0,2}citizens (?:may|can|are eligible))`), regexp.MustCompile(`(?i)\b(?:no citizenship|citizenship (?:is )?not (?:required|necessary|mandatory)|citizenship (?:is )?optional)\b`)},
-	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:be|have|hold) (?:[a-z.-]+ ){0,3}permanent residen(?:t|cy|ce)\b|permanent (?:residen(?:cy|ce)|resident status) (?:is )?(?:required|mandatory|essential)|permanent residents only|(?:requires?|restricted to) (?:[a-z.-]+ ){0,2}permanent residen(?:ts?|cy|ce)\b)`), regexp.MustCompile(`(?i)\b(?:no permanent residen(?:cy|ce)|permanent residen(?:cy|ce) (?:is )?not (?:required|necessary|mandatory))\b`)},
+	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:(?:be|become) (?:a |an )?(?:(?-i:[A-Z][A-Za-z.-]*) ){0,2}citizens?(?: of (?-i:\p{Lu})| to apply\b| or (?:a )?(?:green card holder|(?:lawful )?permanent resident)\b|[.!?,;]|$)|(?:have|hold|possess) ` + statusModifiers + `citizenship\b)|citizenship (?:is )?(?:required|mandatory|essential)|requires? ` + statusModifiers + `citizenship\b|restricted to ` + statusModifiers + `citizens\b|citizens only\b|only ` + statusModifiers + `citizens (?:may|can|are eligible))`), regexp.MustCompile(`(?i)\b(?:no citizenship|citizenship (?:is )?not (?:required|necessary|mandatory)|citizenship (?:is )?optional)\b`)},
+	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:be|have|hold) ` + statusModifiers + `permanent residen(?:t|cy|ce)\b|permanent (?:residen(?:cy|ce)|resident status) (?:is )?(?:required|mandatory|essential)|permanent residents only|(?:requires?|restricted to) ` + statusModifiers + `permanent residen(?:ts?|cy|ce)\b)`), regexp.MustCompile(`(?i)\b(?:no permanent residen(?:cy|ce)|permanent residen(?:cy|ce) (?:is )?not (?:required|necessary|mandatory))\b`)},
 	// Government approval of products is not a personnel clearance.
-	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|requires?|are required to) (?:(?:(?:have|hold|possess|obtain)|be eligible to (?:obtain|hold)|be able to obtain(?: \(?and maintain\)?)?|the ability to obtain) ` + clearanceModifiers + securityQualifier + `|` + clearanceModifiers + personnelClearance + `) clearance\b|(?:active |current )?` + securityQualifier + ` clearance (?:is )?(?:required|mandatory|essential)|(?:active|current) ` + securityQualifier + ` clearance\b)`), regexp.MustCompile(`(?i)\b(?:no (?:[a-z/]+ ){0,2}clearance|clearance (?:is )?not (?:required|necessary|mandatory)|clearance (?:is )?optional|must not (?:[a-z /-]+ )?clearance)\b`)},
+	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|requires?|are required to) (?:(?:(?:have|hold|possess|obtain)|be eligible to (?:obtain|hold)|be able to obtain(?: \(?and maintain\)?)?|the ability to obtain) ` + clearanceModifiers + securityQualifier + `|` + clearanceModifiers + personnelClearance + `) clearance\b|(?:active |current )?` + personnelClearance + ` clearance (?:is )?(?:required|mandatory|essential)|(?:active|current) ` + securityQualifier + ` clearance\b)`), regexp.MustCompile(`(?i)\b(?:no (?:[a-z/]+ ){0,2}clearance|clearance (?:is )?not (?:required|necessary|mandatory)|clearance (?:is )?optional|must not (?:[a-z /-]+ )?clearance)\b`)},
 }
 
 var citizenshipAlternative = regexp.MustCompile(`(?i)\bcitizens? or (?:a )?(?:green card holder|(?:lawful )?permanent resident)\b`)
-var civicCitizenship = regexp.MustCompile(`(?i)\b(?:corporate|digital|global|good|social|responsible) citizenship\b`)
+var civicCitizenship = regexp.MustCompile(`(?i)\b(?:(?:corporate|digital|global|good|strong|social|responsible|engineering|team) ){1,3}citizenship\b`)
+var statusObject = regexp.MustCompile(`(?i)^\s+(?:applications|cases|process|services|law|records)\b`)
+var negatedRequirement = regexp.MustCompile(`(?i)(?:\b(?:not|never|no longer|without needing to)|n['’]t)(?:\s+[\pL]+){0,2}\s*$`)
+var optionalRequirement = regexp.MustCompile(`(?i)\b(?:plus|bonus|nice to have|preferred|desirable|advantage|encouraged|welcome|helpful|ideally|optional)\b`)
+
+// Negated or wanted qualifications must never make a job unavailable.
+func mandatoryRequirement(clause string, start int) bool {
+	return !negatedRequirement.MatchString(clause[:start]) && !optionalRequirement.MatchString(clause)
+}
 
 func isCivicCitizenship(clause string, start, end int) bool {
 	for _, span := range civicCitizenship.FindAllStringIndex(clause[:end], -1) {
@@ -45,8 +54,9 @@ var languageNames = []string{
 const languageBar = `(?:[abc][12]|native|fluent|fluency|business[- ]level|professional|advanced|intermediate|basic|beginner)`
 
 type languagePattern struct {
-	name     string
-	required *regexp.Regexp
+	name          string
+	required      *regexp.Regexp
+	commaRequired *regexp.Regexp
 }
 
 var languageAliases = map[string]string{
@@ -68,8 +78,9 @@ var languagePatterns, languageWords = func() (map[string]*languagePattern, *rege
 		word := `(?:` + strings.Join(aliases, `|`) + `)`
 		wordEnd := word + `(?:$|[^\pL\pN_])`
 		// A language adjective alone does not make localisation or market experience a language requirement.
-		requiredEnd := `(?:$|[.,;:!?]|\s*\(` + languageBar + `\)| (?:language|skills|proficiency|fluency)\b)`
+		requiredEnd := `(?:$|[.;:!?]|\s*\(` + languageBar + `\)| (?:language|skills|proficiency|fluency)\b)`
 		pattern := &languagePattern{name: name, required: regexp.MustCompile(`(?i)(?:(?:^|[^\pL\pN_])` + word + ` (?:language |at )?(?:\(?` + languageBar + `\)? )?(?:level |skills |proficiency |fluency )?(?:is |are )?(?:required|mandatory|essential|a must)\b|\b(?:must|need to|required to) (?:be )?(?:speak|write|read|communicate in|fluent in|proficient in) (?:and (?:write|speak) )?` + wordEnd + `|\brequires? (?:` + languageBar + ` (?:proficiency in )?)?` + word + requiredEnd + `|\b(?:languages?|required):\s*` + languageBar + ` (?:proficiency in |in )?` + wordEnd + `)`)}
+		pattern.commaRequired = regexp.MustCompile(`(?i)\brequires? (?:` + languageBar + ` (?:proficiency in )?)?` + word + `,`)
 		for _, alias := range aliases {
 			out[alias] = pattern
 			words = append(words, alias)
@@ -84,6 +95,7 @@ var optionalLanguage = regexp.MustCompile(`(?i)\b(?:preferred|optional|nice to h
 var cefrLevel = regexp.MustCompile(`(?i)\b([abc][12])\b`)
 var languageSeparator = regexp.MustCompile(`(?i)[,;]|\band/or\b|\band\b|\bor\b`)
 var languageAlternative = regexp.MustCompile(`(?i)^\s*(?:\(?` + languageBar + `\)?\s*)?,?\s*(?:or|and/or)\s*(?:` + languageBar + `\s*(?:in\s*)?)?$`)
+var languageConjunction = regexp.MustCompile(`(?i)^\s*(?:\(?` + languageBar + `\)?\s*)?,?\s*and\s*(?:` + languageBar + `\s*(?:in\s*)?)?$`)
 var languageComma = regexp.MustCompile(`(?i)^\s*(?:\(?` + languageBar + `\)?\s*)?,\s*(?:` + languageBar + `\s*(?:in\s*)?)?$`)
 
 type languageHit struct {
@@ -203,6 +215,9 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 							continue
 						}
 						for _, span := range rule.required.FindAllStringIndex(clause, -1) {
+							if !mandatoryRequirement(clause, span[0]) || ruleIndex < 2 && statusObject.MatchString(clause[span[1]:]) {
+								continue
+							}
 							// Civic citizenship describes values, not a legal status.
 							if ruleIndex == 0 && isCivicCitizenship(clause, span[0], span[1]) {
 								continue
@@ -226,21 +241,32 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 				}
 				for first := 0; first < len(local); {
 					last := first + 1
-					// Commas join alternatives only when a later joiner says "or".
+					alternative := false
+					// Only "or" makes a language list alternatives; "and" requires each.
 					for next := last; next < len(local); next++ {
 						joiner := clause[local[next-1].end:local[next].start]
 						if languageAlternative.MatchString(joiner) {
+							alternative = true
 							last = next + 1
-						} else if !languageComma.MatchString(joiner) {
+						} else if languageComma.MatchString(joiner) || languageConjunction.MatchString(joiner) {
+							last = next + 1
+						} else {
 							break
 						}
 					}
 					required, anyListed := false, false
 					var requiredSpan []int
-					for _, hit := range local[first:last] {
+					for index, hit := range local[first:last] {
 						context := languageContext(clause, hit.start, hit.end)
 						span := hit.pattern.required.FindStringIndex(clause)
-						if !optionalLanguage.MatchString(context) && (span != nil || requiredLanguageList.MatchString(clause)) {
+						// A comma ends a requirement only when another language follows.
+						if span == nil && first+index+1 < last {
+							span = hit.pattern.commaRequired.FindStringIndex(clause)
+						}
+						if span == nil {
+							span = requiredLanguageList.FindStringIndex(clause)
+						}
+						if span != nil && mandatoryRequirement(clause, span[0]) && !optionalLanguage.MatchString(context) {
 							required = true
 							if span != nil {
 								requiredSpan = span
@@ -254,7 +280,6 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 							continue
 						}
 						profile := listed[hit.pattern]
-						alternative := last-first > 1
 						if alternative && anyListed {
 							continue
 						}
