@@ -5,21 +5,12 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/technology"
 )
 
 var ErrInterviewStatus = errors.New("Interview preparation requires an application in interview status.")
-
-type InterviewDocuments struct {
-	OutboxID    string                `json:"outbox_id"`
-	SentAt      *time.Time            `json:"sent_at,omitempty"`
-	CVText      *string               `json:"cv_text"`
-	CoverLetter string                `json:"cover_letter"`
-	Answers     []models.OutboxAnswer `json:"answers"`
-}
 
 type STARPrompt struct {
 	Requirement string                 `json:"requirement"`
@@ -37,17 +28,17 @@ type GapPrompt struct {
 }
 
 type InterviewPack struct {
-	ApplicationID string              `json:"application_id"`
-	Posting       models.JobWithMatch `json:"posting"`
-	Requirements  []string            `json:"requirements"`
-	SentDocuments *InterviewDocuments `json:"sent_documents"`
-	STARPrompts   []STARPrompt        `json:"star_prompts"`
-	GapPrompts    []GapPrompt         `json:"gap_prompts"`
-	Questions     []string            `json:"questions"`
-	Notices       []string            `json:"notices"`
+	ApplicationID string                     `json:"application_id"`
+	Posting       models.JobWithMatch        `json:"posting"`
+	Requirements  []string                   `json:"requirements"`
+	SentDocuments *models.InterviewDocuments `json:"sent_documents"`
+	STARPrompts   []STARPrompt               `json:"star_prompts"`
+	GapPrompts    []GapPrompt                `json:"gap_prompts"`
+	Questions     []string                   `json:"questions"`
+	Notices       []string                   `json:"notices"`
 }
 
-func PrepareInterview(app models.Application, profile models.Profile, posting models.JobWithMatch, sent *InterviewDocuments) (InterviewPack, error) {
+func PrepareInterview(app models.Application, profile models.Profile, posting models.JobWithMatch, sent *models.InterviewDocuments) (InterviewPack, error) {
 	if app.Status != "interview" {
 		return InterviewPack{}, ErrInterviewStatus
 	}
@@ -62,23 +53,34 @@ func PrepareInterview(app models.Application, profile models.Profile, posting mo
 	} else {
 		docs := *sent
 		docs.Answers = []models.OutboxAnswer{}
+		var hasCV, hasCoverLetter bool
 		for _, answer := range sent.Answers {
-			switch answer.Source {
-			case "cv", "cover_letter", "declaration", "personal", "upload":
+			if !models.SendsFormValue(answer) {
 				continue
-			case "ai", "template":
-				if answer.NeedsReview && !answer.Required {
-					continue
-				}
 			}
-			if strings.TrimSpace(answer.Answer) != "" {
+			switch answer.Source {
+			case "cv":
+				hasCV = true
+			case "cover_letter":
+				hasCoverLetter = true
+			default:
 				docs.Answers = append(docs.Answers, answer)
 			}
 		}
-		pack.SentDocuments = &docs
-		if docs.CVText == nil {
-			pack.Notices = append(pack.Notices, "The sent CV text is unavailable: the referenced CV is missing, was changed after sending, or has no extracted text.")
+		if !hasCV {
+			docs.CVText = nil
+			pack.Notices = append(pack.Notices, "The employer's form had no resume field; no CV was sent.")
+		} else if docs.CVText == nil {
+			pack.Notices = append(pack.Notices, "The sent CV text is unavailable: the referenced CV is missing, changed after sending (including a change to its approval), or has no extracted text.")
 		}
+		if !hasCoverLetter {
+			docs.CoverLetter = ""
+			pack.Notices = append(pack.Notices, "The employer's form had no cover-letter field; no letter was sent.")
+		} else if strings.TrimSpace(docs.CoverLetter) == "" {
+			docs.CoverLetter = ""
+			pack.Notices = append(pack.Notices, "The stored cover letter was empty; no letter was sent.")
+		}
+		pack.SentDocuments = &docs
 	}
 	for _, requirement := range pack.Requirements {
 		prompt := STARPrompt{
@@ -114,7 +116,7 @@ func PrepareInterview(app models.Application, profile models.Profile, posting mo
 		pack.Questions = append(pack.Questions, fmt.Sprintf("The posting gives the location as %q. What attendance is expected?", posting.Job.Location))
 	}
 	if len(pack.Questions) == 0 && strings.TrimSpace(posting.Job.Description) != "" {
-		pack.Questions = append(pack.Questions, fmt.Sprintf("Which responsibilities in this posting would come first, and how would you assess success?\n\n%s", posting.Job.Description))
+		pack.Questions = append(pack.Questions, "Which responsibilities in this posting would come first, and how would you assess success?")
 	}
 	return pack, nil
 }

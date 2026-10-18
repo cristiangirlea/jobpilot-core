@@ -9,7 +9,29 @@ import (
 )
 
 func (s *Server) prepareInterview(w http.ResponseWriter, r *http.Request) {
-	pack, err := s.Store.InterviewPrep(r.Context(), auth.UserID(r.Context()), r.PathValue("id"))
+	ctx := r.Context()
+	userID := auth.UserID(ctx)
+	app, err := s.Store.Application(ctx, userID, r.PathValue("id"))
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	posting, err := s.Store.Job(ctx, userID, app.JobID)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	profile, err := s.Store.Profile(ctx, userID)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	docs, err := s.Store.InterviewDocuments(ctx, userID, app.ID, app.JobID)
+	if err != nil {
+		respond(w, nil, err)
+		return
+	}
+	pack, err := generator.PrepareInterview(app, profile, posting, docs)
 	if errors.Is(err, generator.ErrInterviewStatus) {
 		problem(w, http.StatusConflict, err.Error())
 		return

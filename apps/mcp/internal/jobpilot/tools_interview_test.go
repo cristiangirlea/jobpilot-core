@@ -55,7 +55,7 @@ func TestPrepareInterview(t *testing.T) {
 	for _, tool := range list.Tools {
 		if tool.Name == "prepare_interview" {
 			found = true
-			if !tool.Annotations.ReadOnlyHint || !tool.Annotations.IdempotentHint || !strings.Contains(tool.Description, "real examples") {
+			if !tool.Annotations.ReadOnlyHint || !tool.Annotations.IdempotentHint || !strings.Contains(tool.Description, "real examples") || !strings.Contains(tool.Description, "Use only facts from the profile, CV and job") || !strings.Contains(tool.Description, "do not fill in situation, task, action or result for the user") {
 				t.Fatalf("missing read-only annotation or factuality guidance: %+v", tool)
 			}
 		}
@@ -81,5 +81,56 @@ func TestPrepareInterview(t *testing.T) {
 	}
 	if requests != 3 {
 		t.Fatalf("want only three reads, got %d", requests)
+	}
+}
+
+func TestPrepareInterviewUnavailableRoute(t *testing.T) {
+	for _, tc := range []struct {
+		name, id, want string
+		available      bool
+	}{
+		{"older API", "app", "JobPilot API does not offer interview preparation yet", false},
+		{"missing application", "missing", "Record not found", true},
+		{"foreign application", "foreign", "Record not found", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
+				w.Write([]byte(`{"status":"ok","contract":10}`))
+			})
+			if tc.available {
+				mux.HandleFunc("GET /api/applications/{id}/interview-prep", func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusNotFound)
+					w.Write([]byte(`{"error":"Record not found."}`))
+				})
+			}
+			api := httptest.NewServer(mux)
+			defer api.Close()
+			c, err := NewClient(Options{BaseURL: api.URL, Token: "prep-token"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if health, err := c.CheckContract(ctx); err != nil || health.Contract != 10 {
+				t.Fatalf("expected API contract 10: %+v, %v", health, err)
+			}
+			s := NewServer(c, "test", nil)
+			st, ct := mcp.NewInMemoryTransports()
+			ss, err := s.Connect(ctx, st, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer ss.Close()
+			cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, ct, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer cs.Close()
+			res, text := call(t, cs, "prepare_interview", map[string]any{"application_id": tc.id})
+			if !res.IsError || !strings.Contains(text, tc.want) {
+				t.Fatalf("want %q, got %s", tc.want, text)
+			}
+		})
 	}
 }

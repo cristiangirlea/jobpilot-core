@@ -3,6 +3,9 @@ package httpapi
 import (
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -92,5 +95,95 @@ func TestInterviewPrepRoutePostgres(t *testing.T) {
 	var events int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM application_events WHERE application_id=$1`, app.ID).Scan(&events); err != nil || events != 1 {
 		t.Fatalf("reads changed application events: %d, %v", events, err)
+	}
+	cv, err := st.SaveCV(ctx, user.ID, models.CVDocument{Kind: "base", Filename: "test.pdf", Format: "pdf", Approved: true, ExtractedText: " CV sent\n"}, []byte("%PDF test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := st.SaveOutboxEntry(ctx, user.ID, models.OutboxEntry{JobID: app.JobID, ApplicationID: app.ID, CVDocumentID: cv.ID, Status: models.OutboxReady, CoverLetter: " Letter sent\n"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, sources string
+		cv, letter    bool
+	}{
+		{"both document fields", `[{"source":"cv"},{"source":"cover_letter"}]`, true, true},
+		{"no resume field", `[{"source":"cover_letter"}]`, false, true},
+		{"no cover-letter field", `[{"source":"cv"}]`, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, `UPDATE application_outbox SET status='sent',sent_at=now(),answers=$2 WHERE id=$1`, entry.ID, tc.sources); err != nil {
+				t.Fatal(err)
+			}
+			w := get(token)
+			var pack generator.InterviewPack
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &pack) != nil || pack.SentDocuments == nil {
+				t.Fatalf("want sent pack: %d %s", w.Code, w.Body.String())
+			}
+			if (pack.SentDocuments.CVText != nil) != tc.cv || (pack.SentDocuments.CoverLetter != "") != tc.letter {
+				t.Fatalf("only documents with fields in the sent form belong: %+v", pack.SentDocuments)
+			}
+		})
+	}
+	t.Run("CV approval withdrawn after sending", func(t *testing.T) {
+		// The previous case sent a CV. Withdrawing approval leaves its bytes and
+		// extracted text intact, but the pack must disclose the safe limitation.
+		updated, err := st.SetCVApproval(ctx, user.ID, cv.ID, false)
+		if err != nil || updated.ExtractedText != cv.ExtractedText {
+			t.Fatalf("approval must leave the text intact: %+v, %v", updated, err)
+		}
+		w := get(token)
+		var pack generator.InterviewPack
+		if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &pack) != nil || pack.SentDocuments == nil || pack.SentDocuments.CVText != nil {
+			t.Fatalf("approval changes make sent CV text unavailable: %d %s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(strings.Join(pack.Notices, " "), "approval") {
+			t.Fatalf("the notice must explain approval changes: %v", pack.Notices)
+		}
+	})
+}
+
+func TestInterviewContract(t *testing.T) {
+	if Contract != 10 {
+		t.Fatalf("adding interview preparation must preserve master's contract 10, got %d", Contract)
+	}
+}
+
+func TestInterviewLayering(t *testing.T) {
+	t.Run("store only loads data", func(t *testing.T) {
+		file, err := parser.ParseFile(token.NewFileSet(), "../store/interview.go", nil, parser.ImportsOnly)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, imp := range file.Imports {
+			if imp.Path.Value == `"jobpilot/core/api/internal/generator"` {
+				t.Fatal("store must not depend on generator; the handler prepares the pack")
+			}
+		}
+	})
+	// Sharing the domain rule is a structural guarantee; examples alone would
+	// let two initially identical copies drift when a new source is introduced.
+	for _, path := range []string{"../generator/interview.go", "../sender/greenhouse.go"} {
+		t.Run(path, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shared := false
+			ast.Inspect(file, func(n ast.Node) bool {
+				if call, ok := n.(*ast.CallExpr); ok {
+					if sel, ok := call.Fun.(*ast.SelectorExpr); ok && sel.Sel.Name == "SendsFormValue" {
+						if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "models" {
+							shared = true
+						}
+					}
+				}
+				return true
+			})
+			if !shared {
+				t.Fatal("interview preparation and sending must use models.SendsFormValue")
+			}
+		})
 	}
 }

@@ -62,8 +62,7 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-//	11: interview applications have a read-only interview preparation pack.
-const Contract = 11
+const Contract = 10
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."

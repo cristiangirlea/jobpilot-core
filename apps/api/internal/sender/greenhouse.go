@@ -169,25 +169,6 @@ func guarded(page []byte) bool {
 	return false
 }
 
-// sendsValue reports an answer the sender fills in. Declarations, personal
-// choices and other uploads are the applicant's own and are left; compose has
-// already held back any of them that is required. An optional answer a model
-// or the template drafted is left too: a draft is never sent before the user
-// approves it, and approval only checks the required ones in the answer bank.
-func sendsValue(answer models.OutboxAnswer) bool {
-	switch answer.Source {
-	case "declaration", "personal", "upload":
-		return false
-	case "ai", "template":
-		if answer.NeedsReview && !answer.Required {
-			return false
-		}
-	case "cv", "cover_letter":
-		return true
-	}
-	return strings.TrimSpace(answer.Answer) != ""
-}
-
 // pick chooses the form that carries every field the entry fills.
 func pick(forms []webForm, answers []models.OutboxAnswer) (webForm, error) {
 	var posts []webForm
@@ -203,7 +184,7 @@ func pick(forms []webForm, answers []models.OutboxAnswer) (webForm, error) {
 	for i, form := range posts {
 		absent := ""
 		for _, answer := range answers {
-			if _, ok := form.inputs[answer.Field]; !ok && sendsValue(answer) {
+			if _, ok := form.inputs[answer.Field]; !ok && models.SendsFormValue(answer) {
 				absent = answer.Label
 				break
 			}
@@ -233,7 +214,7 @@ func fill(form webForm, sub Submission) ([]byte, string, error) {
 		}
 	}
 	for _, answer := range sub.Answers {
-		if !sendsValue(answer) {
+		if !models.SendsFormValue(answer) {
 			continue
 		}
 		in := form.inputs[answer.Field]
