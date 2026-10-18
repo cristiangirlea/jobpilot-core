@@ -14,7 +14,7 @@ import (
 )
 
 func TestPDFTextLayerLongIdentity(t *testing.T) {
-	for _, field := range []string{"name", "role", "contact"} {
+	for _, field := range []string{"name", "role", "contact", "wrapped contact"} {
 		t.Run(field, func(t *testing.T) {
 			profile, job, tailored := textLayerFixture()
 			switch field {
@@ -28,12 +28,26 @@ func TestPDFTextLayerLongIdentity(t *testing.T) {
 				profile.Name = "Ana S\u0326tefa\u0306nescu"
 				profile.Email, profile.Phone = "ana+jobs@example.test", "(+40) 712-345-678"
 				tailored.Name, tailored.Contact = profile.Name, []string{profile.Email, profile.Phone}
+			case "wrapped contact":
+				profile.Email = strings.Repeat("a", 64) + "@engineering.example.test"
+				tailored.Contact = []string{profile.Email, profile.Phone, "Lisbon, Portugal", "https://example.test/ana", "https://github.com/ana-example"}
 			}
 			data, err := RenderPDF(tailored)
 			if err != nil {
 				t.Fatal(err)
 			}
 			text, review := ReviewPDF(data, tailored, profile, "", job)
+			if field == "wrapped contact" {
+				start, end := strings.Index(text, profile.Email), strings.Index(text, "SUMMARY")
+				if start < 0 || end < start || strings.Count(strings.TrimSpace(text[start:end]), "\n") < 1 {
+					t.Fatal("fixture must wrap the contact block")
+				}
+				for _, entry := range tailored.Contact {
+					if !intactContact(text, entry) {
+						t.Errorf("wrapped contact lost %q", entry)
+					}
+				}
+			}
 			if len(review.Blockers) != 0 {
 				t.Fatalf("identity blocked: %v\n%s", review.Blockers, text)
 			}

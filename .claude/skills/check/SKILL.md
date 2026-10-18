@@ -1,6 +1,6 @@
 ---
 name: check
-description: Run what CI runs on JobPilot (Go checks per module, web typecheck, images, integration) before a PR
+description: Run what CI runs on JobPilot (Go checks per module, web typecheck and tests, images, integration) before a PR
 ---
 Run the steps in CI's order from the repository root and stop at the first failure. Report each
 step's result in one line; on a failure, show the error text and fix it before re-running.
@@ -22,7 +22,7 @@ step's result in one line; on a failure, show the error text and fix it before r
    container instead, from the repository root in Git Bash:
    `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version, e.g. 1.27.2> go test -race ./...`,
    or run `go test ./...` and say in the report that `-race` was skipped.
-2. Web: `cd apps/web && npm ci && npm run typecheck`.
+2. Web: `cd apps/web && npm ci && npm run typecheck && npm test`.
 3. Images, only when a Dockerfile, `go.mod`, `package*.json` or `migrations/` changed:
    `docker build apps/api`, `docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web`,
    `docker build migrations`.

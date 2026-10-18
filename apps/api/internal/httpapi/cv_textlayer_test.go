@@ -95,15 +95,37 @@ func TestDecideCVTextLayerReusePostgres(t *testing.T) {
 		}
 	})
 	t.Run("unapproved identical bytes stay generated", func(t *testing.T) {
-		if _, err := pool.Exec(ctx, `UPDATE cv_documents SET approved=false,approved_at=NULL WHERE id=$1`, first.CV.ID); err != nil {
+		first.CV.Parsed["blockers"] = append(first.CV.Parsed["blockers"].([]any), "PDF text layer: old blocker.")
+		first.CV.Parsed["warnings"] = append(first.CV.Parsed["warnings"].([]any), "PDF text layer: old blocker.")
+		if _, err := pool.Exec(ctx, `UPDATE cv_documents SET approved=false,approved_at=NULL,parsed=$2 WHERE id=$1`, first.CV.ID, first.CV.Parsed); err != nil {
 			t.Fatal(err)
 		}
-		got, err := s.decideCV(ctx, owner.ID, job, profile)
+		jobB := job
+		jobB.Job.Company, jobB.Job.Description = "Second Example", "Kubernetes"
+		got, err := s.decideCV(ctx, owner.ID, jobB, profile)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got.Decision != decisionGenerated || got.Approved || got.CV.Approved || got.CV.Parsed["blockers"] == nil {
 			t.Fatalf("unapproved reuse: %+v", got)
+		}
+		if got.CV.ID != first.CV.ID || got.CV.Fingerprint != first.CV.Fingerprint {
+			t.Fatal("fixture must reuse identical bytes")
+		}
+		if !reflect.DeepEqual(got.CV.Parsed["tailored"], tailoredMap(*got.Preview)) {
+			t.Errorf("job B lost its tailored review: %+v", got.CV.Parsed["tailored"])
+		}
+		keywords := got.CV.Parsed["text_layer"].(map[string]any)["keywords"]
+		want := []any{map[string]any{"technology": "kubernetes", "status": "gap", "present": false}}
+		if !reflect.DeepEqual(keywords, want) {
+			t.Errorf("job B keywords = %+v, want %+v", keywords, want)
+		}
+		warnings := fmt.Sprint(got.CV.Parsed["warnings"])
+		if !strings.Contains(warnings, "Kubernetes") || strings.Contains(warnings, "Rust") || strings.Contains(warnings, "old blocker") {
+			t.Errorf("job B kept stale warnings: %s", warnings)
+		}
+		if blockers := got.CV.Parsed["blockers"].([]any); len(blockers) != 1 || strings.Contains(fmt.Sprint(blockers), "old blocker") {
+			t.Errorf("job B kept stale blockers: %v", blockers)
 		}
 	})
 	t.Run("deleted after lookup generates again", func(t *testing.T) {

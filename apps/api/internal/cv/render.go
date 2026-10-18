@@ -82,7 +82,7 @@ func RenderPDF(tailored Tailored) ([]byte, error) {
 		}
 	}
 	if len(tailored.Contact) > 0 {
-		if err := p.block(fontRegularName, 8.5, rgb{70, 70, 70}, strings.Join(tailored.Contact, "   ·   ")); err != nil {
+		if err := p.contact(tailored.Contact); err != nil {
 			return nil, err
 		}
 	}
@@ -146,6 +146,42 @@ type rgb struct{ r, g, b uint8 }
 type painter struct {
 	doc                      *gopdf.GoPdf
 	left, top, bottom, width float64
+}
+
+// Wrap between contact entries so spaces inside a phone do not split it.
+func (p *painter) contact(entries []string) error {
+	const size = 8.5
+	color := rgb{70, 70, 70}
+	if err := p.use(fontRegularName, size, color); err != nil {
+		return err
+	}
+	line := ""
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		candidate := entry
+		if line != "" {
+			candidate = line + "   ·   " + entry
+		}
+		width, err := p.doc.MeasureTextWidth(candidate)
+		if err != nil {
+			return err
+		}
+		if width > p.width && line != "" {
+			if err := p.block(fontRegularName, size, color, line); err != nil {
+				return err
+			}
+			line = entry
+		} else {
+			line = candidate
+		}
+	}
+	if line == "" {
+		return nil
+	}
+	return p.block(fontRegularName, size, color, line)
 }
 
 // ensure starts a new page when the next block would not fit, so a role never

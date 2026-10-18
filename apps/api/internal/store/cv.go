@@ -76,7 +76,7 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 			label=EXCLUDED.label, filename=EXCLUDED.filename, format=EXCLUDED.format,
 			content_type=EXCLUDED.content_type, size_bytes=EXCLUDED.size_bytes, data=EXCLUDED.data,
 			extracted_text=EXCLUDED.extracted_text,
-			parsed=CASE WHEN cv_documents.kind='tailored' THEN cv_documents.parsed ELSE EXCLUDED.parsed END,
+			parsed=CASE WHEN cv_documents.kind='tailored' AND EXCLUDED.kind<>'tailored' THEN cv_documents.parsed ELSE EXCLUDED.parsed END,
 			role_family=EXCLUDED.role_family, technologies=EXCLUDED.technologies,
 			approved=false, approved_at=NULL, updated_at=now()
 		RETURNING `+cvColumns,

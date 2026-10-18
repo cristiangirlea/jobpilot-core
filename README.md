@@ -550,7 +550,7 @@ Tailoring re-emphasises what the candidate already has. It never adds and never 
 - Skills are reordered so the posting's technologies lead. A technology the posting wants and the candidate lacks is reported as `missing`, never listed as a skill.
 - Only the summary is newly worded, and only from stored facts. With no provider configured it falls back to deterministic wording.
 
-Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical CV reuses the existing approval and original job's review instead of resetting them. New text-layer findings may update only the blockers of an unapproved identical CV; reuse never revokes an existing approval or moves its outbox entries. Re-uploading a tailored PDF retains its stored findings so it cannot bypass its blockers.
+Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical approved CV reuses the existing approval and original job's review instead of resetting them. Regenerating an unapproved identical CV replaces its job-specific review with the new posting's findings; reuse never revokes an existing approval or moves its outbox entries. Re-uploading a tailored PDF retains its stored findings so it cannot bypass its blockers.
 
 ### Rendering
 
