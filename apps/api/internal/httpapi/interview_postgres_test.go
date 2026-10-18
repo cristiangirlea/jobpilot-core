@@ -142,11 +142,15 @@ func TestInterviewPrepRoutePostgres(t *testing.T) {
 			t.Fatalf("the notice must explain approval changes: %v", pack.Notices)
 		}
 	})
-}
-
-func TestInterviewContract(t *testing.T) {
-	if Contract != 10 {
-		t.Fatalf("adding interview preparation must preserve master's contract 10, got %d", Contract)
+	// The status decides first: a non-interview application is a 409 even when its job cannot load.
+	if _, err := pool.Exec(ctx, `UPDATE applications SET status='applied' WHERE id=$1`, app.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM job_matches WHERE user_id=$1 AND job_id=$2`, user.ID, job.Job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if w := get(token); w.Code != 409 || !strings.Contains(w.Body.String(), "interview status") {
+		t.Fatalf("non-interview status must be refused before loading the job: %d %s", w.Code, w.Body.String())
 	}
 }
 

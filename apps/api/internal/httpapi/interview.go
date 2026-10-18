@@ -16,6 +16,11 @@ func (s *Server) prepareInterview(w http.ResponseWriter, r *http.Request) {
 		respond(w, nil, err)
 		return
 	}
+	// Refuse before reading anything else, so a missing job or document cannot replace the 409.
+	if app.Status != "interview" {
+		problem(w, http.StatusConflict, generator.ErrInterviewStatus.Error())
+		return
+	}
 	posting, err := s.Store.Job(ctx, userID, app.JobID)
 	if err != nil {
 		respond(w, nil, err)
