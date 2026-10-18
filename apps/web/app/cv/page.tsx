@@ -132,6 +132,21 @@ function CVDetail({item,busy,onApprove,onImport,onDelete}:{item:CVDocument;busy:
     </div>
 
     {!full&&<p className="muted mt-6 text-sm">Loading…</p>}
+    {!!parsed?.blockers?.length&&
+      <div className="mt-5 rounded-xl bg-red-50 px-4 py-3 text-red-800">
+        <p className="text-sm font-semibold">PDF findings blocking approval</p>
+        <ul className="mt-1 space-y-0.5 text-sm">{parsed.blockers.map(blocker=><li key={blocker}>· {blocker}</li>)}</ul>
+      </div>}
+    {!!parsed?.text_layer?.keywords?.length&&
+      <div className="mt-5 rounded-xl bg-black/[0.03] px-4 py-3">
+        <p className="text-sm font-semibold">Posting keywords in the PDF</p>
+        <ul className="mt-1 space-y-1 text-sm">{parsed.text_layer.keywords.map(keyword=>
+          <li key={keyword.technology}><span className="font-medium">{keyword.technology}</span> · {keyword.status.replaceAll("_"," ")}
+            {keyword.status==="gap"&&" — No stored fact supports this term; do not add it."}
+            {keyword.status==="missing"&&" — Supported by stored facts but absent from the PDF."}
+            {keyword.status==="unsupported_present"&&" — This term appears in the PDF but no stored fact supports it; review the summary."}
+          </li>)}</ul>
+      </div>}
     {parsed&&!tailored&&parsed.warnings?.length>0&&
       <div className="mt-5 rounded-xl bg-amber-50 px-4 py-3">
         <p className="text-sm font-semibold text-amber-900">Check these before importing</p>

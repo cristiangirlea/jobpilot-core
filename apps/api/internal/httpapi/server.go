@@ -62,9 +62,11 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-//	11: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
-//	12: PUT keeps stored eligibility and language rules when their fields are absent.
-const Contract = 12
+//	11: tailored CVs carry PDF text layer findings in parsed; contact and
+//	   reading-order blockers refuse CV approval with 409.
+//	12: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
+//	13: PUT keeps stored eligibility and language rules when their fields are absent.
+const Contract = 13
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -1055,7 +1057,7 @@ func internal(w http.ResponseWriter, err error) {
 	problem(w, 500, "An internal error occurred.")
 }
 func respond(w http.ResponseWriter, v any, err error) {
-	if errors.Is(err, store.ErrApplicationBlocked) {
+	if errors.Is(err, store.ErrApplicationBlocked) || errors.Is(err, store.ErrCVReviewBlocked) {
 		problem(w, 409, err.Error())
 		return
 	}

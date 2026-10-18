@@ -64,7 +64,16 @@ func RenderPDF(tailored Tailored) ([]byte, error) {
 	}
 	doc.SetXY(p.left, p.top)
 
-	if err := p.block(fontBoldName, nameSize, rgb{0, 0, 0}, fallbackText(tailored.Name, "Candidate")); err != nil {
+	name := fallbackText(tailored.Name, "Candidate")
+	if err := p.use(fontBoldName, nameSize, rgb{0, 0, 0}); err != nil {
+		return nil, err
+	}
+	size := nameSize
+	if width, err := doc.MeasureTextWidth(name); err == nil && width > p.width {
+		// A contact name must remain intact on one line.
+		size *= (p.width - 1) / width
+	}
+	if err := p.block(fontBoldName, size, rgb{0, 0, 0}, name); err != nil {
 		return nil, err
 	}
 	if headline := strings.TrimSpace(tailored.Headline); headline != "" {
@@ -73,7 +82,7 @@ func RenderPDF(tailored Tailored) ([]byte, error) {
 		}
 	}
 	if len(tailored.Contact) > 0 {
-		if err := p.block(fontRegularName, 8.5, rgb{70, 70, 70}, strings.Join(tailored.Contact, "   ·   ")); err != nil {
+		if err := p.contact(tailored.Contact); err != nil {
 			return nil, err
 		}
 	}
@@ -139,6 +148,42 @@ type painter struct {
 	left, top, bottom, width float64
 }
 
+// Wrap between contact entries so spaces inside a phone do not split it.
+func (p *painter) contact(entries []string) error {
+	const size = 8.5
+	color := rgb{70, 70, 70}
+	if err := p.use(fontRegularName, size, color); err != nil {
+		return err
+	}
+	line := ""
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		candidate := entry
+		if line != "" {
+			candidate = line + "   ·   " + entry
+		}
+		width, err := p.doc.MeasureTextWidth(candidate)
+		if err != nil {
+			return err
+		}
+		if width > p.width && line != "" {
+			if err := p.block(fontRegularName, size, color, line); err != nil {
+				return err
+			}
+			line = entry
+		} else {
+			line = candidate
+		}
+	}
+	if line == "" {
+		return nil
+	}
+	return p.block(fontRegularName, size, color, line)
+}
+
 // ensure starts a new page when the next block would not fit, so a role never
 // ends up split from its first line.
 func (p *painter) ensure(height float64) {
@@ -197,8 +242,7 @@ func (p *painter) section(title string) error {
 	return nil
 }
 
-// role keeps the title, employer and dates together on one line so a reader,
-// and an ATS, sees the full history at a glance.
+// role keeps the full heading before its dates for machine readers.
 func (p *painter) role(role TailoredRole) error {
 	heading := strings.TrimSpace(role.Title)
 	if role.Company != "" {
@@ -222,20 +266,35 @@ func (p *painter) role(role TailoredRole) error {
 	if err := p.use(fontBoldName, bodySize+0.5, rgb{0, 0, 0}); err != nil {
 		return err
 	}
-	p.doc.SetX(p.left)
-	if err := p.doc.Cell(nil, truncateToWidth(p.doc, heading, p.width-periodWidth)); err != nil {
+	headingWidth, err := p.doc.MeasureTextWidth(heading)
+	if err != nil {
 		return err
 	}
-	if period != "" {
-		if err := p.use(fontRegularName, bodySize-0.5, rgb{95, 95, 95}); err != nil {
+	if headingWidth > p.width-periodWidth {
+		if err := p.block(fontBoldName, bodySize+0.5, rgb{0, 0, 0}, heading); err != nil {
 			return err
 		}
-		p.doc.SetXY(p.left+p.width-periodWidth+6, y)
-		if err := p.doc.Cell(nil, period); err != nil {
+		if period != "" {
+			if err := p.block(fontRegularName, bodySize-0.5, rgb{95, 95, 95}, period); err != nil {
+				return err
+			}
+		}
+	} else {
+		p.doc.SetX(p.left)
+		if err := p.doc.Cell(nil, heading); err != nil {
 			return err
 		}
+		if period != "" {
+			if err := p.use(fontRegularName, bodySize-0.5, rgb{95, 95, 95}); err != nil {
+				return err
+			}
+			p.doc.SetXY(p.left+p.width-periodWidth+6, y)
+			if err := p.doc.Cell(nil, period); err != nil {
+				return err
+			}
+		}
+		p.doc.SetY(y + (bodySize+0.5)*lineGap)
 	}
-	p.doc.SetY(y + (bodySize+0.5)*lineGap)
 
 	if context := strings.TrimSpace(role.Context); context != "" {
 		if err := p.block(fontRegularName, bodySize-0.5, rgb{70, 70, 70}, context); err != nil {
@@ -275,21 +334,4 @@ func (p *painter) bullet(text string) error {
 		p.doc.SetY(p.doc.GetY() + height)
 	}
 	return nil
-}
-
-// truncateToWidth keeps a long heading on its single line.
-func truncateToWidth(doc *gopdf.GoPdf, text string, limit float64) string {
-	width, err := doc.MeasureTextWidth(text)
-	if err != nil || width <= limit {
-		return text
-	}
-	runes := []rune(text)
-	for len(runes) > 4 {
-		runes = runes[:len(runes)-1]
-		candidate := string(runes) + "…"
-		if width, err = doc.MeasureTextWidth(candidate); err == nil && width <= limit {
-			return candidate
-		}
-	}
-	return text
 }

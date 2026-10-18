@@ -59,7 +59,7 @@ const requiredContract = 1
 const scopesContract = 6
 
 // An older API silently ignores the opt-in filter rules.
-const filterGatesContract = 11
+const filterGatesContract = 12
 
 // contractUnknown means no health check has succeeded yet. Unknown counts as
 // compatible: an API that is unreachable at startup must not disable tools

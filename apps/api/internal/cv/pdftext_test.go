@@ -251,6 +251,63 @@ func TestExtractPDFBreaksWordsPlacedApart(t *testing.T) {
 	}
 }
 
+// Word's right-aligned dates must stay beside their role on sparse pages.
+func TestExtractPDFKeepsRightAlignedRoleDates(t *testing.T) {
+	var b strings.Builder
+	wordLine(&b, 50, 800, "Jane Example")
+	wordLine(&b, 50, 780, "EXPERIENCE")
+	companies := []string{"Globex", "Initech", "Umbrella", "Hooli", "Vandelay", "Stark"}
+	for i, company := range companies {
+		y := 750 - 65*float64(i)
+		wordLine(&b, 50, y, company+" | Backend Engineer")
+		period := fmt.Sprintf("Jan %d - Dec %d", 2021-2*i, 2022-2*i)
+		wordLine(&b, 545-measure(period, 11), y, strings.Split(period, " - ")[0], " - ", strings.Split(period, " - ")[1])
+		wordLine(&b, 50, y-15, "- Built reliable services.")
+		wordLine(&b, 50, y-30, "- Shipped billing jobs.")
+	}
+	text := extractFixture(t, b.String())
+	p := Parse(text)
+	if len(p.Experiences) != len(companies) {
+		t.Fatalf("roles = %+v, want six with dates\n%s", p.Experiences, text)
+	}
+	for i, role := range p.Experiences {
+		if role.Company != companies[i] || role.StartDate != fmt.Sprintf("Jan %d", 2021-2*i) || role.EndDate != fmt.Sprintf("Dec %d", 2022-2*i) {
+			t.Errorf("role %d lost its dates: %+v\n%s", i, role, text)
+		}
+	}
+}
+
+// Dates mixed with prose on the right still belong to a separate column.
+func TestExtractPDFSplitsRightMainColumnWithDates(t *testing.T) {
+	var b strings.Builder
+	wordLine(&b, 50, 800, "Jane Example")
+	sidebar := []string{"SKILLS", "Go", "Python", "Postgres", "AWS", "Docker", "EDUCATION", "Example University"}
+	for i, line := range sidebar {
+		wordLine(&b, 50, 750-15*float64(i), line)
+	}
+	wordLine(&b, 240, 750, "EXPERIENCE")
+	companies := []string{"Globex", "Initech", "Umbrella", "Hooli"}
+	for i, company := range companies {
+		y := 730 - 65*float64(i)
+		wordLine(&b, 240, y, company+" | Backend Engineer")
+		wordLine(&b, 240, y-15, fmt.Sprintf("Jan %d - Dec %d", 2021-2*i, 2022-2*i))
+		wordLine(&b, 240, y-30, "- Built the "+company+" services.")
+	}
+	text := extractFixture(t, b.String())
+	if !strings.Contains(text, "Example University\n\nEXPERIENCE\n") {
+		t.Fatalf("columns were interleaved:\n%s", text)
+	}
+	p := Parse(text)
+	if len(p.Experiences) != len(companies) {
+		t.Fatalf("roles = %+v, want four\n%s", p.Experiences, text)
+	}
+	for i, role := range p.Experiences {
+		if role.Company != companies[i] || role.StartDate != fmt.Sprintf("Jan %d", 2021-2*i) || role.EndDate != fmt.Sprintf("Dec %d", 2022-2*i) || !strings.Contains(role.Description, companies[i]+" services") || strings.Contains(role.Description, "University") {
+			t.Errorf("role %d was interleaved: %+v", i, role)
+		}
+	}
+}
+
 func walkFixture(t *testing.T, content string) []chunk {
 	t.Helper()
 	data := buildPDF(content)

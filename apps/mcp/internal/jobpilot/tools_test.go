@@ -268,7 +268,7 @@ func (f *fakeAPI) handler() http.Handler {
 		}
 		contract := f.apiContract
 		if contract == 0 {
-			contract = 11
+			contract = 12
 		}
 		send(w, 200, fmt.Sprintf(`{"status":"ok","contract":%d}`, contract))
 	})
