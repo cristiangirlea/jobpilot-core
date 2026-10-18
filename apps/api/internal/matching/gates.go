@@ -341,22 +341,25 @@ func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.F
 		}
 	}
 	for textIndex, text := range []string{j.Title, j.Description} {
+		warningKey := func(kind string, start, end int) postingWarningKey {
+			// Broad and strict eligibility patterns may span different words,
+			// but they refer to the same citizenship/residency/clearance term.
+			if kind == "Posting requires eligibility: " {
+				if word := eligibilityWords.FindStringIndex(text[start:end]); word != nil {
+					start += word[0]
+				}
+			}
+			position := 0
+			for _, r := range text[:start] {
+				if !unicode.IsSpace(r) {
+					position++
+				}
+			}
+			return postingWarningKey{kind, textIndex, position}
+		}
 		warn := func(kind string, start, end int, quoted string) {
 			if seen != nil {
-				// Broad and strict eligibility patterns may span different words,
-				// but they refer to the same citizenship/residency/clearance term.
-				if kind == "Posting requires eligibility: " {
-					if word := eligibilityWords.FindStringIndex(text[start:end]); word != nil {
-						start += word[0]
-					}
-				}
-				position := 0
-				for _, r := range text[:start] {
-					if !unicode.IsSpace(r) {
-						position++
-					}
-				}
-				key := postingWarningKey{kind, textIndex, position}
+				key := warningKey(kind, start, end)
 				if fallback && seen[key] {
 					return
 				}
@@ -395,8 +398,12 @@ func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.F
 					checkStrictEligibility(e, sentence, clause, clauseStart-sentenceStart, f != nil && f.RejectEligibilityRequirements && cleanRejectionSentence(sentence), func(start, end int, quoted string) {
 						warn("Posting requires eligibility: ", clauseStart+start, clauseStart+end, quoted)
 					})
-					if span := sponsorshipSignal.FindStringIndex(clause); span != nil {
-						warn("Posting states work authorization or sponsorship: ", clauseStart+span[0], clauseStart+span[1], findingQuote(sentence, clauseStart-sentenceStart+span[0], clauseStart-sentenceStart+span[1]))
+					for index, span := range sponsorshipSignal.FindAllStringIndex(clause, -1) {
+						if index == 0 {
+							warn("Posting states work authorization or sponsorship: ", clauseStart+span[0], clauseStart+span[1], findingQuote(sentence, clauseStart-sentenceStart+span[0], clauseStart-sentenceStart+span[1]))
+						} else if seen != nil && !fallback {
+							seen[warningKey("Posting states work authorization or sponsorship: ", clauseStart+span[0], clauseStart+span[1])] = true
+						}
 					}
 				}
 				var local []languageHit
@@ -454,6 +461,9 @@ func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.F
 						}
 						profile := listed[hit.pattern]
 						if alternative && anyListed {
+							if seen != nil && !fallback {
+								seen[warningKey("Posting requires "+hit.pattern.name+" beyond the listed profile languages or level: ", clauseStart+hit.start, clauseStart+hit.end)] = true
+							}
 							continue
 						}
 						if !profile.listed || profile.level > 0 && profile.level < languageLevel(context) {

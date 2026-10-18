@@ -233,6 +233,10 @@ func TestGateWarningsAcrossReadings(t *testing.T) {
 		{"joined quote wins", "  Security clearance is required\r\n  Unless you work remotely.", []string{
 			`Posting requires eligibility: "Security clearance is required Unless you work remotely."`,
 		}, false},
+		{"joined alternative satisfied", "You must speak German\nor English.", nil, false},
+		{"joined sponsorship quote covers all signals", "We cannot provide visas\nand no sponsorship is available.", []string{
+			`Posting states work authorization or sponsorship: "We cannot provide visas and no sponsorship is available."`,
+		}, false},
 		{"raw restores warning", "Requires German\niOS experience", []string{
 			`Posting requires German beyond the listed profile languages or level: "Requires German"`,
 		}, false},

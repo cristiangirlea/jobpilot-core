@@ -11,6 +11,9 @@ import (
 // Fifth review: every explicit requirement still warns, but its alternatives,
 // conditional context, limited scope or wrapped continuation forbids rejection.
 var fifthReviewWarningOnly = []string{
+	// Scope limits after a neighbouring term still prevent rejection.
+	"German is required, French only for the Paris office.",
+	"Security clearance is required, US citizenship only for on-site staff.",
 	// Focused review B1/B2: later terms must not hide conditions or alternatives.
 	"US citizenship is required, except for permanent residents.",
 	"Security clearance is required, unless you are a US citizen.",
