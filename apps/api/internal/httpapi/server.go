@@ -62,7 +62,8 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-const Contract = 10
+//	11: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
+const Contract = 11
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."

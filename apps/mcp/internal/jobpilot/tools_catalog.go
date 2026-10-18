@@ -217,6 +217,9 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 			"Seniority is a profile setting and minimum score a list_jobs option; neither belongs to a preset.",
 		Annotations: writeTool("Create or change a filter preset", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFiltersInput) (*mcp.CallToolResult, FilterPreset, error) {
+		if (in.RejectEligibilityRequirements != nil || in.RejectUnlistedLanguages != nil) && !c.supports(ctx, filterGatesContract) {
+			return nil, FilterPreset{}, errors.New("this API predates reject_eligibility_requirements and reject_unlisted_languages, or its version could not be confirmed, and would ignore them; omit these fields or update the API to contract 11 or later")
+		}
 		base := FilterPreset{}
 		if id := strings.TrimSpace(in.ID); id != "" {
 			// Only the caller's own presets are listed, so an id that is not

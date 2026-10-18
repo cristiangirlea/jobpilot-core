@@ -4,7 +4,7 @@ import {FormEvent,useEffect,useState} from "react";
 import {Shell} from "@/components/Shell";
 import {ErrorMessage,Field,Header,ListInput,Notice} from "@/components/UI";
 import {api,join} from "@/lib/api";
-import {Filter} from "@/lib/types";
+import {Filter,Profile} from "@/lib/types";
 import {CompanyExclusions} from "@/components/CompanyExclusions";
 
 const newFilter=():Filter=>({
@@ -20,8 +20,9 @@ export default function Filters(){
   const [form,setForm]=useState<Filter>(newFilter());
   const [error,setError]=useState("");
   const [saved,setSaved]=useState("");
+  const [profile,setProfile]=useState<Profile|null>(null);
   const load=()=>api<Filter[]>("/filters").then(setItems).catch(e=>setError(e.message));
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load();api<Profile>("/profile").then(setProfile).catch(e=>setError(e.message))},[]);
 
   const list=(key:keyof Filter)=>(value:string[])=>setForm(current=>({...current,[key]:value}));
   async function save(e:FormEvent){
@@ -63,6 +64,7 @@ export default function Filters(){
           <p className="muted">Eligibility and language findings are warnings unless you enable a rule below.</p>
           <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.reject_eligibility_requirements} onChange={e=>setForm({...form,reject_eligibility_requirements:e.target.checked})}/> Reject citizenship, permanent residency or clearance requirements</label>
           <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.reject_unlisted_languages} onChange={e=>setForm({...form,reject_unlisted_languages:e.target.checked})}/> Reject required languages missing from my profile</label>
+          {profile&&!(profile.languages?.length)&&<p className="muted">This rule does nothing until you list languages in your profile.</p>}
           <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/> Use this preset for matching</label>
         </section>
       </div>

@@ -86,15 +86,15 @@ func TestLanguagePhrases(t *testing.T) {
 		languages       []string
 		warning, reject bool
 	}{
-		{"Fluent German is required.", nil, true, true},
+		{"Fluent German is required.", []string{"English"}, true, true},
 		{"You must speak French.", []string{"English"}, true, true},
 		{"Native Spanish required.", []string{"Spanish B2"}, true, false},
 		{"German at C1 level is required.", []string{"German (B1)"}, true, false},
 		{"Business-level Japanese required.", []string{"Japanese basic"}, true, false},
 		{"English fluency is required.", []string{"English intermediate"}, true, false},
 		{"Required languages: Dutch, Italian.", []string{"Dutch native"}, true, true},
-		{"Must be fluent in Portuguese.", nil, true, true},
-		{"Professional proficiency in Arabic is required.", nil, true, true},
+		{"Must be fluent in Portuguese.", []string{"English"}, true, true},
+		{"Professional proficiency in Arabic is required.", []string{"English"}, true, true},
 		{"Fluent German is required.", []string{"German C2"}, false, false},
 		{"German at C1 level is required.", []string{"German C1"}, false, false},
 		{"German (C1) required.", []string{"German B2"}, true, false},
@@ -103,15 +103,15 @@ func TestLanguagePhrases(t *testing.T) {
 		{"Fluent English is required; German is preferred.", []string{"English fluent"}, false, false},
 		{"Fluent German is required.", []string{"German B1, English C2"}, true, false},
 		{"Fluent English is required.", []string{"English"}, false, false},
-		{"We are a German company.", nil, false, false},
-		{"Our French customers use Go.", nil, false, false},
-		{"German is a nice to have.", nil, false, false},
-		{"German is preferred but not required.", nil, false, false},
-		{"Fluent German is not required.", nil, false, false},
-		{"No German required.", nil, false, false},
-		{"English is our company language.", nil, false, false},
-		{"We require engineers for our German company.", nil, false, false},
-		{"Go is required.", nil, false, false},
+		{"We are a German company.", []string{"English"}, false, false},
+		{"Our French customers use Go.", []string{"English"}, false, false},
+		{"German is a nice to have.", []string{"English"}, false, false},
+		{"German is preferred but not required.", []string{"English"}, false, false},
+		{"Fluent German is not required.", []string{"English"}, false, false},
+		{"No German required.", []string{"English"}, false, false},
+		{"English is our company language.", []string{"English"}, false, false},
+		{"We require engineers for our German company.", []string{"English"}, false, false},
+		{"Go is required.", []string{"English"}, false, false},
 	} {
 		t.Run(tc.text+strings.Join(tc.languages, ","), func(t *testing.T) {
 			p := models.Profile{Languages: tc.languages}
@@ -131,7 +131,7 @@ func TestLanguagePhrases(t *testing.T) {
 }
 
 func TestGateQuotes(t *testing.T) {
-	sentence := "Applicants must be a citizen of " + strings.Repeat("é", 210) + "."
+	sentence := "Applicants must be a citizen of Canada " + strings.Repeat("é", 210) + "."
 	e := Evaluate(models.Profile{}, nil, gateFilter(t, true, true), models.JobInput{Description: "Build software.\n" + sentence + " Work remotely."}, time.Time{})
 	if len(e.Warnings) != 1 || len(e.RejectionReasons) != 1 {
 		t.Fatalf("%+v", e)
@@ -143,13 +143,14 @@ func TestGateQuotes(t *testing.T) {
 		}
 	}
 	j := models.JobInput{Title: "Fluent German required", Description: "Build software."}
-	if e := Evaluate(models.Profile{}, nil, gateFilter(t, false, true), j, time.Time{}); !e.Rejected || !strings.Contains(strings.Join(e.Warnings, ""), `"Fluent German required"`) {
+	if e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, false, true), j, time.Time{}); !e.Rejected || !strings.Contains(strings.Join(e.Warnings, ""), `"Fluent German required"`) {
 		t.Fatalf("title requirement: %+v", e)
 	}
 }
 
 func TestGatesPreserveExistingEvaluation(t *testing.T) {
 	p := sampleProfile()
+	p.Languages = []string{"English"}
 	j := models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Build Go services.", RemoteType: "remote"}
 	before := Evaluate(p, nil, nil, j, time.Time{})
 	for _, f := range []*models.FilterPreset{gateFilter(t, false, false), gateFilter(t, true, true)} {

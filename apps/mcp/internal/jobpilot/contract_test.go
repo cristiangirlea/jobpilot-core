@@ -2,6 +2,7 @@ package jobpilot
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,5 +85,26 @@ func TestStatusOnlyUpdateIsRefusedAgainstAnOldAPI(t *testing.T) {
 	}
 	if len(fake.patches) != 1 || fake.patches[0]["notes"] != "kept by hand" {
 		t.Fatalf("explicit notes must be sent, got %v", fake.patches)
+	}
+}
+
+func TestFilterGatesContract(t *testing.T) {
+	for _, version := range []int{6, 10, 11} {
+		for _, field := range []string{"reject_eligibility_requirements", "reject_unlisted_languages"} {
+			for _, enabled := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%d/%s/%t", version, field, enabled), func(t *testing.T) {
+					cs, fake := sessionUnchecked(t, false)
+					fake.apiContract = version
+					res, message := call(t, cs, "set_filters", map[string]any{"name": "Gates", field: enabled})
+					if res.IsError != (version < 11) {
+						t.Fatal(message)
+					}
+					paths, _ := fake.savedFilters()
+					if version < 11 && (len(paths) > 0 || !strings.Contains(message, "update the API") || !strings.Contains(message, field)) {
+						t.Fatal(message, paths)
+					}
+				})
+			}
+		}
 	}
 }

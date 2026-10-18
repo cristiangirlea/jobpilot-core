@@ -38,7 +38,8 @@ type fakeAPI struct {
 	detailGets atomic.Int32
 	// noContract makes the fake look like an API from before the health
 	// endpoint reported a contract version.
-	noContract bool
+	noContract  bool
+	apiContract int
 	// pages makes the job lists behave like an API that pages: it records
 	// the query, answers with one job, and reports a total of 42.
 	pages      atomic.Bool
@@ -265,7 +266,11 @@ func (f *fakeAPI) handler() http.Handler {
 			send(w, 200, `{"status":"ok"}`)
 			return
 		}
-		send(w, 200, `{"status":"ok","contract":6}`)
+		contract := f.apiContract
+		if contract == 0 {
+			contract = 11
+		}
+		send(w, 200, fmt.Sprintf(`{"status":"ok","contract":%d}`, contract))
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/health" {

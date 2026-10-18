@@ -421,9 +421,9 @@ Each user receives an independent evaluation for a shared job.
 
 ### Eligibility and language warnings
 
-Before scoring, deterministic, standard-library detectors read the title and description for explicit citizenship, permanent-residency, security-clearance, sponsorship and right-to-work phrases, including positive sponsorship and international-applicant signals. Findings quote one original sentence, trimmed to 200 characters. A nationality or work-authorization statement never implies eligibility for a jurisdiction, and positive signals never override a rejection.
+Before scoring, deterministic, standard-library detectors read the title and description for explicit citizenship, permanent-residency, security-clearance, sponsorship and right-to-work phrases, including work permits, eligibility to work, positive sponsorship and international-applicant signals. Findings quote one original sentence, using a window of at most 200 runes around the match for long sentences. A nationality or work-authorization statement never implies eligibility for a jurisdiction, and positive signals never override a rejection. Citizenship with a green-card alternative only warns.
 
-Required languages are detected by name and requirement phrases; company descriptions and optional languages do not count. A language missing from `profile.languages` warns, as does a lower explicitly stated level (CEFR A1-C2, basic, intermediate, business-level, professional, fluent, advanced or native). An unstated profile level is not guessed. Detection covers common language names and English requirement phrases; it is not a translation or legal-eligibility service.
+Required languages are detected by name and requirement phrases; company descriptions and optional languages do not count. When `profile.languages` is empty, comparison is skipped entirely. Otherwise, a missing language warns, as does a lower explicitly stated level (CEFR A1-C2, basic, intermediate, business-level, professional, fluent, advanced or native). An unstated profile level is not guessed. An `or` or `and/or` group is met if any member is listed; if none is listed, it only warns. Chinese and Mandarin share one family; common European native names are recognised in postings and profiles. Detection uses English requirement phrases; it is not a translation or legal-eligibility service.
 
 Both new filter rules default off, including for existing presets: findings change warnings only, preserving scores and existing rejections. With a rule enabled, its quoted reason is an ordinary final filter rejection, visible among rejected jobs and subject to the existing application blocks. Sponsorship and right-to-work signals remain warnings.
 
@@ -988,6 +988,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 | `023_invites.sql` | Single-use sign-up invite codes, stored as digests |
 | `024_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
+| `025_filter_eligibility_language.sql` | Opt-in eligibility and unlisted-language rejection rules, both off for existing presets |
 
 Core entities:
 
