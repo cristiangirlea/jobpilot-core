@@ -89,12 +89,13 @@ func TestStatusOnlyUpdateIsRefusedAgainstAnOldAPI(t *testing.T) {
 }
 
 func TestFilterGatesContract(t *testing.T) {
-	for _, version := range []int{6, 10, 11} {
+	for _, version := range []int{0, 6, 10, 11} {
 		for _, field := range []string{"reject_eligibility_requirements", "reject_unlisted_languages"} {
 			for _, enabled := range []bool{false, true} {
 				t.Run(fmt.Sprintf("%d/%s/%t", version, field, enabled), func(t *testing.T) {
 					cs, fake := sessionUnchecked(t, false)
 					fake.apiContract = version
+					fake.noContract = version == 0
 					res, message := call(t, cs, "set_filters", map[string]any{"name": "Gates", field: enabled})
 					if res.IsError != (version < 11) {
 						t.Fatal(message)
