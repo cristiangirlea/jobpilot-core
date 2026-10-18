@@ -84,14 +84,68 @@ func TestQuietReviewRegressionsPostgres(t *testing.T) {
 			t.Fatalf("early dismissal reopened: %+v %v", f, e)
 		}
 	})
-	t.Run("older than 60 days", func(t *testing.T) {
+	t.Run("more than 60 days overdue", func(t *testing.T) {
 		a := app()
 		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
 		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
-		exec(`UPDATE applications SET status_changed_at=now()-interval '61 days' WHERE id=$1`, a.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '71 days' WHERE id=$1`, a.ID)
 		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
 		if e != nil || f.Open != 0 {
 			t.Fatalf("ancient application surfaced: %+v %v", f, e)
+		}
+	})
+	t.Run("90 day threshold", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		if _, e := st.SaveAccountSettings(ctx, user.ID, 90); e != nil {
+			t.Fatal(e)
+		}
+		defer func() {
+			if _, e := st.SaveAccountSettings(ctx, user.ID, 10); e != nil {
+				t.Fatal(e)
+			}
+		}()
+		exec(`UPDATE applications SET status_changed_at=now()-interval '91 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 1 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID {
+			t.Fatalf("90-day reminder missing: %+v %v", f, e)
+		}
+	})
+	t.Run("uppercase dismissal", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 1 {
+			t.Fatalf("initial reminder: %+v %v", f, e)
+		}
+		if e := st.DismissQuietApplication(ctx, user.ID, strings.ToUpper(a.ID)); e != nil {
+			t.Fatal(e)
+		}
+		f, e = st.Notifications(ctx, user.ID, "all", "", 200)
+		if e != nil || f.Open != 0 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID || f.Items[0].ResolvedAt == nil || f.Items[0].Detail["href"] != "/applications/"+a.ID {
+			t.Fatalf("uppercase dismissal left an open or stray reminder: %+v %v", f, e)
+		}
+		f, e = st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 0 || len(f.Items) != 0 {
+			t.Fatalf("dismissed reminder reopened: %+v %v", f, e)
+		}
+	})
+	t.Run("rejected match", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		exec(`UPDATE job_matches SET rejected=true WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		trace.perRow.Store(0)
+		f, e := st.Notifications(ctx, user.ID, "all", "", 200)
+		if e != nil || f.Open != 0 || len(f.Items) != 0 {
+			t.Fatalf("blocked application surfaced: %+v %v", f, e)
+		}
+		if n := trace.perRow.Load(); n != 0 {
+			t.Errorf("blocked application ran %d per-row statements", n)
 		}
 	})
 	t.Run("steady state", func(t *testing.T) {

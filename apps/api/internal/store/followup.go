@@ -104,10 +104,10 @@ func (s *Store) DismissQuietApplication(ctx context.Context, u, id string) error
 	if err = tx.QueryRow(ctx, `SELECT id FROM applications WHERE user_id=$1 AND id=$2 FOR UPDATE`, u, id).Scan(&own); err != nil {
 		return err
 	}
-	if err = OpenNotification(ctx, tx, u, "quiet_application", id, "Quiet application reminder dismissed", map[string]any{"href": "/applications/" + id}); err != nil {
+	if err = OpenNotification(ctx, tx, u, "quiet_application", own, "Quiet application reminder dismissed", map[string]any{"href": "/applications/" + own}); err != nil {
 		return err
 	}
-	if err = ResolveNotification(ctx, tx, u, "quiet_application", id); err != nil {
+	if err = ResolveNotification(ctx, tx, u, "quiet_application", own); err != nil {
 		return err
 	}
 	return tx.Commit(ctx)

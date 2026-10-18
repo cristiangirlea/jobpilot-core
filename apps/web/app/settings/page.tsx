@@ -121,7 +121,7 @@ function QuietReminders(){
   }
   return <section className="card md:col-span-2">
     <h2 className="font-semibold">Quiet application reminders</h2>
-    <p className="muted mt-2 mb-4">Remind me when an applied or interview application has no status change. Applications quiet for more than 60 days do not open reminders.</p>
+    <p className="muted mt-2 mb-4">Remind me when an applied or interview application has no status change. Reminders open only during the 60 days after the chosen number of quiet days is reached.</p>
     <ErrorMessage message={error}/>
     <Field label="Days without a status change"><input type="number" min={1} max={365} step={1} value={days??""} disabled={days===null||saving} onChange={e=>{setDays(Number(e.target.value));setSaved(false)}}/></Field>
     <button className="btn-primary mt-4" onClick={save} disabled={days===null||!Number.isInteger(days)||days<1||days>365||saving}>{saving?"Saving...":"Save reminders"}</button>
