@@ -57,6 +57,7 @@ func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter 
 	if filter != nil {
 		applyHardFilters(&e, *filter, job, now)
 	}
+	checkPostingGates(&e, profile, filter, job)
 
 	title := scoreTitle(profile.DesiredTitles, job.Title)
 	e.Breakdown["title_match"] = title

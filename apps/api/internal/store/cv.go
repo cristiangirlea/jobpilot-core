@@ -4,10 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"jobpilot/core/api/internal/models"
 )
+
+var ErrCVReviewBlocked = errors.New("CV approval is blocked by PDF text layer findings")
+
+func cvReviewBlockers(doc models.CVDocument) []string {
+	raw, _ := json.Marshal(doc.Parsed["blockers"])
+	var blockers []string
+	_ = json.Unmarshal(raw, &blockers)
+	return blockers
+}
 
 // cvColumns deliberately omits the file bytes: listings and detail views never
 // need them, and loading megabytes per row to render a list would be wasteful.
@@ -34,8 +45,12 @@ func scanCV(row pgx.Row) (models.CVDocument, error) {
 
 // SaveCV stores an uploaded or generated CV. Re-uploading a byte-identical file
 // refreshes the existing row rather than creating a duplicate to review, but it
-// clears approval, because the parse may now differ.
+// clears approval, because the parse may now differ. Regenerating an identical
+// tailored CV preserves an existing approval, including one granted during reuse.
 func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument, data []byte) (models.CVDocument, error) {
+	if len(cvReviewBlockers(doc)) > 0 {
+		doc.Approved = false
+	}
 	parsed, err := json.Marshal(doc.Parsed)
 	if err != nil {
 		return models.CVDocument{}, err
@@ -61,12 +76,23 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 		ON CONFLICT (user_id,fingerprint) WHERE fingerprint <> '' DO UPDATE SET
 			label=EXCLUDED.label, filename=EXCLUDED.filename, format=EXCLUDED.format,
 			content_type=EXCLUDED.content_type, size_bytes=EXCLUDED.size_bytes, data=EXCLUDED.data,
-			extracted_text=EXCLUDED.extracted_text, parsed=EXCLUDED.parsed,
+			extracted_text=EXCLUDED.extracted_text,
+			parsed=CASE WHEN cv_documents.kind='tailored' AND EXCLUDED.kind<>'tailored' THEN cv_documents.parsed ELSE EXCLUDED.parsed END,
 			role_family=EXCLUDED.role_family, technologies=EXCLUDED.technologies,
 			approved=false, approved_at=NULL, updated_at=now()
+		WHERE NOT (cv_documents.kind='tailored' AND cv_documents.approved AND EXCLUDED.kind='tailored')
 		RETURNING `+cvColumns,
 		userID, doc.Kind, doc.Label, doc.Filename, doc.Format, doc.ContentType, doc.SizeBytes,
 		data, doc.ExtractedText, parsed, doc.RoleFamily, doc.Technologies, parent, doc.Fingerprint, doc.Approved))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The conflict row is locked but unchanged: reuse it without moving
+		// its outbox entries or rewriting the original posting's review.
+		saved, err = scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND fingerprint=$2`, userID, doc.Fingerprint))
+		if err != nil {
+			return models.CVDocument{}, err
+		}
+		return saved, tx.Commit(ctx)
+	}
 	if err != nil {
 		return models.CVDocument{}, err
 	}
@@ -133,6 +159,13 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 		return models.CVDocument{}, err
 	}
 	defer tx.Rollback(ctx)
+	current, err := scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND id=$2 FOR UPDATE`, userID, id))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if blockers := cvReviewBlockers(current); approved && len(blockers) > 0 {
+		return models.CVDocument{}, fmt.Errorf("%w: %s", ErrCVReviewBlocked, strings.Join(blockers, " "))
+	}
 	doc, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents
 		SET approved=$3, approved_at=CASE WHEN $3 THEN now() ELSE NULL END, updated_at=now()
 		WHERE user_id=$1 AND id=$2 RETURNING `+cvColumns, userID, id, approved))
@@ -146,6 +179,41 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 		return models.CVDocument{}, err
 	}
 	return doc, tx.Commit(ctx)
+}
+
+// RefreshCVReview preserves approved files and the original posting's review.
+func (s *Store) RefreshCVReview(ctx context.Context, userID string, doc models.CVDocument) (models.CVDocument, error) {
+	blockers := cvReviewBlockers(doc)
+	if blockers == nil {
+		blockers = []string{}
+	}
+	parsed, err := json.Marshal(blockers)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	defer tx.Rollback(ctx)
+	current, err := scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents
+		WHERE user_id=$1 AND id=$2 AND fingerprint=$3 FOR UPDATE`, userID, doc.ID, doc.Fingerprint))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if current.Approved {
+		return current, tx.Commit(ctx)
+	}
+	saved, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents SET
+		parsed=coalesce(nullif(parsed,'null'::jsonb),'{}'::jsonb) || jsonb_build_object('blockers',$3::jsonb,
+			'text_layer',coalesce(nullif(parsed->'text_layer','null'::jsonb),'{}'::jsonb) || jsonb_build_object('blockers',$3::jsonb)),
+		updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND fingerprint=$4 RETURNING `+cvColumns,
+		userID, doc.ID, parsed, doc.Fingerprint))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	return saved, tx.Commit(ctx)
 }
 
 func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {

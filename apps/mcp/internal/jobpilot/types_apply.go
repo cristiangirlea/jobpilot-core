@@ -49,6 +49,7 @@ type ResolvedAnswers struct {
 
 // CVDocument omits the stored file bytes. extracted_text is the readable
 // form and is blank in listings; get_cv returns it.
+// Parsed keeps PDF findings in text_layer, blockers, and readable warnings.
 type CVDocument struct {
 	ID            string         `json:"id"`
 	Kind          string         `json:"kind"`

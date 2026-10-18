@@ -8,11 +8,11 @@ ifeq ($(OS),Windows_NT)
 EXE := .exe
 TEST_API = powershell -NoProfile -Command '$$env:GOCACHE="$(GOCACHE)"; Set-Location apps/api; go test ./...'
 TEST_MCP = powershell -NoProfile -Command '$$env:GOCACHE="$(GOCACHE)"; Set-Location apps/mcp; go test ./...'
-TEST_WEB = powershell -NoProfile -Command 'Set-Location apps/web; npm run typecheck'
+TEST_WEB = powershell -NoProfile -Command 'Set-Location apps/web; npm run typecheck; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }; npm test; exit $$LASTEXITCODE'
 else
 TEST_API = cd apps/api && GOCACHE="$(GOCACHE)" go test ./...
 TEST_MCP = cd apps/mcp && GOCACHE="$(GOCACHE)" go test ./...
-TEST_WEB = cd apps/web && npm run typecheck
+TEST_WEB = cd apps/web && npm run typecheck && npm test
 endif
 
 .PHONY: dev test vulncheck migrate seed smoke smoke-live smoke-regression smoke-mcp mcp build down logs staging-up staging-down staging-status

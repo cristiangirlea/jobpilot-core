@@ -55,6 +55,9 @@ type setFiltersInput struct {
 	MinSalary            *float64 `json:"min_salary,omitempty" jsonschema:"Known pay below this rejects; 0 turns it off"`
 	Currency             *string  `json:"currency,omitempty"`
 	MaxAgeDays           *int     `json:"max_age_days,omitempty" jsonschema:"Older postings are rejected; 0 turns it off"`
+
+	RejectEligibilityRequirements *bool `json:"reject_eligibility_requirements,omitempty" jsonschema:"Reject citizenship, permanent residency or clearance requirements; defaults to false"`
+	RejectUnlistedLanguages       *bool `json:"reject_unlisted_languages,omitempty" jsonschema:"Reject required languages absent from the profile; defaults to false"`
 }
 
 var remoteTypes = []string{"remote", "hybrid", "onsite"}
@@ -66,6 +69,12 @@ var remoteTypes = []string{"remote", "hybrid", "onsite"}
 // every job that states its arrangement.
 func applyFilterChanges(base FilterPreset, in setFiltersInput) (FilterPreset, error) {
 	out := base
+	if in.RejectEligibilityRequirements != nil {
+		out.RejectEligibilityRequirements = *in.RejectEligibilityRequirements
+	}
+	if in.RejectUnlistedLanguages != nil {
+		out.RejectUnlistedLanguages = *in.RejectUnlistedLanguages
+	}
 	if in.Name != nil {
 		out.Name = strings.TrimSpace(*in.Name)
 	}
@@ -208,6 +217,9 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 			"Seniority is a profile setting and minimum score a list_jobs option; neither belongs to a preset.",
 		Annotations: writeTool("Create or change a filter preset", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setFiltersInput) (*mcp.CallToolResult, FilterPreset, error) {
+		if (in.RejectEligibilityRequirements != nil || in.RejectUnlistedLanguages != nil) && !c.supports(ctx, filterGatesContract) {
+			return nil, FilterPreset{}, errors.New("this API predates reject_eligibility_requirements and reject_unlisted_languages, or its version could not be confirmed, and would ignore them; omit these fields or update the API to contract 12 or later")
+		}
 		base := FilterPreset{}
 		if id := strings.TrimSpace(in.ID); id != "" {
 			// Only the caller's own presets are listed, so an id that is not
