@@ -1,6 +1,7 @@
 package matching
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -130,11 +131,143 @@ func TestGatesDoNotRejectOrdinaryPostingText(t *testing.T) {
 		"We require valid permanent residency services.",
 		"We require valid permanent residency law knowledge.",
 		"We require valid permanent residency records.",
+		// Fourth review, A-C and E-F (verbatim).
+		"No US citizenship required.",
+		"Engineer (No US Citizenship Required)",
+		"No sponsorship available, must be a US citizen",
+		"No Australian permanent residency required.",
+		"There is no need to be a US citizen.",
+		"There's no need to hold a security clearance.",
+		"No security clearance or US citizenship is required.",
+		"Neither a degree nor a security clearance is required.",
+		"Neither German nor French is required.",
+		"We do not require a degree, nor do we require US citizenship.",
+		"You don't need a degree, nor do you need to speak German.",
+		"None of our roles require US citizenship.",
+		"None of our positions require a security clearance.",
+		"Do I need to be a US citizen? No, we hire worldwide.",
+		"Does this role require a security clearance? No.",
+		"Does the role require US citizenship? No.",
+		"Is German required? No, English is our working language.",
+		"Security Clearance Required: No",
+		"Citizenship required: No",
+		"Security clearance required: None",
+		"This role requires US citizenship or permanent residency.",
+		"U.S. citizenship or permanent residency is required.",
+		"Applicants must be a U.S. citizen, or a lawful permanent resident.",
+		"If you are not a US citizen, you must be a permanent resident.",
+		"This role requires French, Italian and Spanish market knowledge.",
+		"The product requires English, German and French localisation before release.",
+		"This role requires German, Dutch and Belgian tax knowledge.",
+		"Active TS/SCI clearance desired.",
+		"Current SC clearance would be advantageous.",
+		"An active security clearance is an asset.",
+		"An active security clearance is a nice-to-have.",
+		"Preferably you hold an active Secret clearance.",
+		"Candidates with an active security clearance will be given priority.",
+		"An active security clearance isn't required.",
+		"A current security clearance is not needed.",
+		"A current security clearance is not essential.",
+		// Fourth review's lower-confidence classes.
+		"You will support clients who need to become US citizens.",
+		"You will guide new starters who need to obtain a security clearance.",
+		"This role requires security clearance vetting experience.",
+		"Maintain current security clearance records for all cleared staff.",
+		"If a client requires a security clearance, we sponsor the process.",
+		"If the role requires EU citizenship, we will tell you upfront.",
+		"This is not a role that requires US citizenship.",
+		"Polish is essential.",
+		"We must be Good Citizens.",
+		"requires Organizational Citizenship",
+		"Nice to have\nActive Secret clearance",
+		// Additional adversarial examples: negations, FAQ/fields, alternatives,
+		// adjective lists and every preference class around strict templates.
+		"No degree is necessary; US citizenship is required.",
+		"No travel is expected, German is required.",
+		"Neither experience nor French is required.",
+		"None of these jobs say you must be a US citizen.",
+		"Without a degree, you must be a permanent resident.",
+		"We never say German is required.",
+		"We don't say you must be a US citizen.",
+		"We don’t say you must have an active Secret clearance.",
+		"You must be a US citizen?",
+		"Permanent residency is required? No.",
+		"Must be able to obtain a Secret clearance? No.",
+		"German (C1) is required? No.",
+		"FAQ: must speak French? We train everyone.",
+		"US citizenship is required: No",
+		"Permanent residency is required: None",
+		"Security clearance is required: N/A",
+		"German is required: N/A",
+		"Clearance: None",
+		"N/A",
+		"Citizenship required: N/A",
+		"Only US citizens or permanent residents may apply.",
+		"Must be a permanent resident or a US citizen.",
+		"Must be a US citizen and/or a permanent resident.",
+		"Either German is required or French is required.",
+		"German is required, alternatively French is accepted.",
+		"Required languages: German, French or Italian.",
+		"Required languages: German and/or French.",
+		"Required languages: German, French and Italian market knowledge.",
+		"This role requires Spanish, Portuguese and French tax knowledge.",
+		"The product requires Italian, German and Dutch localisation.",
+		"US citizenship is required, a plus.",
+		"Must be a permanent resident, a bonus.",
+		"Security clearance is required, nice-to-have.",
+		"German is required, preferred.",
+		"Preferably, you must be a US citizen.",
+		"Permanent residency is required, desired.",
+		"Secret clearance is required, desirable.",
+		"French is required, an advantage.",
+		"Must speak German, advantageous.",
+		"Must have an active Secret clearance, an asset.",
+		"Must be a US citizen, beneficial.",
+		"Must be a permanent resident, priority given.",
+		"Candidates who must speak German are encouraged.",
+		"Candidates who must have an active SC clearance are welcome.",
+		"Must speak French, helpful.",
+		"Ideally, permanent residency is required.",
+		"Optional: only US citizens may apply.",
+		"Nice-to-have: German (C1) is required.",
+		"Must be a US citizen, or hold an equivalent work permit.",
+		"If security clearance is required, we arrange it.",
+		"Where German is required, training is provided.",
+		"This role requires US citizenship.",
+		"German is a must.",
+		"German teams work with French teams, but German is required? No.",
 	} {
 		t.Run(text, func(t *testing.T) {
 			e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, true, true), models.JobInput{Description: text}, time.Time{})
 			if e.Rejected {
 				t.Fatalf("ordinary text rejected: %+v", e)
+			}
+		})
+	}
+}
+
+func TestGateRequirementWindows(t *testing.T) {
+	for _, tc := range []struct {
+		text, warning, absent string
+		reject                bool
+	}{
+		{"Fluent German is required, English is a plus.", "Posting requires German", "Posting requires English", true},
+		{"German (C1) is required, French is an advantage.", "Posting requires German", "Posting requires French", true},
+		{"Fluent German is required and English is preferred.", "Posting requires German", "Posting requires English", true},
+		{"French is preferred, German is required.", "Posting requires German", "Posting requires French", true},
+		{"German is required, French is not required.", "Posting requires German", "Posting requires French", false},
+		{"Must be a U.S. citizen, active Secret clearance preferred.", "Posting requires eligibility", "", true},
+		{"An active security clearance isn't required.", "", "Posting requires eligibility", false},
+		{"A current security clearance is not needed.", "", "Posting requires eligibility", false},
+		{"A current security clearance is not essential.", "", "Posting requires eligibility", false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			for _, enabled := range []bool{false, true} {
+				e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, enabled, enabled), models.JobInput{Description: tc.text}, time.Time{})
+				warnings := strings.Join(e.Warnings, "\n")
+				if !strings.Contains(warnings, tc.warning) || tc.absent != "" && strings.Contains(warnings, tc.absent) || e.Rejected != (enabled && tc.reject) {
+					t.Fatalf("rules=%t: %+v", enabled, e)
+				}
 			}
 		})
 	}
@@ -172,6 +305,17 @@ func TestGatesWarnForRealRequirements(t *testing.T) {
 		"Applicants must have dual US citizenship.",
 		"This role requires Canadian citizenship.",
 		"Applicants must hold valid permanent residency.",
+		// Fourth review D: the other requirement's preference cannot hide these.
+		"Fluent German is required, English is a plus.",
+		"German (C1) is required, French is an advantage.",
+		"Fluent German is required and English is preferred.",
+		"Must be a U.S. citizen, active Secret clearance preferred.",
+		"French is preferred, German is required.",
+		"Active Secret clearance preferred, US citizenship is required.",
+		"Is German required? No, English is our working language.",
+		"You will support clients who need to become US citizens.",
+		"This role requires security clearance vetting experience.",
+		"German is a must.",
 	} {
 		t.Run(text, func(t *testing.T) {
 			for _, enabled := range []bool{false, true} {
@@ -181,5 +325,70 @@ func TestGatesWarnForRealRequirements(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Strict templates still make final rejections when their own rule is on.
+func TestGatesRejectStrictRequirements(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		eligibility bool
+		texts       []string
+	}{
+		{"citizenship", true, []string{
+			"Must be a US citizen.", "Applicants must be a U.S. citizen.",
+			"You must be a Canadian citizen.", "Must be an Australian citizen.",
+			"Must be a British citizen.", "Must be a Romanian citizen.",
+			"US citizenship is required.", "U.S. citizenship is required.",
+			"Canadian citizenship is required.", "Australian citizenship is required.",
+			"British citizenship is required.", "Only US citizens may apply.",
+			"Only U.S. citizens can apply.", "Only Canadian citizens are eligible.",
+			"Only Australian citizens.",
+		}},
+		{"residency", true, []string{
+			"Must be a permanent resident.", "You must be a permanent resident.",
+			"Applicants must be a permanent resident.", "Candidates must be a permanent resident.",
+			"Must be a permanent resident of Australia.", "Must be a permanent resident of Canada.",
+			"You must be a permanent resident to apply.", "Must be a permanent resident for this role.",
+			"Permanent residency is required.", "Permanent residency is required for this role.",
+			"Permanent residency is required before starting.", "Permanent residency is required to apply.",
+			"Eligibility: permanent residency is required.", "Permanent residency is required!",
+			"Must be a permanent resident, Secret clearance preferred.",
+		}},
+		{"clearance", true, []string{
+			"Security clearance is required.", "Secret clearance is required.",
+			"Top Secret clearance is required.", "TS/SCI clearance is required.",
+			"SC clearance is required.", "DV clearance is required.",
+			"Public Trust clearance is required.", "NV1 clearance is required.",
+			"Must hold an active Secret clearance.", "Must have an active security clearance.",
+			"Applicants must hold an active TS/SCI clearance.", "Must have an active DV clearance.",
+			"Must be able to obtain a Secret clearance.", "Must be able to obtain a security clearance.",
+			"Must be able to obtain a Public Trust clearance.",
+		}},
+		{"languages", false, []string{
+			"German is required.", "French is required.", "Dutch is required.",
+			"German (C1) is required.", "French (B2) is required.",
+			"Spanish (native) is required.", "You must speak German.",
+			"Must speak French.", "Must be fluent in Portuguese.",
+			"You must be fluent in Italian.", "Required languages: Dutch, Italian.",
+			"Required languages: German and French.",
+			"Required languages: German, French and Italian.",
+			"Required languages: English, German.", "Required languages: German.",
+			"Fluent German is required, English is a plus.",
+			"German (C1) is required, French is an advantage.",
+			"Fluent German is required and English is preferred.",
+		}},
+	} {
+		for _, text := range tc.texts {
+			t.Run(tc.name+"/"+text, func(t *testing.T) {
+				for _, enabled := range []bool{false, true} {
+					f := gateFilter(t, enabled && tc.eligibility, enabled && !tc.eligibility)
+					e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, f, models.JobInput{Description: text}, time.Time{})
+					if len(e.Warnings) == 0 || e.Rejected != enabled {
+						t.Fatalf("rule=%t: %+v", enabled, e)
+					}
+				}
+			})
+		}
 	}
 }

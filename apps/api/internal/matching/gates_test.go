@@ -26,19 +26,19 @@ func TestEligibilityPhrases(t *testing.T) {
 		text            string
 		warning, reject bool
 	}{
-		{"Applicants must be a citizen of Canada.", true, true},
+		{"Applicants must be a citizen of Canada.", true, false},
 		{"U.S. citizenship is required.", true, true},
-		{"Applicants must be U.S. citizens.", true, true},
-		{"This role is open to US citizens only.", true, true},
+		{"Applicants must be U.S. citizens.", true, false},
+		{"This role is open to US citizens only.", true, false},
 		{"Only US citizens may apply.", true, true},
 		{"You must be a permanent resident of Australia.", true, true},
 		{"Permanent residency is required.", true, true},
-		{"Permanent resident status is required.", true, true},
+		{"Permanent resident status is required.", true, false},
 		{"An active security clearance is required.", true, true},
-		{"Candidates must be eligible to obtain a security clearance.", true, true},
-		{"Must hold a Secret clearance.", true, true},
-		{"Active TS/SCI clearance required.", true, true},
-		{"This role requires SC clearance.", true, true},
+		{"Candidates must be eligible to obtain a security clearance.", true, false},
+		{"Must hold a Secret clearance.", true, false},
+		{"Active TS/SCI clearance required.", true, false},
+		{"This role requires SC clearance.", true, false},
 		{"No sponsorship is available.", true, false},
 		{"We do not provide visa sponsorship.", true, false},
 		{"We cannot sponsor visas.", true, false},
@@ -131,7 +131,7 @@ func TestLanguagePhrases(t *testing.T) {
 }
 
 func TestGateQuotes(t *testing.T) {
-	sentence := "Applicants must be a citizen of Canada " + strings.Repeat("é", 210) + "."
+	sentence := "Applicants must be a Canadian citizen for " + strings.Repeat("é", 210) + "."
 	e := Evaluate(models.Profile{}, nil, gateFilter(t, true, true), models.JobInput{Description: "Build software.\n" + sentence + " Work remotely."}, time.Time{})
 	if len(e.Warnings) != 1 || len(e.RejectionReasons) != 1 {
 		t.Fatalf("%+v", e)
@@ -142,8 +142,8 @@ func TestGateQuotes(t *testing.T) {
 			t.Fatalf("bad quote: %s", message)
 		}
 	}
-	j := models.JobInput{Title: "Fluent German required", Description: "Build software."}
-	if e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, false, true), j, time.Time{}); !e.Rejected || !strings.Contains(strings.Join(e.Warnings, ""), `"Fluent German required"`) {
+	j := models.JobInput{Title: "Fluent German is required", Description: "Build software."}
+	if e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, false, true), j, time.Time{}); !e.Rejected || !strings.Contains(strings.Join(e.Warnings, ""), `"Fluent German is required"`) {
 		t.Fatalf("title requirement: %+v", e)
 	}
 }

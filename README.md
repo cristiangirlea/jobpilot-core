@@ -427,6 +427,8 @@ Required languages are detected by capitalised names and requirement phrases; co
 
 Both new filter rules default off, including for existing presets: findings change warnings only, preserving scores and existing rejections. With a rule enabled, its quoted reason is an ordinary final filter rejection, visible among rejected jobs and subject to the existing application blocks. Sponsorship and right-to-work signals remain warnings.
 
+Warnings remain broad, with optional and negated wording checked within each requirement's own window. Rejection needs a separate strict citizenship, residency, clearance or language template and a clean sentence (no negation or question), with no alternative touching the requirement, no preference in its own window and no negative key-value answer.
+
 PUT preserves either rule's stored value when an older client omits its field; an explicit `false` still disables it (API contract 12).
 
 ### Score weights
