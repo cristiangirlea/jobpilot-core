@@ -121,13 +121,13 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 
 	// An identical file may already be approved from an earlier job; reuse that
 	// approval rather than resetting it by saving over the row.
-	if existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint); lookupErr == nil && found && existing.Approved {
+	if existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint); lookupErr == nil && found {
 		existing.Parsed, existing.ExtractedText = parsed, text
 		refreshed, err := s.Store.RefreshCVReview(ctx, uid, existing)
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return cvDecision{}, err
 		}
-		if refreshed.Approved {
+		if err == nil && refreshed.Approved {
 			return cvDecision{
 				Decision:  decisionReused,
 				Reason:    "This posting produces a CV identical to one you already approved.",

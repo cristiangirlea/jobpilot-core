@@ -273,7 +273,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "approve_cv",
 		Title:       "Approve a CV",
-		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. A changed file uploads as a new, unapproved CV.",
+		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. A changed file uploads as a new, unapproved CV. A tailored CV with parsed.blockers is refused with 409 naming them; show them to the user in the exact words returned.",
 		Annotations: writeTool("Approve a CV", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveCVInput) (*mcp.CallToolResult, CVDocument, error) {
 		if strings.TrimSpace(in.CVID) == "" {

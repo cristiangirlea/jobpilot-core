@@ -195,6 +195,17 @@ func splitColumns(chunks []chunk) [][]chunk {
 	if len(left) < minimum || len(right) < minimum {
 		return [][]chunk{chunks}
 	}
+	// Right-aligned role dates are part of their headings, not a column.
+	datesOnly := true
+	for _, line := range strings.Split(strings.TrimSpace(renderColumn(right)), "\n") {
+		if _, _, ok := bareDateRange(Clean(line)); !ok {
+			datesOnly = false
+			break
+		}
+	}
+	if datesOnly {
+		return [][]chunk{chunks}
+	}
 	return [][]chunk{left, right}
 }
 

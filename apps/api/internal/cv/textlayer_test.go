@@ -1,14 +1,112 @@
 package cv
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/ledongthuc/pdf"
 	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
 )
+
+func TestPDFTextLayerLongIdentity(t *testing.T) {
+	for _, field := range []string{"name", "role", "contact"} {
+		t.Run(field, func(t *testing.T) {
+			profile, job, tailored := textLayerFixture()
+			switch field {
+			case "name":
+				profile.Name = "María Fernanda de los Ángeles García-Rodríguez"
+				tailored.Name = profile.Name
+			case "role":
+				tailored.Experiences[0].Title = "Lead Backend Engineer, Payments Platform"
+				tailored.Experiences[0].Company = "JPMorgan Chase & Co., Global Payments Technology"
+			case "contact":
+				profile.Name = "Ana S\u0326tefa\u0306nescu"
+				profile.Email, profile.Phone = "ana+jobs@example.test", "(+40) 712-345-678"
+				tailored.Name, tailored.Contact = profile.Name, []string{profile.Email, profile.Phone}
+			}
+			data, err := RenderPDF(tailored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			text, review := ReviewPDF(data, tailored, profile, "", job)
+			if len(review.Blockers) != 0 {
+				t.Fatalf("identity blocked: %v\n%s", review.Blockers, text)
+			}
+		})
+	}
+}
+
+func TestPDFTextLayerFactSources(t *testing.T) {
+	for _, source := range []string{"certification", "education", "unsupported summary"} {
+		t.Run(source, func(t *testing.T) {
+			profile, _, tailored := textLayerFixture()
+			base := ""
+			job := models.Job{JobInput: models.JobInput{Title: "Kubernetes Engineer"}}
+			want := "covered"
+			switch source {
+			case "certification":
+				profile.Certifications = []string{"Certified Kubernetes Administrator"}
+				tailored.Certifications = profile.Certifications
+			case "education":
+				base = "EDUCATION\nKubernetes Engineering, Example University\n"
+				tailored.Education = []string{"Kubernetes Engineering, Example University"}
+			case "unsupported summary":
+				tailored.Summary = "I build Kubernetes services."
+				want = "unsupported_present"
+			}
+			data, err := RenderPDF(tailored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, review := ReviewPDF(data, tailored, profile, base, job)
+			if len(review.Blockers) != 0 || len(review.Keywords) != 1 || review.Keywords[0] != (KeywordFinding{Technology: "kubernetes", Status: want, Present: true}) {
+				t.Fatalf("fact source %s: %+v", source, review)
+			}
+			warnings := strings.Join(review.Warnings(), " ")
+			if want == "unsupported_present" && (!strings.Contains(warnings, "appears in the PDF but no stored fact supports it; review the summary") || strings.Contains(warnings, "must not be added")) {
+				t.Fatalf("misleading warning: %s", warnings)
+			}
+		})
+	}
+}
+
+func TestTextLayerWarningsExcludeCoveredKeywords(t *testing.T) {
+	review := TextLayerReview{Keywords: []KeywordFinding{{Technology: "go", Status: "covered", Present: true}}}
+	if warnings := review.Warnings(); len(warnings) != 0 {
+		t.Fatalf("good news in warnings: %v", warnings)
+	}
+}
+
+func TestPDFTextLayerMultiPage(t *testing.T) {
+	profile, job, tailored := textLayerFixture()
+	tailored.Experiences = nil
+	for i := 0; i < 14; i++ {
+		tailored.Experiences = append(tailored.Experiences, TailoredRole{
+			Title: "Engineer", Company: fmt.Sprintf("Example %d", i), Period: fmt.Sprintf("Jan %d - Dec %d", 2022-i, 2022-i),
+			Bullets: []string{"Built Go services.", "Shipped reliable systems.", "Improved service quality."},
+		})
+	}
+	data, err := RenderPDF(tailored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := pdf.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reader.NumPage() < 2 {
+		t.Fatal("fixture must span multiple pages")
+	}
+	text, review := ReviewPDF(data, tailored, profile, "", job)
+	if len(review.Blockers) != 0 {
+		t.Fatalf("multi-page render blocked: %v\n%s", review.Blockers, text)
+	}
+}
 
 func textLayerFixture() (models.Profile, models.Job, Tailored) {
 	profile := models.Profile{

@@ -75,7 +75,8 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 		ON CONFLICT (user_id,fingerprint) WHERE fingerprint <> '' DO UPDATE SET
 			label=EXCLUDED.label, filename=EXCLUDED.filename, format=EXCLUDED.format,
 			content_type=EXCLUDED.content_type, size_bytes=EXCLUDED.size_bytes, data=EXCLUDED.data,
-			extracted_text=EXCLUDED.extracted_text, parsed=EXCLUDED.parsed,
+			extracted_text=EXCLUDED.extracted_text,
+			parsed=CASE WHEN cv_documents.kind='tailored' THEN cv_documents.parsed ELSE EXCLUDED.parsed END,
 			role_family=EXCLUDED.role_family, technologies=EXCLUDED.technologies,
 			approved=false, approved_at=NULL, updated_at=now()
 		RETURNING `+cvColumns,
@@ -169,9 +170,13 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 	return doc, tx.Commit(ctx)
 }
 
-// RefreshCVReview keeps identical-file approval only while the fresh checks allow it.
+// RefreshCVReview preserves approved files and the original posting's review.
 func (s *Store) RefreshCVReview(ctx context.Context, userID string, doc models.CVDocument) (models.CVDocument, error) {
-	parsed, err := json.Marshal(doc.Parsed)
+	blockers := cvReviewBlockers(doc)
+	if blockers == nil {
+		blockers = []string{}
+	}
+	parsed, err := json.Marshal(blockers)
 	if err != nil {
 		return models.CVDocument{}, err
 	}
@@ -180,16 +185,21 @@ func (s *Store) RefreshCVReview(ctx context.Context, userID string, doc models.C
 		return models.CVDocument{}, err
 	}
 	defer tx.Rollback(ctx)
-	clearApproval := len(cvReviewBlockers(doc)) > 0
-	saved, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents SET
-		parsed=$3, extracted_text=$4, approved=approved AND NOT $5,
-		approved_at=CASE WHEN $5 THEN NULL ELSE approved_at END, updated_at=now()
-		WHERE user_id=$1 AND id=$2 AND fingerprint=$6 RETURNING `+cvColumns,
-		userID, doc.ID, parsed, doc.ExtractedText, clearApproval, doc.Fingerprint))
+	current, err := scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents
+		WHERE user_id=$1 AND id=$2 AND fingerprint=$3 FOR UPDATE`, userID, doc.ID, doc.Fingerprint))
 	if err != nil {
 		return models.CVDocument{}, err
 	}
-	if err := syncCVBlocker(ctx, tx, userID, saved); err != nil {
+	if current.Approved {
+		return current, tx.Commit(ctx)
+	}
+	saved, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents SET
+		parsed=coalesce(nullif(parsed,'null'::jsonb),'{}'::jsonb) || jsonb_build_object('blockers',$3::jsonb,
+			'text_layer',coalesce(nullif(parsed->'text_layer','null'::jsonb),'{}'::jsonb) || jsonb_build_object('blockers',$3::jsonb)),
+		updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND fingerprint=$4 RETURNING `+cvColumns,
+		userID, doc.ID, parsed, doc.Fingerprint))
+	if err != nil {
 		return models.CVDocument{}, err
 	}
 	return saved, tx.Commit(ctx)

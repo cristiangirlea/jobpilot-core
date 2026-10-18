@@ -32,7 +32,7 @@ func ReviewPDF(data []byte, tailored Tailored, profile models.Profile, baseText 
 
 func CheckTextLayer(text string, tailored Tailored, profile models.Profile, baseText string, job models.Job) TextLayerReview {
 	review := TextLayerReview{Blockers: []string{}, Keywords: []KeywordFinding{}}
-	facts, _ := withCV(profile, baseText)
+	facts, education := withCV(profile, baseText)
 	for _, contact := range []struct{ label, value string }{
 		{"name", facts.Name}, {"email", facts.Email}, {"phone", facts.Phone},
 	} {
@@ -96,6 +96,9 @@ func CheckTextLayer(text string, tailored Tailored, profile models.Profile, base
 	}
 
 	parts := []string{facts.CurrentTitle, facts.Summary, baseText}
+	parts = append(parts, facts.Certifications...)
+	parts = append(parts, education...)
+	parts = append(parts, facts.Languages...)
 	for _, skill := range facts.Skills {
 		parts = append(parts, skill.Name)
 	}
@@ -106,6 +109,8 @@ func CheckTextLayer(text string, tailored Tailored, profile models.Profile, base
 	for _, term := range technology.Signature(len(technology.Terms()), job.Title, job.Description) {
 		finding := KeywordFinding{Technology: term, Present: extracted[term] > 0, Status: "covered"}
 		switch {
+		case supported[term] == 0 && finding.Present:
+			finding.Status = "unsupported_present"
 		case supported[term] == 0:
 			finding.Status = "gap"
 		case !finding.Present:
@@ -149,8 +154,8 @@ func (r TextLayerReview) Warnings() []string {
 			warnings = append(warnings, "Keyword gap: "+technology.Name(keyword.Technology)+" is not supported by the stored profile or CV; it must not be added.")
 		case "missing":
 			warnings = append(warnings, "PDF keyword missing: "+technology.Name(keyword.Technology)+" is supported by stored facts but absent from the extracted text.")
-		case "covered":
-			warnings = append(warnings, "PDF keyword present: "+technology.Name(keyword.Technology)+".")
+		case "unsupported_present":
+			warnings = append(warnings, "PDF keyword unsupported: "+technology.Name(keyword.Technology)+" appears in the PDF but no stored fact supports it; review the summary.")
 		}
 	}
 	return warnings

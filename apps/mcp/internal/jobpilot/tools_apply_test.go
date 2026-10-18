@@ -421,6 +421,13 @@ func TestGetCVReturnsTextLayerFindings(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tool := range catalog.Tools {
+		if tool.Name == "approve_cv" {
+			for _, want := range []string{"409", "parsed.blockers", "exact words returned"} {
+				if !strings.Contains(tool.Description, want) {
+					t.Errorf("approve_cv description must explain %q: %s", want, tool.Description)
+				}
+			}
+		}
 		if tool.Name == "get_cv" {
 			for _, want := range []string{"text_layer", "blockers", "gap", "percentage"} {
 				if !strings.Contains(tool.Description, want) {
