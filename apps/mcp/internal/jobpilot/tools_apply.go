@@ -234,6 +234,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:  "get_cv",
 		Title: "Get a CV",
 		Description: "Return one CV with its extracted text and the fields read out of it. The parsed warnings list says what could not be read, which is worth telling the user about. " +
+			"For a tailored CV, parsed.text_layer reports contact integrity, reading order, and posting keyword coverage; parsed.blockers lists PDF failures that prevent approval. Show the findings to the user. A keyword gap is unsupported by stored facts and must never be added; there is no ATS pass percentage. " +
 			"These facts, with the profile, are the only source for anything written on the user's behalf.",
 		Annotations: readOnly("Get a CV"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in cvInput) (*mcp.CallToolResult, CVDocument, error) {
@@ -272,7 +273,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "approve_cv",
 		Title:       "Approve a CV",
-		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. A changed file uploads as a new, unapproved CV.",
+		Description: "Approve a CV so it can be reused for similar roles. Only call this after the user has reviewed it. A changed file uploads as a new, unapproved CV. A tailored CV with parsed.blockers is refused with 409 naming them; show them to the user in the exact words returned.",
 		Annotations: writeTool("Approve a CV", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in approveCVInput) (*mcp.CallToolResult, CVDocument, error) {
 		if strings.TrimSpace(in.CVID) == "" {

@@ -550,11 +550,15 @@ Tailoring re-emphasises what the candidate already has. It never adds and never 
 - Skills are reordered so the posting's technologies lead. A technology the posting wants and the candidate lacks is reported as `missing`, never listed as a skill.
 - Only the summary is newly worded, and only from stored facts. With no provider configured it falls back to deterministic wording.
 
-Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical CV reuses the existing approval instead of resetting it.
+Reuse mirrors the answer bank: an approved tailored CV is reused for a later posting in the same role family whose technology signature overlaps by at least 60%. That floor is stricter than the answer bank's, because a CV emphasising the wrong stack undermines a whole application. Regenerating a byte-identical approved CV reuses the existing approval and original job's review instead of resetting them. Regenerating an unapproved identical CV replaces its job-specific review with the new posting's findings; reuse never revokes an existing approval or moves its outbox entries. Re-uploading a tailored PDF retains its stored findings so it cannot bypass its blockers.
 
 ### Rendering
 
 Tailored CVs render as a single column, and the font is embedded.
+
+After rendering, the PDF is read back through the same text extractor used for uploads. The review checks that the stored name, email and phone remain intact on a line, and that section headings and each experience's title, company and dates appear in reading order. Findings are stored in `parsed.text_layer`, with contact and reading-order failures in `parsed.blockers`; those failures prevent approval with 409. The web review shows blockers and keyword findings before approval, and `get_cv` returns them. `parsed.warnings` contains failures and keyword concerns; covered keywords stay in `text_layer` only.
+
+Keyword coverage uses the shared technology vocabulary on the posting and extracted text: `covered` means present and supported by stored profile or CV facts, `missing` means supported but absent from the PDF text, and `gap` means unsupported and absent. `unsupported_present` warns that a term appears in the PDF but no stored fact supports it; review the summary. Certifications and education count as stored facts. A gap is reported, never inserted into the CV, and keyword findings do not block approval. These are findings, with no ATS pass percentage. All checks are deterministic and work with `LLM_PROVIDER=none`.
 
 Both choices are load-bearing rather than aesthetic. A two-column CV interleaves its sidebar with the main text when a machine reads it - the failure this project's own parser had to be taught around - and the machine reading a submitted CV is usually the employer's ATS. The embedded font exists because the first renderer written here emitted an identity ToUnicode map, which silently turned "București" into a control character for every reader, including an ATS. Any replacement renderer must be verified by reading its own output back; `TestRenderedPDFIsMachineReadable` does exactly that.
 
@@ -868,7 +872,7 @@ Apply engine:
 |---|---|---|
 | `get_ai_status` | read | Whether an AI provider is configured at all |
 | `list_answers` | read | The answer bank; pending answers are drafts awaiting approval |
-| `list_cvs`, `get_cv` | read | CVs and their extracted text, including what could not be parsed |
+| `list_cvs`, `get_cv` | read | CVs and their extracted text, parse warnings, and tailored PDF text-layer blockers and keyword findings; no ATS pass percentage |
 | `list_outbox`, `get_outbox_entry` | read | Composed applications, their blockers and every answer's provenance |
 | `detect_board` | read | Work out the provider and identifier behind a careers URL |
 | `list_board_suggestions` | read | Curated employer boards known to work as sources |
@@ -1085,7 +1089,7 @@ The job mints a token for `infra` alone, with only those two permissions, revoke
 
 ```bash
 make dev              # build and run PostgreSQL, migrations, API, and web
-make test             # Go tests (API and MCP) and frontend TypeScript typecheck
+make test             # Go tests (API and MCP), frontend tests and TypeScript typecheck
 make migrate          # apply SQL migrations not applied yet
 make seed             # add sample data to the first registered user
 make smoke            # full local API workflow
@@ -1167,7 +1171,7 @@ make smoke-mcp
 
 ### Continuous integration
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI. Jobs run on the self-hosted runners of the lab Kubernetes cluster (the `infra` repo) only: the repository variable `CI_RUNNER` names its scale set, `lab-jobpilot`, and without it the jobs are skipped rather than sent to GitHub's runners; the workflow installs PowerShell itself where the runner image lacks it. On `master` (pushes, and manual runs, which is how to republish a commit), once every job has passed and only on the lab runners, a `publish` job builds the API, web (with `NEXT_PUBLIC_API_URL=/api`) and migrate images, pushes them to the cluster's registry as `registry.localhost:5000/jobpilot-<name>:<commit>`, and writes the infra overlay's `images:` block, pinned by digest, to the job summary and an `images` artifact.
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck and tests, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI. Jobs run on the self-hosted runners of the lab Kubernetes cluster (the `infra` repo) only: the repository variable `CI_RUNNER` names its scale set, `lab-jobpilot`, and without it the jobs are skipped rather than sent to GitHub's runners; the workflow installs PowerShell itself where the runner image lacks it. On `master` (pushes, and manual runs, which is how to republish a commit), once every job has passed and only on the lab runners, a `publish` job builds the API, web (with `NEXT_PUBLIC_API_URL=/api`) and migrate images, pushes them to the cluster's registry as `registry.localhost:5000/jobpilot-<name>:<commit>`, and writes the infra overlay's `images:` block, pinned by digest, to the job summary and an `images` artifact.
 
 The test suites cover:
 

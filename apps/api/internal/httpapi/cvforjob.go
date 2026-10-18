@@ -111,17 +111,33 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 	if err != nil {
 		return cvDecision{}, err
 	}
+	text, review := cv.ReviewPDF(data, tailored, profile, baseText, job.Job)
+	parsed := map[string]any{
+		"tailored": tailoredMap(tailored), "text_layer": review,
+		"blockers": review.Blockers, "warnings": review.Warnings(),
+	}
 	sum := sha256.Sum256(data)
 	fingerprint := hex.EncodeToString(sum[:])
 
 	// An identical file may already be approved from an earlier job; reuse that
 	// approval rather than resetting it by saving over the row.
-	if existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint); lookupErr == nil && found && existing.Approved {
-		return cvDecision{
-			Decision:  decisionReused,
-			Reason:    "This posting produces a CV identical to one you already approved.",
-			Alignment: alignment, CV: existing, Approved: true,
-		}, nil
+	existing, found, lookupErr := s.Store.CVByFingerprint(ctx, uid, fingerprint)
+	if lookupErr != nil {
+		return cvDecision{}, lookupErr
+	}
+	if found {
+		existing.Parsed, existing.ExtractedText = parsed, text
+		refreshed, err := s.Store.RefreshCVReview(ctx, uid, existing)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return cvDecision{}, err
+		}
+		if err == nil && refreshed.Approved {
+			return cvDecision{
+				Decision:  decisionReused,
+				Reason:    "This posting produces a CV identical to one you already approved.",
+				Alignment: alignment, CV: refreshed, Approved: true,
+			}, nil
+		}
 	}
 
 	document := models.CVDocument{
@@ -133,23 +149,25 @@ func (s *Server) decideCV(ctx context.Context, uid string, job models.JobWithMat
 		SizeBytes:   len(data),
 		// The structure is kept beside the file, so the CV can be shown as it
 		// will read, section by section, and compared with what it came from.
-		Parsed:       map[string]any{"tailored": tailoredMap(tailored)},
-		RoleFamily:   family,
-		Technologies: posting,
-		Fingerprint:  fingerprint,
+		Parsed:        parsed,
+		ExtractedText: text,
+		RoleFamily:    family,
+		Technologies:  posting,
+		Fingerprint:   fingerprint,
 	}
 	if hasBase {
 		document.ParentID = base.ID
 	}
-	// The rendered text is stored so the user can read what will be sent without
-	// opening the file.
-	if text, _, textErr := cv.ExtractText("tailored.pdf", data); textErr == nil {
-		document.ExtractedText = text
-	}
-
 	saved, err := s.Store.SaveCV(ctx, uid, document, data)
 	if err != nil {
 		return cvDecision{}, err
+	}
+	if saved.Approved {
+		return cvDecision{
+			Decision:  decisionReused,
+			Reason:    "This posting produces a CV identical to one you already approved.",
+			Alignment: alignment, CV: saved, Approved: true,
+		}, nil
 	}
 	var reason string
 	switch {

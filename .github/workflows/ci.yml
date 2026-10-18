@@ -55,7 +55,7 @@ jobs:
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
   web:
-    name: web (typecheck)
+    name: web (typecheck and tests)
     if: ${{ vars.CI_RUNNER != '' }}
     runs-on: ${{ vars.CI_RUNNER }}
     timeout-minutes: 15
@@ -73,6 +73,8 @@ jobs:
         run: npm ci
       - name: typecheck
         run: npm run typecheck
+      - name: test
+        run: npm test
 
   images:
     name: docker images
