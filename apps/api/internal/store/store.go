@@ -1016,15 +1016,15 @@ func (s *Store) RecordOutbound(ctx context.Context, u, jobID string) (string, st
 
 func (s *Store) DiscoverySettings(ctx context.Context, u string) (models.DiscoverySettings, error) {
 	var x models.DiscoverySettings
-	err := s.DB.QueryRow(ctx, `SELECT enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at FROM discovery_settings WHERE user_id=$1`, u).Scan(&x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
+	err := s.DB.QueryRow(ctx, `SELECT quiet_application_days,enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at FROM discovery_settings WHERE user_id=$1`, u).Scan(&x.QuietApplicationDays, &x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
 	if errors.Is(err, pgx.ErrNoRows) {
-		x = models.DiscoverySettings{Enabled: false, IntervalMinutes: 360, AutoPrepare: true, MinScore: 75, MaxJobsPerRun: 100}
+		x = models.DiscoverySettings{QuietApplicationDays: 10, Enabled: false, IntervalMinutes: 360, AutoPrepare: true, MinScore: 75, MaxJobsPerRun: 100}
 		err = nil
 	}
 	return x, err
 }
 func (s *Store) SaveDiscoverySettings(ctx context.Context, u string, x models.DiscoverySettings) (models.DiscoverySettings, error) {
-	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_settings(user_id,enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,next_run_at) VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $2 THEN now() ELSE NULL END) ON CONFLICT(user_id) DO UPDATE SET enabled=EXCLUDED.enabled,interval_minutes=EXCLUDED.interval_minutes,auto_prepare=EXCLUDED.auto_prepare,min_score=EXCLUDED.min_score,max_jobs_per_run=EXCLUDED.max_jobs_per_run,next_run_at=CASE WHEN EXCLUDED.enabled THEN COALESCE(discovery_settings.next_run_at,now()) ELSE NULL END,updated_at=now() RETURNING enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at`, u, x.Enabled, x.IntervalMinutes, x.AutoPrepare, x.MinScore, x.MaxJobsPerRun).Scan(&x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
+	err := s.DB.QueryRow(ctx, `INSERT INTO discovery_settings(quiet_application_days,user_id,enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,next_run_at) VALUES(COALESCE(NULLIF($7,0),10),$1,$2,$3,$4,$5,$6,CASE WHEN $2 THEN now() ELSE NULL END) ON CONFLICT(user_id) DO UPDATE SET quiet_application_days=CASE WHEN $7=0 THEN discovery_settings.quiet_application_days ELSE $7 END,enabled=EXCLUDED.enabled,interval_minutes=EXCLUDED.interval_minutes,auto_prepare=EXCLUDED.auto_prepare,min_score=EXCLUDED.min_score,max_jobs_per_run=EXCLUDED.max_jobs_per_run,next_run_at=CASE WHEN EXCLUDED.enabled THEN COALESCE(discovery_settings.next_run_at,now()) ELSE NULL END,updated_at=now() RETURNING quiet_application_days,enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at`, u, x.Enabled, x.IntervalMinutes, x.AutoPrepare, x.MinScore, x.MaxJobsPerRun, x.QuietApplicationDays).Scan(&x.QuietApplicationDays, &x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
 	return x, err
 }
 

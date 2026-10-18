@@ -67,6 +67,8 @@ func howToResolve(n Notification) string {
 		return "Nothing: this item is resolved."
 	}
 	switch n.Kind {
+	case "quiet_application":
+		return "Call draft_follow_up with application_id " + n.SubjectID + " to save a short draft, never sent, and show it to the user. Call update_application_status when the user reports a status change; they can also dismiss the reminder on the application's page in the web app."
 	case "answer":
 		return "Show the user the question and detail.answer word for word. Call approve_answer with answer_id " + n.SubjectID + " only when the user approves that exact wording, passing their edited wording if they change it."
 	case "cv":

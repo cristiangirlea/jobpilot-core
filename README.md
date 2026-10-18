@@ -632,9 +632,9 @@ Measured against a real Greenhouse posting with a 17-field form, 14 fields resol
 
 ## Notifications
 
-One list per user of everything that waits for the user's decision: unapproved answers (`answer`), unapproved CVs (`cv`), and outbox entries in `needs_review` or `ready` (`outbox`). A row opens when an item starts waiting and is resolved, not deleted, once it stops, so the list keeps a history; an item that waits again opens a new row. The web app shows the open count as a badge and the list at `/notifications`; agents read it with `list_pending_decisions` and the `review_pending_decisions` prompt.
+One list per user of everything that waits for the user's decision: unapproved answers (`answer`), unapproved CVs (`cv`), outbox entries in `needs_review` or `ready` (`outbox`), and applications in `applied` or `interview` with no status change for the user's `quiet_application_days` (default 10, `quiet_application`). A row opens when an item starts waiting and is resolved, not deleted, once it stops, so the list keeps a history; an item that waits again opens a new row. The web app shows the open count as a badge and the list at `/notifications`; agents read it with `list_pending_decisions` and the `review_pending_decisions` prompt.
 
-Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed changes nothing; pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
+Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed first opens due quiet-application reminders, once per status period; a dismissed reminder stays resolved until a later status change starts another period. A status change resolves the reminder in the same transaction; the application page can dismiss it without changing status, and dismissal keeps it resolved for that period. Notes edits and saving the same status do not restart the clock. Terminal statuses do not surface. There is no daily background pass; the API has no daily loop. Pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
 
 ## Applications and referral attribution
 
@@ -649,6 +649,12 @@ Application statuses are:
 - `withdrawn`
 
 Every status change creates an `application_events` history row.
+
+`POST /api/applications/{id}/follow-up` saves a short follow-up draft for an `applied` or `interview` application; it sends nothing. At most two drafts are stored per application, enforced in SQL even for concurrent requests; the third request returns 409. Rejected jobs remain locked. `GET /api/applications/{id}` includes `follow_ups`, shown with copy buttons on the application page. Drafting does not resolve a quiet reminder: a status change or dismissal does.
+
+The generator uses the profile and that application's sent outbox CV, cover letter and answers, never a different CV or the job posting as candidate facts. A CV changed after sending is excluded. Without an unchanged sent outbox record, including manually recorded submissions, the follow-up uses generic wording and the profile name: prepared documents and an `applied` status cannot prove which materials reached the employer. Deleted or overwritten submission materials cannot be reconstructed. The deterministic template is the default (`LLM_PROVIDER=none`); only accounts permitted to use the configured AI client reach it, and output outside verified wording falls back to the template. Every result remains a draft for review.
+
+`quiet_application_days` is a per-user integer from 1 to 365, default 10, on the existing discovery settings route (`GET`/`PUT /api/discovery/settings`), retaining its admin access rule. Omitting it preserves the stored value. `POST /api/applications/{id}/dismiss-follow-up` resolves only that user's quiet reminder for the current status period.
 
 Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint applies at the authorized partner link first, when one is configured; otherwise at the employer's own page (`employer_url`) when known, else the apply URL. It is blocked for rejected jobs. That order is decided in one place, `models.Job.ApplyTarget`. Composing and the MCP server use a different order with no partner link: the employer's page, else the apply URL. Composing reads the form at `models.Job.FormTarget` (a partner link is attribution, never a form), and the MCP server's `applyLinkOrder` sentence tells agents to give the user the `employer_url`, else the `apply_url` (it never sees a partner link).
 
@@ -776,7 +782,9 @@ With `ADMIN_EMAILS` set, these and `/api/ai/status` are for admins (signed in or
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`, `POST` | `/api/applications` | List or create applications |
-| `GET` | `/api/applications/{id}` | Application, documents, and history |
+| `GET` | `/api/applications/{id}` | Application, documents, and follow-up drafts |
+| `POST` | `/api/applications/{id}/follow-up` | Save a follow-up draft, never send; at most two (409 after two) |
+| `POST` | `/api/applications/{id}/dismiss-follow-up` | Dismiss the quiet reminder for the current status period |
 | `PATCH` | `/api/applications/{id}` | Update status and application data |
 
 `PATCH /api/applications/{id}` treats `notes` as optional: omit the field to keep the stored notes, send a string to replace them, and send `""` to clear them. A client that only moves the status therefore cannot erase what the user wrote.
@@ -858,6 +866,7 @@ The catalog an agent host downloads at the start of every session is about 34 KB
 | `generate_documents` | write | Deterministic documents for a job; refused for rejected jobs |
 | `create_application` | write | Draft application record; idempotent; refused for rejected jobs |
 | `update_application_status` | write | Status change with history; keeps existing notes unless new notes are passed |
+| `draft_follow_up` | write | Save a short follow-up from sent application materials and profile, never send; at most two per application |
 | `import_job` | write | Add one posting by hand; a rejected import still returns with its reasons |
 | `add_discovery_source` | write | Save a source for the scheduler; validate it first |
 | `run_discovery` | write | Run every active source now, reporting progress when the host asks for it |
@@ -975,6 +984,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 | `023_invites.sql` | Single-use sign-up invite codes, stored as digests |
 | `024_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
+| `026_quiet_applications.sql` | Per-user quiet-day threshold, status clock and resolve trigger, and follow-up drafts limited to two per application |
 
 Core entities:
 

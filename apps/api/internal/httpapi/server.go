@@ -62,7 +62,8 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-const Contract = 10
+//	11: quiet notifications and stored follow-up drafts, capped at two.
+const Contract = 11
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -207,6 +208,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/applications", w(s.createApplication))
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
+	m.Handle("POST /api/applications/{id}/follow-up", w(s.requireVerified(s.draftFollowUp)))
+	m.Handle("POST /api/applications/{id}/dismiss-follow-up", w(s.dismissQuietApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))
 	m.Handle("GET /api/discovery/settings", ap(s.discoverySettings))
@@ -818,7 +821,12 @@ func (s *Server) getApplication(w http.ResponseWriter, r *http.Request) {
 		internal(w, e)
 		return
 	}
-	write(w, 200, map[string]any{"application": a, "documents": d, "blocked": job.Match.Rejected, "block_reasons": job.Match.RejectionReasons})
+	followUps, e := s.Store.FollowUps(ctx, uid, a.ID)
+	if e != nil {
+		internal(w, e)
+		return
+	}
+	write(w, 200, map[string]any{"application": a, "documents": d, "follow_ups": followUps, "blocked": job.Match.Rejected, "block_reasons": job.Match.RejectionReasons})
 }
 
 type applicationUpdate struct {
@@ -859,6 +867,10 @@ func (s *Server) discoverySettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveDiscoverySettings(w http.ResponseWriter, r *http.Request) {
 	var x models.DiscoverySettings
 	if !decode(w, r, &x) {
+		return
+	}
+	if x.QuietApplicationDays < 0 || x.QuietApplicationDays > 365 {
+		problem(w, 422, "Quiet application days must be from 1 to 365.")
 		return
 	}
 	if x.IntervalMinutes < 360 || x.MinScore < 0 || x.MinScore > 100 || x.MaxJobsPerRun < 1 || x.MaxJobsPerRun > 500 {
