@@ -234,6 +234,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:  "get_cv",
 		Title: "Get a CV",
 		Description: "Return one CV with its extracted text and the fields read out of it. The parsed warnings list says what could not be read, which is worth telling the user about. " +
+			"For a tailored CV, parsed.text_layer reports contact integrity, reading order, and posting keyword coverage; parsed.blockers lists PDF failures that prevent approval. Show the findings to the user. A keyword gap is unsupported by stored facts and must never be added; there is no ATS pass percentage. " +
 			"These facts, with the profile, are the only source for anything written on the user's behalf.",
 		Annotations: readOnly("Get a CV"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in cvInput) (*mcp.CallToolResult, CVDocument, error) {

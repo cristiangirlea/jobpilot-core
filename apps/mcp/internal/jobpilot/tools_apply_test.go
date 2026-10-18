@@ -63,6 +63,10 @@ func (f *fakeAPI) applyRoutes(m *http.ServeMux, send func(http.ResponseWriter, i
 		send(w, 200, `[{"id":"cv-1","kind":"base","filename":"cv.pdf","format":"pdf","size_bytes":120000,"approved":`+boolJSON(!f.listedCVUnapproved.Load())+`,"fingerprint":"`+hex.EncodeToString(sum[:])+`","created_at":"2026-09-01T00:00:00Z","updated_at":"2026-09-01T00:00:00Z"}]`)
 	})
 	m.HandleFunc("GET /api/cv/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.PathValue("id") == "cv-text-layer" {
+			send(w, 200, `{"id":"cv-text-layer","kind":"tailored","filename":"synthetic.pdf","format":"pdf","size_bytes":100,"approved":false,"parsed":{"blockers":["PDF text layer: phone is missing."],"warnings":["PDF text layer: phone is missing.","Keyword gap: Rust is not supported by stored facts."],"text_layer":{"blockers":["PDF text layer: phone is missing."],"keywords":[{"technology":"rust","status":"gap","present":false}]}}}`)
+			return
+		}
 		if r.PathValue("id") != "cv-1" {
 			send(w, 404, `{"error":"Record not found."}`)
 			return
@@ -402,6 +406,28 @@ func TestCVTools(t *testing.T) {
 	}
 	if res, text = call(t, cs, "tailor_cv_for_job", map[string]any{"job_id": "job-b"}); !res.IsError || !strings.Contains(text, "blocked") {
 		t.Fatalf("a rejected job must be refused: %s", text)
+	}
+}
+
+func TestGetCVReturnsTextLayerFindings(t *testing.T) {
+	cs, _ := session(t)
+	res, text := call(t, cs, "get_cv", map[string]any{"cv_id": "cv-text-layer"})
+	got := structured[CVDocument](t, res)
+	if res.IsError || got.Parsed["text_layer"] == nil || got.Parsed["blockers"] == nil || !strings.Contains(text, `"gap"`) || !strings.Contains(text, "phone") {
+		t.Fatalf("get_cv lost the PDF review findings: %s", text)
+	}
+	catalog, err := cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range catalog.Tools {
+		if tool.Name == "get_cv" {
+			for _, want := range []string{"text_layer", "blockers", "gap", "percentage"} {
+				if !strings.Contains(tool.Description, want) {
+					t.Errorf("get_cv description must explain %q: %s", want, tool.Description)
+				}
+			}
+		}
 	}
 }
 

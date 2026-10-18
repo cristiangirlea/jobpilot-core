@@ -4,10 +4,21 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"jobpilot/core/api/internal/models"
 )
+
+var ErrCVReviewBlocked = errors.New("CV approval is blocked by PDF text layer findings")
+
+func cvReviewBlockers(doc models.CVDocument) []string {
+	raw, _ := json.Marshal(doc.Parsed["blockers"])
+	var blockers []string
+	_ = json.Unmarshal(raw, &blockers)
+	return blockers
+}
 
 // cvColumns deliberately omits the file bytes: listings and detail views never
 // need them, and loading megabytes per row to render a list would be wasteful.
@@ -36,6 +47,9 @@ func scanCV(row pgx.Row) (models.CVDocument, error) {
 // refreshes the existing row rather than creating a duplicate to review, but it
 // clears approval, because the parse may now differ.
 func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument, data []byte) (models.CVDocument, error) {
+	if len(cvReviewBlockers(doc)) > 0 {
+		doc.Approved = false
+	}
 	parsed, err := json.Marshal(doc.Parsed)
 	if err != nil {
 		return models.CVDocument{}, err
@@ -133,6 +147,13 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 		return models.CVDocument{}, err
 	}
 	defer tx.Rollback(ctx)
+	current, err := scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND id=$2 FOR UPDATE`, userID, id))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if blockers := cvReviewBlockers(current); approved && len(blockers) > 0 {
+		return models.CVDocument{}, fmt.Errorf("%w: %s", ErrCVReviewBlocked, strings.Join(blockers, " "))
+	}
 	doc, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents
 		SET approved=$3, approved_at=CASE WHEN $3 THEN now() ELSE NULL END, updated_at=now()
 		WHERE user_id=$1 AND id=$2 RETURNING `+cvColumns, userID, id, approved))
@@ -146,6 +167,32 @@ func (s *Store) SetCVApproval(ctx context.Context, userID, id string, approved b
 		return models.CVDocument{}, err
 	}
 	return doc, tx.Commit(ctx)
+}
+
+// RefreshCVReview keeps identical-file approval only while the fresh checks allow it.
+func (s *Store) RefreshCVReview(ctx context.Context, userID string, doc models.CVDocument) (models.CVDocument, error) {
+	parsed, err := json.Marshal(doc.Parsed)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	defer tx.Rollback(ctx)
+	clearApproval := len(cvReviewBlockers(doc)) > 0
+	saved, err := scanCV(tx.QueryRow(ctx, `UPDATE cv_documents SET
+		parsed=$3, extracted_text=$4, approved=approved AND NOT $5,
+		approved_at=CASE WHEN $5 THEN NULL ELSE approved_at END, updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND fingerprint=$6 RETURNING `+cvColumns,
+		userID, doc.ID, parsed, doc.ExtractedText, clearApproval, doc.Fingerprint))
+	if err != nil {
+		return models.CVDocument{}, err
+	}
+	if err := syncCVBlocker(ctx, tx, userID, saved); err != nil {
+		return models.CVDocument{}, err
+	}
+	return saved, tx.Commit(ctx)
 }
 
 func (s *Store) DeleteCV(ctx context.Context, userID, id string) error {

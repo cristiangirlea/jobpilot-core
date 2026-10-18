@@ -556,6 +556,10 @@ Reuse mirrors the answer bank: an approved tailored CV is reused for a later pos
 
 Tailored CVs render as a single column, and the font is embedded.
 
+After rendering, the PDF is read back through the same text extractor used for uploads. The review checks that the stored name, email and phone remain intact on a line, and that section headings and each experience's title, company and dates appear in reading order. Findings are stored in `parsed.text_layer`, with contact and reading-order failures in `parsed.blockers`; those failures prevent approval with 409. Readable findings are also returned in `parsed.warnings` and by `get_cv`.
+
+Keyword coverage uses the shared technology vocabulary on the posting and extracted text: `covered` means present and supported by stored profile or CV facts, `missing` means supported but absent from the PDF text, and `gap` means unsupported. A gap is reported, never inserted into the CV, and keyword findings do not block approval. These are findings, with no ATS pass percentage. All checks are deterministic and work with `LLM_PROVIDER=none`.
+
 Both choices are load-bearing rather than aesthetic. A two-column CV interleaves its sidebar with the main text when a machine reads it - the failure this project's own parser had to be taught around - and the machine reading a submitted CV is usually the employer's ATS. The embedded font exists because the first renderer written here emitted an identity ToUnicode map, which silently turned "București" into a control character for every reader, including an ATS. Any replacement renderer must be verified by reading its own output back; `TestRenderedPDFIsMachineReadable` does exactly that.
 
 ## Reading employer application forms
@@ -868,7 +872,7 @@ Apply engine:
 |---|---|---|
 | `get_ai_status` | read | Whether an AI provider is configured at all |
 | `list_answers` | read | The answer bank; pending answers are drafts awaiting approval |
-| `list_cvs`, `get_cv` | read | CVs and their extracted text, including what could not be parsed |
+| `list_cvs`, `get_cv` | read | CVs and their extracted text, parse warnings, and tailored PDF text-layer blockers and keyword findings; no ATS pass percentage |
 | `list_outbox`, `get_outbox_entry` | read | Composed applications, their blockers and every answer's provenance |
 | `detect_board` | read | Work out the provider and identifier behind a careers URL |
 | `list_board_suggestions` | read | Curated employer boards known to work as sources |
