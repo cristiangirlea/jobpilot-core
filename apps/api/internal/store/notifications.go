@@ -103,12 +103,12 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
 		return err
 	}
 	defer tx.Rollback(ctx)
-	_, err = tx.Exec(ctx, `SELECT notification_resolve(n.user_id,'quiet_application',n.subject_id)
-        FROM notifications n
-        JOIN applications a ON a.user_id=n.user_id AND a.id::text=n.subject_id
-        JOIN job_matches m ON m.user_id=a.user_id AND m.job_id=a.job_id
+	// Marked, unlike a dismissal, so the reminder can reopen if a filter change lifts the rejection.
+	_, err = tx.Exec(ctx, `UPDATE notifications n SET resolved_at=now(), updated_at=now(),
+            detail=n.detail||'{"resolved_by":"rejected"}'
+        FROM applications a JOIN job_matches m ON m.user_id=a.user_id AND m.job_id=a.job_id
         WHERE n.user_id=$1 AND n.kind='quiet_application' AND n.resolved_at IS NULL
-        AND m.rejected=true`, userID)
+        AND a.user_id=n.user_id AND a.id::text=n.subject_id AND m.rejected=true`, userID)
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,8 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
         AND a.status_changed_at <= now()-make_interval(days=>COALESCE(d.quiet_application_days,10))
         AND a.status_changed_at > now()-make_interval(days=>COALESCE(d.quiet_application_days,10)+60)
         AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id=a.user_id AND n.kind='quiet_application'
-            AND n.subject_id=a.id::text AND n.created_at>=a.status_changed_at)
+            AND n.subject_id=a.id::text AND n.created_at>=a.status_changed_at
+            AND n.detail->>'resolved_by' IS DISTINCT FROM 'rejected')
         ORDER BY a.id FOR UPDATE OF a`, userID)
 	if err != nil {
 		return err
@@ -149,7 +150,8 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
             WHERE a.user_id=$1 AND a.id=$2 AND a.status IN ('applied','interview')
             AND NOT COALESCE(m.rejected,false)
             AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id=a.user_id AND n.kind='quiet_application'
-                AND n.subject_id=a.id::text AND n.created_at>=a.status_changed_at)`, userID, id)
+                AND n.subject_id=a.id::text AND n.created_at>=a.status_changed_at
+                AND n.detail->>'resolved_by' IS DISTINCT FROM 'rejected')`, userID, id)
 		if err != nil {
 			return err
 		}

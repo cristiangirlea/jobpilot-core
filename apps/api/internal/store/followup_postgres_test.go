@@ -177,6 +177,73 @@ func TestQuietReviewRegressionsPostgres(t *testing.T) {
 		if e != nil || f.Open != 0 || len(f.Items) != 1 || f.Items[0].ID != reminderID || f.Items[0].ResolvedAt == nil {
 			t.Fatalf("resolved reminder history missing: %+v %v", f, e)
 		}
+		// A filter change can lift the rejection; the reminder was never handled by the user.
+		exec(`UPDATE job_matches SET rejected=false WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		f, e = st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 1 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID || f.Items[0].ID == reminderID {
+			t.Fatalf("lifted rejection must reopen the reminder: %+v %v", f, e)
+		}
+	})
+	t.Run("rejection lifted after dismissal", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		if e := st.DismissQuietApplication(ctx, user.ID, a.ID); e != nil {
+			t.Fatal(e)
+		}
+		exec(`UPDATE job_matches SET rejected=true WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		if _, e := st.Notifications(ctx, user.ID, "open", "", 200); e != nil {
+			t.Fatal(e)
+		}
+		exec(`UPDATE job_matches SET rejected=false WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 0 {
+			t.Fatalf("dismissal must outlast a rejection round trip: %+v %v", f, e)
+		}
+	})
+	t.Run("no match row", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		exec(`DELETE FROM job_matches WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		for i := 0; i < 2; i++ {
+			f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+			if e != nil || f.Open != 1 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID {
+				t.Fatalf("read %d: an unmatched application stays reminded: %+v %v", i, f, e)
+			}
+		}
+	})
+	t.Run("another account's rejected reminder", func(t *testing.T) {
+		other, e := st.CreateUser(ctx, fmt.Sprintf("quiet-review-other-%d@example.test", time.Now().UnixNano()), "fake")
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer exec(`DELETE FROM users WHERE id=$1`, other.ID)
+		j, e := st.InsertJob(ctx, other.ID, models.JobInput{Title: "Engineer", Company: "Other Account", Description: "Build", ApplyURL: fmt.Sprintf("https://example.test/other-%d", time.Now().UnixNano())}, models.Evaluation{Score: 80}, "")
+		if e != nil {
+			t.Fatal(e)
+		}
+		oa, e := st.CreateApplication(ctx, other.ID, j.Job.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e := st.UpdateApplication(ctx, other.ID, oa.ID, "applied", nil); e != nil {
+			t.Fatal(e)
+		}
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, oa.ID)
+		if f, e := st.Notifications(ctx, other.ID, "open", "", 200); e != nil || f.Open != 1 {
+			t.Fatalf("other account's reminder: %+v %v", f, e)
+		}
+		exec(`UPDATE job_matches SET rejected=true WHERE user_id=$1 AND job_id=$2`, other.ID, oa.JobID)
+		if _, e := st.Notifications(ctx, user.ID, "open", "", 200); e != nil {
+			t.Fatal(e)
+		}
+		var open int
+		if e := pool.QueryRow(ctx, `SELECT count(*) FROM notifications WHERE user_id=$1 AND resolved_at IS NULL`, other.ID).Scan(&open); e != nil || open != 1 {
+			t.Fatalf("one account's feed read resolved another's reminder: %d %v", open, e)
+		}
 	})
 	t.Run("steady state", func(t *testing.T) {
 		// Remove notifications of applications deleted by the other subtests.
