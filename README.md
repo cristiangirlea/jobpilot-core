@@ -429,6 +429,8 @@ Both new filter rules default off, including for existing presets: findings chan
 
 Warnings remain broad, with optional and negated wording checked within each requirement's own window. Rejection needs a separate strict citizenship, residency, clearance or language template and a clean sentence (no negation or question), with no alternative touching the requirement, no preference in its own window and no negative key-value answer.
 
+Comma-separated eligibility alternatives and conditional or limited-scope requirements only warn. A strict `for` tail must name this/the role, position or job; `Only ... citizens can/may` must continue with `apply`. Wrapped lines starting with a lowercase letter, a parenthesis or `or`/`and`/`but` are read together; bullets, paragraph breaks and other capitalised lines stay separate.
+
 PUT preserves either rule's stored value when an older client omits its field; an explicit `false` still disables it (API contract 12).
 
 ### Score weights

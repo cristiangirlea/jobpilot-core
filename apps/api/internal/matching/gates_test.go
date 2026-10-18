@@ -131,7 +131,7 @@ func TestLanguagePhrases(t *testing.T) {
 }
 
 func TestGateQuotes(t *testing.T) {
-	sentence := "Applicants must be a Canadian citizen for " + strings.Repeat("é", 210) + "."
+	sentence := "Applicants must be a Canadian citizen for this role " + strings.Repeat("é", 210) + "."
 	e := Evaluate(models.Profile{}, nil, gateFilter(t, true, true), models.JobInput{Description: "Build software.\n" + sentence + " Work remotely."}, time.Time{})
 	if len(e.Warnings) != 1 || len(e.RejectionReasons) != 1 {
 		t.Fatalf("%+v", e)

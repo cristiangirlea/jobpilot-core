@@ -31,6 +31,7 @@ var negatedRequirement = regexp.MustCompile(`(?i)(?:\b(?:not|never|no|nor|none|n
 var optionalRequirement = regexp.MustCompile(`(?i)\b(?:plus|bonus|nice[- ]to[- ]have|preferred|preferably|desired|desirable|advantage|advantageous|asset|beneficial|priority|encouraged|welcome|helpful|ideally|optional)\b`)
 var eligibilityWords = regexp.MustCompile(`(?i)\b(?:citizens?(?:ship)?|permanent residen\w*|clearance)\b`)
 var requirementBoundary = regexp.MustCompile(`(?i)[,;]|\band\s+`)
+var eligibilityComma = regexp.MustCompile(`(?i)^\s*,\s*(?:(?:a|an|lawful|valid|active|current)\s+)*$`)
 
 // A neighbouring requirement owns its own optional/negative wording. Keep a
 // trailing relative clause (", which is a plus") when there is no next hit.
@@ -61,6 +62,21 @@ func requirementWindow(text string, start, end int, words [][]int) (int, int) {
 	return left, right
 }
 
+// A comma list may put its "or" after a second eligibility term. Read through
+// that run, but stop at a separate requirement with its own predicate.
+func eligibilityAlternativeEnd(clause string, end int, words [][]int) int {
+	for _, word := range words {
+		if word[0] < end {
+			continue
+		}
+		if !eligibilityComma.MatchString(clause[end:word[0]]) {
+			return word[0]
+		}
+		end = word[1]
+	}
+	return len(clause)
+}
+
 // Warning guards are local; rejection also checks the entire sentence.
 func mandatoryRequirement(clause string, start int) bool {
 	return !negatedRequirement.MatchString(clause[:start]) && !optionalRequirement.MatchString(clause)
@@ -77,9 +93,10 @@ var strictEligibility = []*regexp.Regexp{
 }
 var sentenceNegation = regexp.MustCompile(`(?i)\b(?:no|not|nor|none|never|neither|without)\b|n['’]t\b`)
 var requirementAlternative = regexp.MustCompile(`(?i)\b(?:or|either|alternatively)\b`)
-var uncertainRequirement = regexp.MustCompile(`(?i)\b(?:if|where|when|who|whether)\b`)
+var uncertainRequirement = regexp.MustCompile(`(?i)\b(?:if|where|when|who|whether|unless|except|apart from)\b`)
+var scopedRequirement = regexp.MustCompile(`(?i)\b(?:only|except|unless|apart from)\b`)
 var negativeAnswer = regexp.MustCompile(`(?i)(?:^|[:–-])\s*(?:no|none|n/a|not required)\b`)
-var strictTail = regexp.MustCompile(`(?i)^\s*(?:$|[.,;!)]|(?:to apply|may|can|are eligible|of|for|before|and)\b)`)
+var strictTail = regexp.MustCompile(`(?i)^\s*(?:$|[.,;!)]|(?:to apply|(?:may|can) apply|are eligible|of|for (?:this|the) (?:role|position|job)|before|and)\b)`)
 var strictListHeading = regexp.MustCompile(`(?i)\brequired languages:\s*`)
 var strictListTail = regexp.MustCompile(`^\s*[.!]?\s*$`)
 
@@ -87,8 +104,12 @@ func cleanRejectionSentence(sentence string) bool {
 	return !strings.Contains(sentence, "?") && !sentenceNegation.MatchString(sentence) && !negativeAnswer.MatchString(sentence)
 }
 
-func cleanRejectionWindow(window string) bool {
-	return !optionalRequirement.MatchString(window) && !requirementAlternative.MatchString(window) && !uncertainRequirement.MatchString(window)
+func cleanRejectionWindow(clause string, left, right, end int) bool {
+	window := clause[left:right]
+	// Conditions before a neighbouring requirement still qualify this one.
+	// Scope limits follow the template; its leading "Only ... citizens" is valid.
+	return !optionalRequirement.MatchString(window) && !requirementAlternative.MatchString(window) &&
+		!uncertainRequirement.MatchString(clause[:right]) && !scopedRequirement.MatchString(clause[end:right])
 }
 
 func checkStrictEligibility(e *models.Evaluation, sentence, clause string, offset int, reject bool) {
@@ -97,13 +118,13 @@ func checkStrictEligibility(e *models.Evaluation, sentence, clause string, offse
 		for _, span := range pattern.FindAllStringIndex(clause, -1) {
 			left, right := requirementWindow(clause, span[0], span[1], words)
 			window := clause[left:right]
-			if !mandatoryRequirement(window, span[0]-left) || !strictTail.MatchString(clause[span[1]:]) {
+			if !mandatoryRequirement(window, span[0]-left) {
 				continue
 			}
 			quoted := findingQuote(sentence, offset+span[0], offset+span[1])
 			e.Warnings = appendUnique(e.Warnings, "Posting requires eligibility: "+quoted)
-			_, outerRight := requirementRange(clause, span[0], span[1], words)
-			if reject && cleanRejectionWindow(window) && !requirementAlternative.MatchString(clause[left:outerRight]) {
+			outerRight := eligibilityAlternativeEnd(clause, span[1], words)
+			if reject && strictTail.MatchString(clause[span[1]:]) && cleanRejectionWindow(clause, left, right, span[1]) && !requirementAlternative.MatchString(clause[left:outerRight]) {
 				e.RejectionReasons = appendUnique(e.RejectionReasons, "Active filter rejects eligibility requirements: "+quoted)
 			}
 		}
@@ -300,6 +321,7 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 		}
 	}
 	for _, text := range []string{j.Title, j.Description} {
+		text = joinPostingLines(text)
 		var hits []languageHit
 		if len(listed) > 0 {
 			hits = findLanguages(text, true)
@@ -403,7 +425,7 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 								strict = strict || span[0] <= hit.start-left && span[1] >= hit.end-left && strictTail.MatchString(window[span[1]:])
 							}
 							_, outerRight := requirementRange(clause, hit.start, hit.end, languageSpans)
-							if !profile.listed && !alternative && allRecognised && f != nil && f.RejectUnlistedLanguages && strict && cleanRejectionSentence(sentence) && cleanRejectionWindow(window) && !requirementAlternative.MatchString(clause[left:outerRight]) {
+							if !profile.listed && !alternative && allRecognised && f != nil && f.RejectUnlistedLanguages && strict && cleanRejectionSentence(sentence) && cleanRejectionWindow(clause, left, right, hit.end) && !requirementAlternative.MatchString(clause[left:outerRight]) {
 								e.RejectionReasons = appendUnique(e.RejectionReasons, "Active filter rejects unlisted language "+hit.pattern.name+": "+quoted)
 							}
 						}
@@ -416,6 +438,31 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 	}
 }
 
+// Hard wraps and HTML <br> continuations belong to one sentence. Preserve
+// paragraph breaks, bullets and capitalised lines as separate requirements.
+func joinPostingLines(text string) string {
+	if !strings.ContainsAny(text, "\r\n") {
+		return text
+	}
+	text = strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(text, "\n")
+	var out strings.Builder
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if i > 0 {
+			first, _ := utf8.DecodeRuneInString(line)
+			word, _, _ := strings.Cut(strings.ToLower(line), " ")
+			if strings.TrimSpace(lines[i-1]) != "" && (unicode.IsLower(first) || first == '(' || word == "or" || word == "and" || word == "but") {
+				out.WriteByte(' ')
+			} else {
+				out.WriteByte('\n')
+			}
+		}
+		out.WriteString(line)
+	}
+	return out.String()
+}
+
 func postingSentences(text string) []string {
 	var out []string
 	start := 0
@@ -423,7 +470,7 @@ func postingSentences(text string) []string {
 		end := i + len(string(r))
 		boundary := r == '\n' || r == '\r' || (r == '.' || r == '!' || r == '?') && (end == len(text) || startsWithSpace(text[end:]))
 		if r == '.' {
-			for _, abbreviation := range []string{"u.s.", "u.k.", "e.g.", "i.e."} {
+			for _, abbreviation := range []string{"u.s.", "u.s.c.", "u.k.", "e.g.", "i.e."} {
 				if end-start >= len(abbreviation) && strings.EqualFold(text[end-len(abbreviation):end], abbreviation) {
 					boundary = false
 				}

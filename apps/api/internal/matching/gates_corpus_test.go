@@ -8,9 +8,49 @@ import (
 	"jobpilot/core/api/internal/models"
 )
 
+// Fifth review: every explicit requirement still warns, but its alternatives,
+// conditional context, limited scope or wrapped continuation forbids rejection.
+var fifthReviewWarningOnly = []string{
+	// B1: the alternative can follow another comma-separated eligibility term.
+	"Applicants must be a U.S. citizen, lawful permanent resident, or protected individual as defined by 8 U.S.C. 1324b(a)(3).",
+	"Applicants must be a U.S. citizen, lawful permanent resident, or protected individual as defined by 8 U.S.C. 1324b(a)(3), or eligible to obtain the required authorizations.",
+	"Applicants must be a U.S. citizen, lawful permanent resident, protected individual as defined by 8 U.S.C. 1324b(a)(3), or eligible to obtain the required authorizations.",
+	// B2: only applying/eligibility is a strict predicate after "Only ... citizens".
+	"Only EU citizens can be hired directly, and everyone else joins as a contractor through our partner.",
+	"Only U.S. citizens can access the classified programme; this role is on the commercial team.",
+	// B3: a neighbouring requirement must not hide the conditional prefix.
+	"If the client requires a security clearance, U.S. citizenship is required.",
+	"If you cover our French accounts, French is required.",
+	"When the client requires a security clearance, U.S. citizenship is required.",
+	"Where you cover our French accounts, French is required.",
+	"Security clearance is required, unless you work remotely.",
+	"German is required, unless you join the London team.",
+	// B4: <br> is represented by Readable's newline at the matcher boundary.
+	"Must be a U.S. citizen\nor lawful permanent resident.",
+	"Must be a U.S. citizen<br>(green card holders also considered)",
+	"Must be a U.S. citizen\n(green card holders also considered)",
+	"Think you must speak German\nto join us? You don't.",
+	"Must be a U.S. citizen\r\nOr lawful permanent resident.",
+	"German is required\nand only for the Munich office.",
+	"Security clearance is required\nBut only for on-site work.",
+	// B5: company/client/office requirements do not prove this job's scope.
+	"U.S. citizenship is required for certain positions due to export control regulations.",
+	"A security clearance is required for some client projects.",
+	"German is required for the Munich office.",
+	"Security clearance is required, but only for on-site work.",
+	"US citizenship is required, except for our Canadian office.",
+	"German is required only for the Munich office.",
+	"French is required, apart from our London team.",
+}
+
+func corpusPosting(text string) models.JobInput {
+	// Discovery.Readable converts <br> to a newline before matching.
+	return models.JobInput{Description: strings.ReplaceAll(text, "<br>", "\n")}
+}
+
 // Ordinary posting prose must not make a job unavailable.
 func TestGatesDoNotRejectOrdinaryPostingText(t *testing.T) {
-	for _, text := range []string{
+	for _, text := range append([]string{
 		"Our team in Berlin speaks German and English.",
 		"We are a French company serving customers across Europe.",
 		"Our offices in Canada and Australia collaborate daily.",
@@ -236,9 +276,9 @@ func TestGatesDoNotRejectOrdinaryPostingText(t *testing.T) {
 		"This role requires US citizenship.",
 		"German is a must.",
 		"German teams work with French teams, but German is required? No.",
-	} {
+	}, fifthReviewWarningOnly...) {
 		t.Run(text, func(t *testing.T) {
-			e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, true, true), models.JobInput{Description: text}, time.Time{})
+			e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, true, true), corpusPosting(text), time.Time{})
 			if e.Rejected {
 				t.Fatalf("ordinary text rejected: %+v", e)
 			}
@@ -275,7 +315,7 @@ func TestGateRequirementWindows(t *testing.T) {
 
 // Conservative detection must still warn about explicit requirements.
 func TestGatesWarnForRealRequirements(t *testing.T) {
-	for _, text := range []string{
+	for _, text := range append([]string{
 		"Applicants must be a citizen of Canada.",
 		"U.S. citizenship is required.",
 		"Only US citizens may apply.",
@@ -316,10 +356,10 @@ func TestGatesWarnForRealRequirements(t *testing.T) {
 		"You will support clients who need to become US citizens.",
 		"This role requires security clearance vetting experience.",
 		"German is a must.",
-	} {
+	}, fifthReviewWarningOnly...) {
 		t.Run(text, func(t *testing.T) {
 			for _, enabled := range []bool{false, true} {
-				e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, enabled, enabled), models.JobInput{Description: text}, time.Time{})
+				e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, enabled, enabled), corpusPosting(text), time.Time{})
 				if len(e.Warnings) == 0 {
 					t.Fatalf("missing requirement warning (rules=%t): %+v", enabled, e)
 				}
@@ -344,6 +384,10 @@ func TestGatesRejectStrictRequirements(t *testing.T) {
 			"British citizenship is required.", "Only US citizens may apply.",
 			"Only U.S. citizens can apply.", "Only Canadian citizens are eligible.",
 			"Only Australian citizens.",
+			"US citizenship is required for the position.",
+			"Must be a U.S. citizen, active Secret clearance preferred.",
+			"No clearance required\nMust be a U.S. citizen.",
+			"No clearance required\n• Must be a U.S. citizen.",
 		}},
 		{"residency", true, []string{
 			"Must be a permanent resident.", "You must be a permanent resident.",
@@ -377,6 +421,8 @@ func TestGatesRejectStrictRequirements(t *testing.T) {
 			"Fluent German is required, English is a plus.",
 			"German (C1) is required, French is an advantage.",
 			"Fluent German is required and English is preferred.",
+			"German is required for this role.", "French is required for the job.",
+			"No French required\n• German is required.",
 		}},
 	} {
 		for _, text := range tc.texts {
