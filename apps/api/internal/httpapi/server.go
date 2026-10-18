@@ -64,7 +64,9 @@ import (
 //	   answers, creating agent tokens, and linking a Google identity.
 //	11: tailored CVs carry PDF text layer findings in parsed; contact and
 //	   reading-order blockers refuse CV approval with 409.
-const Contract = 11
+//	12: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
+//	13: PUT keeps stored eligibility and language rules when their fields are absent.
+const Contract = 13
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -527,14 +529,46 @@ func (s *Server) listFilters(w http.ResponseWriter, r *http.Request) {
 	respond(w, x, e)
 }
 func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
-	var x models.FilterPreset
-	if !decode(w, r, &x) {
+	var input struct {
+		models.FilterPreset
+		RejectEligibilityRequirements *bool `json:"reject_eligibility_requirements"`
+		RejectUnlistedLanguages       *bool `json:"reject_unlisted_languages"`
+	}
+	if !decode(w, r, &input) {
 		return
 	}
+	x := input.FilterPreset
 	x.ID = r.PathValue("id")
 	if strings.TrimSpace(x.Name) == "" || x.MinSalary < 0 || x.MaxAgeDays < 0 {
 		problem(w, 422, "Filter name is required and numeric limits cannot be negative.")
 		return
+	}
+	// Older clients omit rules they cannot represent.
+	if r.Method == http.MethodPut && (input.RejectEligibilityRequirements == nil || input.RejectUnlistedLanguages == nil) {
+		presets, err := s.Store.Filters(r.Context(), auth.UserID(r.Context()))
+		if err != nil {
+			internal(w, err)
+			return
+		}
+		found := false
+		for _, stored := range presets {
+			if stored.ID == x.ID {
+				x.RejectEligibilityRequirements = stored.RejectEligibilityRequirements
+				x.RejectUnlistedLanguages = stored.RejectUnlistedLanguages
+				found = true
+				break
+			}
+		}
+		if !found {
+			problem(w, http.StatusNotFound, "Filter not found.")
+			return
+		}
+	}
+	if input.RejectEligibilityRequirements != nil {
+		x.RejectEligibilityRequirements = *input.RejectEligibilityRequirements
+	}
+	if input.RejectUnlistedLanguages != nil {
+		x.RejectUnlistedLanguages = *input.RejectUnlistedLanguages
 	}
 	x.IncludedTitles = nonNil(x.IncludedTitles)
 	x.ExcludedTitleWords = nonNil(x.ExcludedTitleWords)

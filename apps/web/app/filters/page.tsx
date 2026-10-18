@@ -4,7 +4,7 @@ import {FormEvent,useEffect,useState} from "react";
 import {Shell} from "@/components/Shell";
 import {ErrorMessage,Field,Header,ListInput,Notice} from "@/components/UI";
 import {api,join} from "@/lib/api";
-import {Filter} from "@/lib/types";
+import {Filter,Profile} from "@/lib/types";
 import {CompanyExclusions} from "@/components/CompanyExclusions";
 
 const newFilter=():Filter=>({
@@ -12,6 +12,7 @@ const newFilter=():Filter=>({
   locations:[],remote_types:["remote"],min_salary:0,currency:"EUR",
   employment_types:[],excluded_industries:[],required_skills:[],
   included_technologies:[],excluded_technologies:[],max_age_days:30,
+  reject_eligibility_requirements:false,reject_unlisted_languages:false,
 });
 
 export default function Filters(){
@@ -19,8 +20,9 @@ export default function Filters(){
   const [form,setForm]=useState<Filter>(newFilter());
   const [error,setError]=useState("");
   const [saved,setSaved]=useState("");
+  const [profile,setProfile]=useState<Profile|null>(null);
   const load=()=>api<Filter[]>("/filters").then(setItems).catch(e=>setError(e.message));
-  useEffect(()=>{load()},[]);
+  useEffect(()=>{load();api<Profile>("/profile").then(setProfile).catch(e=>setError(e.message))},[]);
 
   const list=(key:keyof Filter)=>(value:string[])=>setForm(current=>({...current,[key]:value}));
   async function save(e:FormEvent){
@@ -30,7 +32,7 @@ export default function Filters(){
       setForm(newFilter());setSaved("Filter saved. Existing jobs were re-evaluated with the active rules.");load();
     }catch(e){setError(e instanceof Error?e.message:"Unable to save filter")}
   }
-  function edit(item:Filter){setForm({...item,included_technologies:item.included_technologies||[],excluded_technologies:item.excluded_technologies||[]});window.scrollTo({top:0,behavior:"smooth"})}
+  function edit(item:Filter){setForm({...item,reject_eligibility_requirements:item.reject_eligibility_requirements??false,reject_unlisted_languages:item.reject_unlisted_languages??false,included_technologies:item.included_technologies||[],excluded_technologies:item.excluded_technologies||[]});window.scrollTo({top:0,behavior:"smooth"})}
   async function remove(id?:string){if(!id)return;setError("");try{await api(`/filters/${id}`,{method:"DELETE"});load()}catch(e){setError(e instanceof Error?e.message:"Unable to delete filter")}}
 
   return <Shell>
@@ -59,6 +61,10 @@ export default function Filters(){
           <Field label="Remote types"><ListInput value={form.remote_types} onChange={list("remote_types")} placeholder="remote, hybrid"/></Field>
           <div className="grid grid-cols-[1fr_100px] gap-3"><Field label="Minimum salary / rate"><input type="number" min="0" value={form.min_salary} onChange={e=>setForm({...form,min_salary:+e.target.value})}/></Field><Field label="Currency"><input value={form.currency} onChange={e=>setForm({...form,currency:e.target.value.toUpperCase()})}/></Field></div>
           <Field label="Maximum posting age (days)"><input type="number" min="0" value={form.max_age_days} onChange={e=>setForm({...form,max_age_days:+e.target.value})}/></Field>
+          <p className="muted">Eligibility and language findings are warnings unless you enable a rule below.</p>
+          <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.reject_eligibility_requirements} onChange={e=>setForm({...form,reject_eligibility_requirements:e.target.checked})}/> Reject citizenship, permanent residency or clearance requirements</label>
+          <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.reject_unlisted_languages} onChange={e=>setForm({...form,reject_unlisted_languages:e.target.checked})}/> Reject required languages missing from my profile</label>
+          {profile&&!(profile.languages?.length)&&<p className="muted">This rule does nothing until you list languages in your profile.</p>}
           <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/> Use this preset for matching</label>
         </section>
       </div>

@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"testing"
@@ -12,6 +13,96 @@ import (
 	database "jobpilot/core/api/internal/db"
 	"jobpilot/core/api/internal/models"
 )
+
+func TestFilterGateRulesPostgres(t *testing.T) {
+	url := os.Getenv("JOBPILOT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set JOBPILOT_TEST_DATABASE_URL to a migrated database to run this")
+	}
+	ctx := context.Background()
+	pool, err := database.Open(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	st := New(pool)
+	u, err := st.CreateUser(ctx, "filter-gates-"+time.Now().Format("20060102150405.000000")+"@example.test", "not a real hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, u.ID)
+	var legacyID string
+	if err := pool.QueryRow(ctx, `INSERT INTO filter_presets(user_id,name) VALUES($1,'Legacy') RETURNING id`, u.ID).Scan(&legacyID); err != nil {
+		t.Fatal(err)
+	}
+	check := func(id string, eligibility, language bool) models.FilterPreset {
+		t.Helper()
+		presets, err := st.Filters(ctx, u.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, f := range presets {
+			if f.ID != id {
+				continue
+			}
+			data, _ := json.Marshal(f)
+			var fields map[string]any
+			_ = json.Unmarshal(data, &fields)
+			if fields["reject_eligibility_requirements"] != eligibility || fields["reject_unlisted_languages"] != language {
+				t.Fatalf("unexpected rules: %s", data)
+			}
+			return f
+		}
+		t.Fatal("missing preset")
+		return models.FilterPreset{}
+	}
+	check(legacyID, false, false)
+	var f models.FilterPreset
+	if err := json.Unmarshal([]byte(`{"name":"Gates","active":true,"currency":"EUR","included_titles":[],"excluded_title_words":[],"locations":[],"remote_types":[],"employment_types":[],"excluded_industries":[],"required_skills":[],"included_technologies":[],"excluded_technologies":[],"reject_eligibility_requirements":true,"reject_unlisted_languages":true}`), &f); err != nil {
+		t.Fatal(err)
+	}
+	f, err = st.SaveFilter(ctx, u.ID, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f = check(f.ID, true, true)
+	active, err := st.ActiveFilter(ctx, u.ID)
+	if err != nil || active == nil || !active.RejectEligibilityRequirements || !active.RejectUnlistedLanguages {
+		t.Fatalf("active preset rules: %+v %v", active, err)
+	}
+	for _, changes := range []string{`{"reject_eligibility_requirements":false}`, `{"reject_unlisted_languages":false}`} {
+		if err := json.Unmarshal([]byte(changes), &f); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := st.SaveFilter(ctx, u.ID, f); err != nil {
+			t.Fatal(err)
+		}
+		check(f.ID, f.RejectEligibilityRequirements, f.RejectUnlistedLanguages)
+	}
+	check(f.ID, false, false)
+	active, err = st.ActiveFilter(ctx, u.ID)
+	if err != nil || active == nil || active.ID != f.ID {
+		t.Fatalf("active preset: %+v %v", active, err)
+	}
+	for _, reason := range []string{
+		`Active filter rejects eligibility requirements: "Our employer requires US citizenship."`,
+		`Active filter rejects unlisted language German: "German is required in our domain."`,
+		"Company matches current employer: Example",
+	} {
+		job, err := st.InsertJob(ctx, u.ID, models.JobInput{Title: "Engineer " + reason, Company: "Gate test " + u.ID}, models.Evaluation{Rejected: true, RejectionReasons: []string{reason}}, f.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pool.Exec(ctx, `DELETE FROM jobs WHERE id=$1`, job.Job.ID)
+	}
+	dashboard, err := st.Dashboard(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashboard["jobs_rejected_filters"] != 2 || dashboard["jobs_rejected_blacklist"] != 1 {
+		t.Fatalf("quoted text must not misclassify filter rejections: %+v", dashboard)
+	}
+}
 
 // Filter presets belong to one user. Another user can neither list, change
 // nor activate them, and activating a preset deactivates only the owner's

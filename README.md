@@ -337,7 +337,12 @@ Filter presets support:
 - Excluded industries.
 - Maximum posting age.
 
-Hard rejection occurs for an excluded title, excluded technology, incompatible location or remote policy, known compensation below the minimum, incompatible employment type, excluded industry, or an over-age posting.
+| Opt-in filter rule | Default | Rejection |
+|---|---|---|
+| `reject_eligibility_requirements` | `false` | Detected citizenship, permanent-residency or security-clearance requirement, with the posting's sentence quoted |
+| `reject_unlisted_languages` | `false` | Detected required language absent from the profile, with the posting's sentence quoted; a lower stated level only warns |
+
+Hard rejection occurs for an excluded title, excluded technology, incompatible location or remote policy, known compensation below the minimum, incompatible employment type, excluded industry, or an over-age posting. The two opt-in rules above also hard-reject when enabled.
 
 Unknown job metadata usually produces a warning rather than a false rejection. A remote role with a permitted remote policy but ambiguous geographic eligibility also warns rather than rejecting only from text mismatch.
 
@@ -413,6 +418,20 @@ Auto-prepare never opens a browser or submits an external application.
 ## Matching and scoring
 
 Each user receives an independent evaluation for a shared job.
+
+### Eligibility and language warnings
+
+Before scoring, deterministic, standard-library detectors read the title and description for explicit citizenship, permanent-residency, security-clearance, sponsorship and right-to-work phrases, including work permits, eligibility to work, positive sponsorship and international-applicant signals. Findings quote one original sentence, using a window of at most 200 runes around the match for long sentences. A nationality or work-authorization statement never implies eligibility for a jurisdiction, and positive signals never override a rejection. Citizenship with a green-card or permanent-resident alternative only warns.
+
+Required languages are detected by capitalised names and requirement phrases; company descriptions and optional languages do not count. Profile names are case-insensitive. When no `profile.languages` entry is recognised, comparison is skipped entirely; when only some entries are recognised, missing languages only warn. Otherwise, a missing language warns, as does a lower explicitly stated level (CEFR A1-C2, basic, intermediate, business-level, professional, fluent, advanced or native). An unstated profile level is not guessed. An `or` or `and/or` group, including a comma list ending in either joiner, is met if any member is listed; if none is listed, it only warns. Chinese and Mandarin share one family; common European native names are recognised in postings and profiles. Detection uses English requirement phrases; it is not a translation or legal-eligibility service.
+
+Both new filter rules default off, including for existing presets: findings change warnings only, preserving scores and existing rejections. With a rule enabled, its quoted reason is an ordinary final filter rejection, visible among rejected jobs and subject to the existing application blocks. Sponsorship and right-to-work signals remain warnings.
+
+Warnings remain broad, with optional and negated wording checked within each requirement's own window. Rejection needs a separate strict citizenship, residency, clearance or language template and a clean sentence (no negation or question), with no alternative touching the requirement, no preference in its own window and no negative key-value answer.
+
+Comma-separated eligibility alternatives and conditional or limited-scope requirements only warn. A strict `for` tail must name this/the role, position or job; `Only ... citizens can/may` must continue with `apply`. For rejection, wrapped lines starting with a lowercase letter, a parenthesis, a conjunction or a condition/alternative word (such as `Unless`, `Except`, `Either` or `Alternatively`) are read together, including punctuated `or,` and `and/or`; bullets (including `o `), paragraph breaks and other capitalised lines stay separate. Warnings also read the posting as written, restoring any requirement missed after joining without duplicating a joined-reading warning for the same occurrence. Conditions anywhere in the clause and scope limits after the requirement prevent rejection, even when another eligibility term or language follows.
+
+PUT preserves either rule's stored value when an older client omits its field; an explicit `false` still disables it (API contract 13).
 
 ### Score weights
 
@@ -847,7 +866,7 @@ The catalog an agent host downloads at the start of every session is about 34 KB
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_blacklist` | read | The user's excluded companies and reasons |
 | `add_to_blacklist` | write | Exclude a company and re-score the user's jobs; removal stays in the web app |
-| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
+| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, including opt-in `reject_eligibility_requirements` and `reject_unlisted_languages` (both default off); `active` makes it the only active one, and every save re-scores the user's jobs |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
@@ -979,6 +998,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `022_user_identities.sql` | Sign-in identities from Google, found again by the provider's subject |
 | `023_invites.sql` | Single-use sign-up invite codes, stored as digests |
 | `024_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
+| `025_filter_eligibility_language.sql` | Opt-in eligibility and unlisted-language rejection rules, both off for existing presets |
 
 Core entities:
 
