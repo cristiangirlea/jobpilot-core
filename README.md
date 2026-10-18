@@ -337,7 +337,12 @@ Filter presets support:
 - Excluded industries.
 - Maximum posting age.
 
-Hard rejection occurs for an excluded title, excluded technology, incompatible location or remote policy, known compensation below the minimum, incompatible employment type, excluded industry, or an over-age posting.
+| Opt-in filter rule | Default | Rejection |
+|---|---|---|
+| `reject_eligibility_requirements` | `false` | Detected citizenship, permanent-residency or security-clearance requirement, with the posting's sentence quoted |
+| `reject_unlisted_languages` | `false` | Detected required language absent from the profile, with the posting's sentence quoted; a lower stated level only warns |
+
+Hard rejection occurs for an excluded title, excluded technology, incompatible location or remote policy, known compensation below the minimum, incompatible employment type, excluded industry, or an over-age posting. The two opt-in rules above also hard-reject when enabled.
 
 Unknown job metadata usually produces a warning rather than a false rejection. A remote role with a permitted remote policy but ambiguous geographic eligibility also warns rather than rejecting only from text mismatch.
 
@@ -413,6 +418,14 @@ Auto-prepare never opens a browser or submits an external application.
 ## Matching and scoring
 
 Each user receives an independent evaluation for a shared job.
+
+### Eligibility and language warnings
+
+Before scoring, deterministic, standard-library detectors read the title and description for explicit citizenship, permanent-residency, security-clearance, sponsorship and right-to-work phrases, including positive sponsorship and international-applicant signals. Findings quote one original sentence, trimmed to 200 characters. A nationality or work-authorization statement never implies eligibility for a jurisdiction, and positive signals never override a rejection.
+
+Required languages are detected by name and requirement phrases; company descriptions and optional languages do not count. A language missing from `profile.languages` warns, as does a lower explicitly stated level (CEFR A1-C2, basic, intermediate, business-level, professional, fluent, advanced or native). An unstated profile level is not guessed. Detection covers common language names and English requirement phrases; it is not a translation or legal-eligibility service.
+
+Both new filter rules default off, including for existing presets: findings change warnings only, preserving scores and existing rejections. With a rule enabled, its quoted reason is an ordinary final filter rejection, visible among rejected jobs and subject to the existing application blocks. Sponsorship and right-to-work signals remain warnings.
 
 ### Score weights
 
@@ -843,7 +856,7 @@ The catalog an agent host downloads at the start of every session is about 34 KB
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_blacklist` | read | The user's excluded companies and reasons |
 | `add_to_blacklist` | write | Exclude a company and re-score the user's jobs; removal stays in the web app |
-| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, `active` makes it the only active one, and every save re-scores the user's jobs |
+| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, including opt-in `reject_eligibility_requirements` and `reject_unlisted_languages` (both default off); `active` makes it the only active one, and every save re-scores the user's jobs |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |

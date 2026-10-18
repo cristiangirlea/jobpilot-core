@@ -1,0 +1,196 @@
+package matching
+
+import (
+	"encoding/json"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"jobpilot/core/api/internal/models"
+)
+
+func gateFilter(t *testing.T, eligibility, language bool) *models.FilterPreset {
+	t.Helper()
+	var f models.FilterPreset
+	b, _ := json.Marshal(map[string]bool{"reject_eligibility_requirements": eligibility, "reject_unlisted_languages": language})
+	if err := json.Unmarshal(b, &f); err != nil {
+		t.Fatal(err)
+	}
+	return &f
+}
+
+func TestEligibilityPhrases(t *testing.T) {
+	for _, tc := range []struct {
+		text            string
+		warning, reject bool
+	}{
+		{"Applicants must be a citizen of Canada.", true, true},
+		{"U.S. citizenship is required.", true, true},
+		{"Applicants must be U.S. citizens.", true, true},
+		{"This role is open to US citizens only.", true, true},
+		{"Only US citizens may apply.", true, true},
+		{"You must be a permanent resident of Australia.", true, true},
+		{"Permanent residency is required.", true, true},
+		{"Permanent resident status is required.", true, true},
+		{"An active security clearance is required.", true, true},
+		{"Candidates must be eligible to obtain a security clearance.", true, true},
+		{"Must hold a Secret clearance.", true, true},
+		{"Active TS/SCI clearance required.", true, true},
+		{"This role requires SC clearance.", true, true},
+		{"No sponsorship is available.", true, false},
+		{"We do not provide visa sponsorship.", true, false},
+		{"We cannot sponsor visas.", true, false},
+		{"Applicants must already have the right to work in the UK.", true, false},
+		{"You must be legally authorized to work in the US.", true, false},
+		{"Applicants must have the legal right to work in Canada.", true, false},
+		{"Visa sponsorship available.", true, false},
+		{"International applicants welcome.", true, false},
+		{"Citizen builds software for communities.", false, false},
+		{"You must have experience with Citizen.", false, false},
+		{"You must be a Citizen employee.", false, false},
+		{"No clearance required.", false, false},
+		{"A security clearance is not required.", false, false},
+		{"You must not have a security clearance.", false, false},
+		{"Active security clearance is not mandatory.", false, false},
+		{"Citizenship is not required.", false, false},
+		{"Permanent residency is not required.", false, false},
+		{"We welcome citizens of all countries.", false, false},
+		{"We build security clearance management software.", false, false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			p := models.Profile{WorkAuthorization: "Romanian citizen"}
+			j := models.JobInput{Description: tc.text}
+			off := Evaluate(p, nil, gateFilter(t, false, false), j, time.Time{})
+			on := Evaluate(p, nil, gateFilter(t, true, false), j, time.Time{})
+			if (len(off.Warnings) > 0) != tc.warning || off.Rejected || on.Rejected != tc.reject {
+				t.Fatalf("off=%+v on=%+v", off, on)
+			}
+			for _, message := range append(off.Warnings, on.RejectionReasons...) {
+				if !strings.Contains(message, `"`+tc.text+`"`) {
+					t.Errorf("missing exact sentence: %s", message)
+				}
+			}
+			p.WorkAuthorization = "No sponsorship required"
+			if got := Evaluate(p, nil, gateFilter(t, false, false), j, time.Time{}); !reflect.DeepEqual(got, off) {
+				t.Fatal("explicit authorization must not turn a posting requirement into an eligibility decision")
+			}
+		})
+	}
+}
+
+func TestLanguagePhrases(t *testing.T) {
+	for _, tc := range []struct {
+		text            string
+		languages       []string
+		warning, reject bool
+	}{
+		{"Fluent German is required.", nil, true, true},
+		{"You must speak French.", []string{"English"}, true, true},
+		{"Native Spanish required.", []string{"Spanish B2"}, true, false},
+		{"German at C1 level is required.", []string{"German (B1)"}, true, false},
+		{"Business-level Japanese required.", []string{"Japanese basic"}, true, false},
+		{"English fluency is required.", []string{"English intermediate"}, true, false},
+		{"Required languages: Dutch, Italian.", []string{"Dutch native"}, true, true},
+		{"Must be fluent in Portuguese.", nil, true, true},
+		{"Professional proficiency in Arabic is required.", nil, true, true},
+		{"Fluent German is required.", []string{"German C2"}, false, false},
+		{"German at C1 level is required.", []string{"German C1"}, false, false},
+		{"German (C1) required.", []string{"German B2"}, true, false},
+		{"German B1 required, English C2 required.", []string{"German B1", "English C2"}, false, false},
+		{"German C2 required, English B1 required.", []string{"German C2", "English B1"}, false, false},
+		{"Fluent English is required; German is preferred.", []string{"English fluent"}, false, false},
+		{"Fluent German is required.", []string{"German B1, English C2"}, true, false},
+		{"Fluent English is required.", []string{"English"}, false, false},
+		{"We are a German company.", nil, false, false},
+		{"Our French customers use Go.", nil, false, false},
+		{"German is a nice to have.", nil, false, false},
+		{"German is preferred but not required.", nil, false, false},
+		{"Fluent German is not required.", nil, false, false},
+		{"No German required.", nil, false, false},
+		{"English is our company language.", nil, false, false},
+		{"We require engineers for our German company.", nil, false, false},
+		{"Go is required.", nil, false, false},
+	} {
+		t.Run(tc.text+strings.Join(tc.languages, ","), func(t *testing.T) {
+			p := models.Profile{Languages: tc.languages}
+			j := models.JobInput{Description: tc.text}
+			off := Evaluate(p, nil, gateFilter(t, false, false), j, time.Time{})
+			on := Evaluate(p, nil, gateFilter(t, false, true), j, time.Time{})
+			if (len(off.Warnings) > 0) != tc.warning || off.Rejected || on.Rejected != tc.reject {
+				t.Fatalf("off=%+v on=%+v", off, on)
+			}
+			for _, message := range append(off.Warnings, on.RejectionReasons...) {
+				if !strings.Contains(message, `"`+tc.text+`"`) {
+					t.Errorf("missing exact sentence: %s", message)
+				}
+			}
+		})
+	}
+}
+
+func TestGateQuotes(t *testing.T) {
+	sentence := "Applicants must be a citizen of " + strings.Repeat("é", 210) + "."
+	e := Evaluate(models.Profile{}, nil, gateFilter(t, true, true), models.JobInput{Description: "Build software.\n" + sentence + " Work remotely."}, time.Time{})
+	if len(e.Warnings) != 1 || len(e.RejectionReasons) != 1 {
+		t.Fatalf("%+v", e)
+	}
+	for _, message := range []string{e.Warnings[0], e.RejectionReasons[0]} {
+		parts := strings.Split(message, `"`)
+		if len(parts) != 3 || !utf8.ValidString(parts[1]) || len([]rune(parts[1])) > 200 || !strings.HasPrefix(sentence, parts[1]) {
+			t.Fatalf("bad quote: %s", message)
+		}
+	}
+	j := models.JobInput{Title: "Fluent German required", Description: "Build software."}
+	if e := Evaluate(models.Profile{}, nil, gateFilter(t, false, true), j, time.Time{}); !e.Rejected || !strings.Contains(strings.Join(e.Warnings, ""), `"Fluent German required"`) {
+		t.Fatalf("title requirement: %+v", e)
+	}
+}
+
+func TestGatesPreserveExistingEvaluation(t *testing.T) {
+	p := sampleProfile()
+	j := models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Build Go services.", RemoteType: "remote"}
+	before := Evaluate(p, nil, nil, j, time.Time{})
+	for _, f := range []*models.FilterPreset{gateFilter(t, false, false), gateFilter(t, true, true)} {
+		a, _ := json.Marshal(before)
+		b, _ := json.Marshal(Evaluate(p, nil, f, j, time.Time{}))
+		if string(a) != string(b) {
+			t.Fatalf("silent posting changed: %s != %s", a, b)
+		}
+	}
+	f := gateFilter(t, false, false)
+	f.ExcludedTitleWords = []string{"Backend"}
+	before = Evaluate(p, nil, f, j, time.Time{})
+	j.Description += " Must be a citizen of Canada. Fluent German required."
+	after := Evaluate(p, nil, f, j, time.Time{})
+	if len(after.Warnings) != 2 {
+		t.Fatalf("expected two warnings: %+v", after)
+	}
+	after.Warnings = before.Warnings
+	a, _ := json.Marshal(before)
+	b, _ := json.Marshal(after)
+	if string(a) != string(b) {
+		t.Fatalf("existing scores/rejections changed: %s != %s", a, b)
+	}
+}
+
+func TestExistingEvaluationGolden(t *testing.T) {
+	j := models.JobInput{Title: "Backend Engineer", Company: "Other", Description: "Build Go services.", RemoteType: "remote"}
+	const want = `{"rejected":false,"rejection_reasons":[],"warnings":[],"score":85,"reasons":["The job title aligns with a desired role.","Matched 1 profile skill(s): Go.","The location and work arrangement fit your preferences."],"matched_skills":["Go"],"missing_skills":[],"red_flags":["No salary or rate was provided.","The posting date is unknown."],"breakdown":{"domain_industry_match":3,"freshness":2,"location_remote_match":10,"salary_match":5,"seniority_match":10,"skill_match":30,"title_match":25}}`
+	for _, rejected := range []bool{false, true} {
+		filter := gateFilter(t, false, false)
+		expected := want
+		if rejected {
+			filter.ExcludedTitleWords = []string{"Backend"}
+			expected = strings.Replace(want, `"rejected":false,"rejection_reasons":[]`, `"rejected":true,"rejection_reasons":["Job title contains excluded words: Backend"]`, 1)
+		}
+		got, err := json.Marshal(Evaluate(sampleProfile(), nil, filter, j, time.Time{}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != expected {
+			t.Fatalf("evaluation changed: %s", got)
+		}
+	}
+}
