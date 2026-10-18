@@ -103,6 +103,15 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
 		return err
 	}
 	defer tx.Rollback(ctx)
+	_, err = tx.Exec(ctx, `SELECT notification_resolve(n.user_id,'quiet_application',n.subject_id)
+        FROM notifications n
+        JOIN applications a ON a.user_id=n.user_id AND a.id::text=n.subject_id
+        JOIN job_matches m ON m.user_id=a.user_id AND m.job_id=a.job_id
+        WHERE n.user_id=$1 AND n.kind='quiet_application' AND n.resolved_at IS NULL
+        AND m.rejected=true`, userID)
+	if err != nil {
+		return err
+	}
 	rows, err := tx.Query(ctx, `SELECT a.id FROM applications a
         LEFT JOIN discovery_settings d ON d.user_id=a.user_id
         LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id

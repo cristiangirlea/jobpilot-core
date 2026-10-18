@@ -84,6 +84,16 @@ func TestQuietReviewRegressionsPostgres(t *testing.T) {
 			t.Fatalf("early dismissal reopened: %+v %v", f, e)
 		}
 	})
+	t.Run("65 days at default threshold", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '65 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 1 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID {
+			t.Fatalf("default-threshold reminder missing: %+v %v", f, e)
+		}
+	})
 	t.Run("more than 60 days overdue", func(t *testing.T) {
 		a := app()
 		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
@@ -146,6 +156,26 @@ func TestQuietReviewRegressionsPostgres(t *testing.T) {
 		}
 		if n := trace.perRow.Load(); n != 0 {
 			t.Errorf("blocked application ran %d per-row statements", n)
+		}
+	})
+	t.Run("open reminder becomes rejected", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 1 || len(f.Items) != 1 || f.Items[0].SubjectID != a.ID {
+			t.Fatalf("initial reminder: %+v %v", f, e)
+		}
+		reminderID := f.Items[0].ID
+		exec(`UPDATE job_matches SET rejected=true WHERE user_id=$1 AND job_id=$2`, user.ID, a.JobID)
+		f, e = st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 0 || len(f.Items) != 0 {
+			t.Fatalf("rejected application's reminder stayed open: %+v %v", f, e)
+		}
+		f, e = st.Notifications(ctx, user.ID, "all", "", 200)
+		if e != nil || f.Open != 0 || len(f.Items) != 1 || f.Items[0].ID != reminderID || f.Items[0].ResolvedAt == nil {
+			t.Fatalf("resolved reminder history missing: %+v %v", f, e)
 		}
 	})
 	t.Run("steady state", func(t *testing.T) {
