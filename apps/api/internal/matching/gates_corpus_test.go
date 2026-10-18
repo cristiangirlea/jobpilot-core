@@ -11,6 +11,22 @@ import (
 // Fifth review: every explicit requirement still warns, but its alternatives,
 // conditional context, limited scope or wrapped continuation forbids rejection.
 var fifthReviewWarningOnly = []string{
+	// Focused review B1/B2: later terms must not hide conditions or alternatives.
+	"US citizenship is required, except for permanent residents.",
+	"Security clearance is required, unless you are a US citizen.",
+	"German is required, unless you speak French.",
+	"Applicants must be a U.S. citizen, U.S. national, lawful permanent resident, refugee, or asylee.",
+	"Applicants must be a U.S. citizen, a U.S. permanent resident or asylee.",
+	// Focused review D1: capitalisation and punctuation do not hide continuations.
+	"Security clearance is required\nUnless you work remotely.",
+	"Security clearance is required<br>Unless you work remotely.",
+	"US citizenship is required\nExcept for permanent residents.",
+	"German is required\nIf you cover our French accounts.",
+	"Must be a U.S. citizen\nEither that or a permanent resident.",
+	"Must be a U.S. citizen\nAlternatively, a permanent resident.",
+	"Must be a U.S. citizen\nNor may permanent residents apply.",
+	"Must be a U.S. citizen\nOr, a permanent resident.",
+	"Must be a U.S. citizen\nand/or a permanent resident.",
 	// B1: the alternative can follow another comma-separated eligibility term.
 	"Applicants must be a U.S. citizen, lawful permanent resident, or protected individual as defined by 8 U.S.C. 1324b(a)(3).",
 	"Applicants must be a U.S. citizen, lawful permanent resident, or protected individual as defined by 8 U.S.C. 1324b(a)(3), or eligible to obtain the required authorizations.",
@@ -356,6 +372,12 @@ func TestGatesWarnForRealRequirements(t *testing.T) {
 		"You will support clients who need to become US citizens.",
 		"This role requires security clearance vetting experience.",
 		"German is a must.",
+		// Focused review B3: unrelated lowercase lines must not erase warnings.
+		"Must hold an active Secret clearance\ngRPC experience preferred",
+		"Requirements:<br>must be a U.S. citizen<br>iOS experience is a plus",
+		"Requires German\niOS experience",
+		"Remote: no\nmust be a U.S. citizen",
+		"Requirements:\no must be a U.S. citizen\no iOS experience is a plus",
 	}, fifthReviewWarningOnly...) {
 		t.Run(text, func(t *testing.T) {
 			for _, enabled := range []bool{false, true} {

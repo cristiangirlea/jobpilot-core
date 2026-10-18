@@ -31,7 +31,6 @@ var negatedRequirement = regexp.MustCompile(`(?i)(?:\b(?:not|never|no|nor|none|n
 var optionalRequirement = regexp.MustCompile(`(?i)\b(?:plus|bonus|nice[- ]to[- ]have|preferred|preferably|desired|desirable|advantage|advantageous|asset|beneficial|priority|encouraged|welcome|helpful|ideally|optional)\b`)
 var eligibilityWords = regexp.MustCompile(`(?i)\b(?:citizens?(?:ship)?|permanent residen\w*|clearance)\b`)
 var requirementBoundary = regexp.MustCompile(`(?i)[,;]|\band\s+`)
-var eligibilityComma = regexp.MustCompile(`(?i)^\s*,\s*(?:(?:a|an|lawful|valid|active|current)\s+)*$`)
 
 // A neighbouring requirement owns its own optional/negative wording. Keep a
 // trailing relative clause (", which is a plus") when there is no next hit.
@@ -62,17 +61,16 @@ func requirementWindow(text string, start, end int, words [][]int) (int, int) {
 	return left, right
 }
 
-// A comma list may put its "or" after a second eligibility term. Read through
-// that run, but stop at a separate requirement with its own predicate.
+// A comma list may contain non-eligibility items before its final "or".
+// Clauses already stop at semicolons; read the whole remaining list.
 func eligibilityAlternativeEnd(clause string, end int, words [][]int) int {
+	if strings.HasPrefix(strings.TrimSpace(clause[end:]), ",") {
+		return len(clause)
+	}
 	for _, word := range words {
-		if word[0] < end {
-			continue
-		}
-		if !eligibilityComma.MatchString(clause[end:word[0]]) {
+		if word[0] >= end {
 			return word[0]
 		}
-		end = word[1]
 	}
 	return len(clause)
 }
@@ -109,10 +107,10 @@ func cleanRejectionWindow(clause string, left, right, end int) bool {
 	// Conditions before a neighbouring requirement still qualify this one.
 	// Scope limits follow the template; its leading "Only ... citizens" is valid.
 	return !optionalRequirement.MatchString(window) && !requirementAlternative.MatchString(window) &&
-		!uncertainRequirement.MatchString(clause[:right]) && !scopedRequirement.MatchString(clause[end:right])
+		!uncertainRequirement.MatchString(clause) && !scopedRequirement.MatchString(clause[end:])
 }
 
-func checkStrictEligibility(e *models.Evaluation, sentence, clause string, offset int, reject bool) {
+func checkStrictEligibility(e *models.Evaluation, sentence, clause string, offset int, reject bool, warn func(int, int, string)) {
 	words := eligibilityWords.FindAllStringIndex(clause, -1)
 	for _, pattern := range strictEligibility {
 		for _, span := range pattern.FindAllStringIndex(clause, -1) {
@@ -122,7 +120,7 @@ func checkStrictEligibility(e *models.Evaluation, sentence, clause string, offse
 				continue
 			}
 			quoted := findingQuote(sentence, offset+span[0], offset+span[1])
-			e.Warnings = appendUnique(e.Warnings, "Posting requires eligibility: "+quoted)
+			warn(span[0], span[1], quoted)
 			outerRight := eligibilityAlternativeEnd(clause, span[1], words)
 			if reject && strictTail.MatchString(clause[span[1]:]) && cleanRejectionWindow(clause, left, right, span[1]) && !requirementAlternative.MatchString(clause[left:outerRight]) {
 				e.RejectionReasons = appendUnique(e.RejectionReasons, "Active filter rejects eligibility requirements: "+quoted)
@@ -305,7 +303,29 @@ func findingQuote(sentence string, start, end int) string {
 	return `"` + strings.TrimSpace(string(quote)) + `"`
 }
 
+// Joining changes whitespace only, so a requirement's position among non-space
+// runes identifies the same occurrence in both readings, even with indentation.
+type postingWarningKey struct {
+	kind                string
+	textIndex, position int
+}
+
 func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterPreset, j models.JobInput) {
+	joined := j
+	joined.Title = joinPostingLines(j.Title)
+	joined.Description = joinPostingLines(j.Description)
+	if joined.Title == j.Title && joined.Description == j.Description {
+		checkPostingGateReading(e, p, f, j, nil, false)
+		return
+	}
+	seen := map[postingWarningKey]bool{}
+	checkPostingGateReading(e, p, f, joined, seen, false)
+	// Raw lines can warn, but only the joined reading may reject. Keep its quote
+	// when it already warned for this occurrence of the same requirement.
+	checkPostingGateReading(e, p, nil, j, seen, true)
+}
+
+func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.FilterPreset, j models.JobInput, seen map[postingWarningKey]bool, fallback bool) {
 	type profileLanguage struct {
 		listed bool
 		level  int
@@ -320,8 +340,30 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 			listed[hit.pattern] = profileLanguage{true, max(previous.level, languageLevel(languageContext(entry, hit.start, hit.end)))}
 		}
 	}
-	for _, text := range []string{j.Title, j.Description} {
-		text = joinPostingLines(text)
+	for textIndex, text := range []string{j.Title, j.Description} {
+		warn := func(kind string, start, end int, quoted string) {
+			if seen != nil {
+				// Broad and strict eligibility patterns may span different words,
+				// but they refer to the same citizenship/residency/clearance term.
+				if kind == "Posting requires eligibility: " {
+					if word := eligibilityWords.FindStringIndex(text[start:end]); word != nil {
+						start += word[0]
+					}
+				}
+				position := 0
+				for _, r := range text[:start] {
+					if !unicode.IsSpace(r) {
+						position++
+					}
+				}
+				key := postingWarningKey{kind, textIndex, position}
+				if fallback && seen[key] {
+					return
+				}
+				seen[key] = true
+			}
+			e.Warnings = appendUnique(e.Warnings, kind+quoted)
+		}
 		var hits []languageHit
 		if len(listed) > 0 {
 			hits = findLanguages(text, true)
@@ -347,12 +389,14 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 								continue
 							}
 							quoted := findingQuote(sentence, clauseStart-sentenceStart+span[0], clauseStart-sentenceStart+span[1])
-							e.Warnings = appendUnique(e.Warnings, "Posting requires eligibility: "+quoted)
+							warn("Posting requires eligibility: ", clauseStart+span[0], clauseStart+span[1], quoted)
 						}
 					}
-					checkStrictEligibility(e, sentence, clause, clauseStart-sentenceStart, f != nil && f.RejectEligibilityRequirements && cleanRejectionSentence(sentence))
+					checkStrictEligibility(e, sentence, clause, clauseStart-sentenceStart, f != nil && f.RejectEligibilityRequirements && cleanRejectionSentence(sentence), func(start, end int, quoted string) {
+						warn("Posting requires eligibility: ", clauseStart+start, clauseStart+end, quoted)
+					})
 					if span := sponsorshipSignal.FindStringIndex(clause); span != nil {
-						e.Warnings = appendUnique(e.Warnings, "Posting states work authorization or sponsorship: "+findingQuote(sentence, clauseStart-sentenceStart+span[0], clauseStart-sentenceStart+span[1]))
+						warn("Posting states work authorization or sponsorship: ", clauseStart+span[0], clauseStart+span[1], findingQuote(sentence, clauseStart-sentenceStart+span[0], clauseStart-sentenceStart+span[1]))
 					}
 				}
 				var local []languageHit
@@ -418,7 +462,7 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 								start, end = requiredSpan[0], requiredSpan[1]
 							}
 							quoted := findingQuote(sentence, clauseStart-sentenceStart+start, clauseStart-sentenceStart+end)
-							e.Warnings = appendUnique(e.Warnings, "Posting requires "+hit.pattern.name+" beyond the listed profile languages or level: "+quoted)
+							warn("Posting requires "+hit.pattern.name+" beyond the listed profile languages or level: ", clauseStart+hit.start, clauseStart+hit.end, quoted)
 							// Unrecognised profile entries may contain the missing language.
 							strict := strictList
 							for _, span := range hit.pattern.strict.FindAllStringIndex(window, -1) {
@@ -439,7 +483,7 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 }
 
 // Hard wraps and HTML <br> continuations belong to one sentence. Preserve
-// paragraph breaks, bullets and capitalised lines as separate requirements.
+// paragraph breaks, bullets and other capitalised lines as separate requirements.
 func joinPostingLines(text string) string {
 	if !strings.ContainsAny(text, "\r\n") {
 		return text
@@ -452,7 +496,14 @@ func joinPostingLines(text string) string {
 		if i > 0 {
 			first, _ := utf8.DecodeRuneInString(line)
 			word, _, _ := strings.Cut(strings.ToLower(line), " ")
-			if strings.TrimSpace(lines[i-1]) != "" && (unicode.IsLower(first) || first == '(' || word == "or" || word == "and" || word == "but") {
+			word = strings.TrimRightFunc(word, unicode.IsPunct)
+			continuation := false
+			switch word {
+			case "and", "but", "nor", "and/or", "or", "either", "alternatively", "if", "where", "when", "who", "whether", "unless", "except", "apart":
+				continuation = true
+			}
+			bullet := strings.HasPrefix(strings.ToLower(line), "o ")
+			if strings.TrimSpace(lines[i-1]) != "" && !bullet && (unicode.IsLower(first) || first == '(' || continuation) {
 				out.WriteByte(' ')
 			} else {
 				out.WriteByte('\n')

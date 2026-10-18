@@ -3,6 +3,7 @@ package matching
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -193,5 +194,70 @@ func TestExistingEvaluationGolden(t *testing.T) {
 		if string(got) != expected {
 			t.Fatalf("evaluation changed: %s", got)
 		}
+	}
+}
+
+func TestJoinPostingLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, text, want string
+	}{
+		{"blank line", "Security clearance is required\n\nunless remote", "Security clearance is required\n\nunless remote"},
+		{"lone carriage return", "Security clearance is required\rUnless remote", "Security clearance is required Unless remote"},
+		{"whitespace-only line", "Security clearance is required\n \t \nunless remote", "Security clearance is required\n\nunless remote"},
+		{"bullet", "Requirements:\n• must be a U.S. citizen", "Requirements:\n• must be a U.S. citizen"},
+		{"plain-text bullet", "Requirements:\no must be a U.S. citizen", "Requirements:\no must be a U.S. citizen"},
+		{"or comma", "Must be a U.S. citizen\nor, a permanent resident", "Must be a U.S. citizen or, a permanent resident"},
+		{"and slash or", "Must be a U.S. citizen\nAnd/or a permanent resident", "Must be a U.S. citizen And/or a permanent resident"},
+		{"capitalised requirement", "No clearance required\nMust be a U.S. citizen.", "No clearance required\nMust be a U.S. citizen."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := joinPostingLines(tc.text); got != tc.want {
+				t.Fatalf("joinPostingLines(%q) = %q, want %q", tc.text, got, tc.want)
+			}
+		})
+	}
+	for _, word := range []string{"If", "Where", "When", "Who", "Whether", "Unless", "Except", "Apart from", "Or", "Either", "Alternatively", "Nor", "And", "But", "Or,", "And/or"} {
+		text := "Security clearance is required\n" + word + " remote"
+		if got := joinPostingLines(text); got != strings.ReplaceAll(text, "\n", " ") {
+			t.Errorf("continuation %q not joined: %q", word, got)
+		}
+	}
+}
+
+func TestGateWarningsAcrossReadings(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		warnings   []string
+		reject     bool
+	}{
+		{"joined quote wins", "  Security clearance is required\r\n  Unless you work remotely.", []string{
+			`Posting requires eligibility: "Security clearance is required Unless you work remotely."`,
+		}, false},
+		{"raw restores warning", "Requires German\niOS experience", []string{
+			`Posting requires German beyond the listed profile languages or level: "Requires German"`,
+		}, false},
+		{"separate eligibility occurrence survives", "US citizenship is required.\nMust hold an active Secret clearance\ngRPC experience preferred", []string{
+			`Posting requires eligibility: "US citizenship is required."`,
+			`Posting requires eligibility: "Must hold an active Secret clearance"`,
+		}, true},
+		{"separate language occurrence survives", "German is required.\nRequires German\niOS experience", []string{
+			`Posting requires German beyond the listed profile languages or level: "German is required."`,
+			`Posting requires German beyond the listed profile languages or level: "Requires German"`,
+		}, true},
+		{"raw cannot reject", "Remote: no\nmust be a U.S. citizen", []string{
+			`Posting requires eligibility: "must be a U.S. citizen"`,
+		}, false},
+		{"joined requirement", "US citizenship\nis required.", []string{
+			`Posting requires eligibility: "US citizenship is required."`,
+		}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, enabled := range []bool{false, true} {
+				e := Evaluate(models.Profile{Languages: []string{"English"}}, nil, gateFilter(t, enabled, enabled), models.JobInput{Description: tc.text}, time.Time{})
+				if !slices.Equal(e.Warnings, tc.warnings) || e.Rejected != (enabled && tc.reject) {
+					t.Fatalf("rules=%t: warnings=%q, rejected=%t; want warnings=%q, rejected=%t", enabled, e.Warnings, e.Rejected, tc.warnings, enabled && tc.reject)
+				}
+			}
+		})
 	}
 }
