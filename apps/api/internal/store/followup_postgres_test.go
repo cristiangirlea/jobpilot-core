@@ -5,14 +5,130 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	database "jobpilot/core/api/internal/db"
 	"jobpilot/core/api/internal/models"
 )
+
+type quietQueryTrace struct{ perRow atomic.Int32 }
+
+func (q *quietQueryTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	if strings.Contains(data.SQL, "SELECT notification_open(a.user_id") {
+		q.perRow.Add(1)
+	}
+	return ctx
+}
+func (*quietQueryTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestQuietReviewRegressionsPostgres(t *testing.T) {
+	url := os.Getenv("JOBPILOT_TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("set JOBPILOT_TEST_DATABASE_URL to a migrated throwaway database")
+	}
+	ctx := context.Background()
+	config, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trace := &quietQueryTrace{}
+	config.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+	st := New(pool)
+	user, err := st.CreateUser(ctx, fmt.Sprintf("quiet-review-%d@example.test", time.Now().UnixNano()), "fake")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Exec(ctx, `DELETE FROM users WHERE id=$1`, user.ID)
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, e := pool.Exec(ctx, sql, args...); e != nil {
+			t.Fatal(e)
+		}
+	}
+	app := func() models.Application {
+		t.Helper()
+		j, e := st.InsertJob(ctx, user.ID, models.JobInput{Title: "Engineer", Company: "Review Test", Description: "Build", ApplyURL: fmt.Sprintf("https://example.test/%d", time.Now().UnixNano())}, models.Evaluation{Score: 80}, "")
+		if e != nil {
+			t.Fatal(e)
+		}
+		a, e := st.CreateApplication(ctx, user.ID, j.Job.ID)
+		if e != nil {
+			t.Fatal(e)
+		}
+		if _, e := st.UpdateApplication(ctx, user.ID, a.ID, "applied", nil); e != nil {
+			t.Fatal(e)
+		}
+		return a
+	}
+	t.Run("dismiss before due", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		if e := st.DismissQuietApplication(ctx, user.ID, a.ID); e != nil {
+			t.Fatal(e)
+		}
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 0 {
+			t.Fatalf("early dismissal reopened: %+v %v", f, e)
+		}
+	})
+	t.Run("older than 60 days", func(t *testing.T) {
+		a := app()
+		defer exec(`DELETE FROM applications WHERE id=$1`, a.ID)
+		defer exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		exec(`UPDATE applications SET status_changed_at=now()-interval '61 days' WHERE id=$1`, a.ID)
+		f, e := st.Notifications(ctx, user.ID, "open", "", 200)
+		if e != nil || f.Open != 0 {
+			t.Fatalf("ancient application surfaced: %+v %v", f, e)
+		}
+	})
+	t.Run("steady state", func(t *testing.T) {
+		// Remove notifications of applications deleted by the other subtests.
+		exec(`DELETE FROM notifications WHERE user_id=$1`, user.ID)
+		a, b := app(), app()
+		exec(`UPDATE applications SET status_changed_at=now()-interval '11 days' WHERE id IN ($1,$2)`, a.ID, b.ID)
+		if _, e := st.Notifications(ctx, user.ID, "open", "", 200); e != nil {
+			t.Fatal(e)
+		}
+		if e := st.DismissQuietApplication(ctx, user.ID, b.ID); e != nil {
+			t.Fatal(e)
+		}
+		trace.perRow.Store(0)
+		f, e := st.Notifications(ctx, user.ID, "all", "", 200)
+		if e != nil || len(f.Items) != 2 || f.Open != 1 {
+			t.Fatalf("steady feed: %+v %v", f, e)
+		}
+		if n := trace.perRow.Load(); n != 0 {
+			t.Errorf("steady read ran %d per-row statements", n)
+		}
+		// An already handled application must not block feed navigation.
+		tx, e := pool.Begin(ctx)
+		if e != nil {
+			t.Fatal(e)
+		}
+		defer tx.Rollback(ctx)
+		if _, e = tx.Exec(ctx, `SELECT id FROM applications WHERE id IN ($1,$2) FOR UPDATE`, a.ID, b.ID); e != nil {
+			t.Fatal(e)
+		}
+		short, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		if _, e = st.Notifications(short, user.ID, "open", "", 1); e != nil {
+			t.Errorf("steady feed waited for application locks: %v", e)
+		}
+	})
+}
 
 func TestQuietApplicationsAgainstPostgres(t *testing.T) {
 	url := os.Getenv("JOBPILOT_TEST_DATABASE_URL")
@@ -80,31 +196,22 @@ func TestQuietApplicationsAgainstPostgres(t *testing.T) {
 	if unchanged := feed(ana); unchanged.Open != 1 || unchanged.Items[0].ID != f.Items[0].ID {
 		t.Fatal("notes or same status reset quiet period", unchanged)
 	}
-	settings, e := st.DiscoverySettings(ctx, bob)
-	if e != nil {
+	if _, e := st.SaveAccountSettings(ctx, bob, 20); e != nil {
 		t.Fatal(e)
-	}
-	settings.QuietApplicationDays = 20
-	if _, e = st.SaveDiscoverySettings(ctx, bob, settings); e != nil {
-		t.Fatal(e)
-	}
-	settings.QuietApplicationDays = 0
-	if saved, e := st.SaveDiscoverySettings(ctx, bob, settings); e != nil || saved.QuietApplicationDays != 20 {
-		t.Fatal("omitting setting changed it", saved, e)
 	}
 	if f := feed(bob); f.Open != 0 {
 		t.Fatal("user setting ignored", f)
 	}
-	if e = st.DismissQuietApplication(ctx, bob, a.ID); !errors.Is(e, pgx.ErrNoRows) {
+	if e := st.DismissQuietApplication(ctx, bob, a.ID); !errors.Is(e, pgx.ErrNoRows) {
 		t.Fatal("cross-user dismiss", e)
 	}
-	if e = st.DismissQuietApplication(ctx, ana, a.ID); e != nil {
+	if e := st.DismissQuietApplication(ctx, ana, a.ID); e != nil {
 		t.Fatal(e)
 	}
 	if f := feed(ana); f.Open != 0 {
 		t.Fatal("dismissal reopened", f)
 	}
-	if _, e = st.UpdateApplication(ctx, ana, a.ID, "interview", nil); e != nil {
+	if _, e := st.UpdateApplication(ctx, ana, a.ID, "interview", nil); e != nil {
 		t.Fatal(e)
 	}
 	if f := feed(ana); f.Open != 0 {
@@ -116,7 +223,7 @@ func TestQuietApplicationsAgainstPostgres(t *testing.T) {
 	if f := feed(ana); f.Open != 1 {
 		t.Fatal("interview not surfaced", f)
 	}
-	if _, e = st.UpdateApplication(ctx, ana, a.ID, "offer", nil); e != nil {
+	if _, e := st.UpdateApplication(ctx, ana, a.ID, "offer", nil); e != nil {
 		t.Fatal(e)
 	}
 	if f := feed(ana); f.Open != 0 {
@@ -174,13 +281,16 @@ func TestFollowUpDraftsAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `INSERT INTO application_outbox(user_id,job_id,application_id,status,cv_document_id,cover_letter,answers,sent_at,updated_at) VALUES($1,$2,$3,'sent',$4,'Sent outbox letter','[{"label":"Experience","answer":"Sent outbox answer"}]',now(),now())`, u.ID, a.JobID, a.ID, cv.ID)
+	_, err = pool.Exec(ctx, `INSERT INTO application_outbox(user_id,job_id,application_id,status,cv_document_id,cover_letter,answers,sent_at,updated_at) VALUES($1,$2,$3,'sent',$4,'Sent outbox letter','[{"label":"Experience","answer":"Sent outbox answer","source":"bank_similar"}]',now(),now())`, u.ID, a.JobID, a.ID, cv.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sent, err = st.FollowUpMaterials(ctx, u.ID, a.ID)
 	if err != nil || sent.CV != "Sent CV fact" || sent.CoverLetter != "Sent outbox letter" || sent.Answers["Experience"] != "Sent outbox answer" {
 		t.Fatal("sent outbox missing", sent, err)
+	}
+	if sent.AnswerSources["Experience"] != "bank_similar" || sent.JobTitle != "Engineer" || sent.Company != "Followup Test" {
+		t.Fatal("sent answer provenance or job context lost", sent)
 	}
 	_, err = pool.Exec(ctx, `UPDATE cv_documents SET extracted_text='Unsent CV rewrite',updated_at=now() WHERE id=$1`, cv.ID)
 	if err != nil {

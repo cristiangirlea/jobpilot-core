@@ -107,6 +107,9 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
         LEFT JOIN discovery_settings d ON d.user_id=a.user_id
         WHERE a.user_id=$1 AND a.status IN ('applied','interview')
         AND a.status_changed_at <= now()-make_interval(days=>COALESCE(d.quiet_application_days,10))
+        AND a.status_changed_at >= now()-interval '60 days'
+        AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id=a.user_id AND n.kind='quiet_application'
+            AND n.subject_id=a.id::text AND n.created_at>=a.status_changed_at)
         ORDER BY a.id FOR UPDATE OF a`, userID)
 	if err != nil {
 		return err

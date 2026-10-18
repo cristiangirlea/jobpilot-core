@@ -1,4 +1,4 @@
-"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import {useMe} from "@/components/useMe";import type {AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
+"use client";import {useEffect,useState} from "react";import {useRouter} from "next/navigation";import {Shell} from "@/components/Shell";import {Header,Field,ErrorMessage,CopyButton} from "@/components/UI";import {API,api} from "@/lib/api";import {useMe} from "@/components/useMe";import type {AccountSettings,AgentToken,AgentTokenCreated,Invite,InviteCreated} from "@/lib/types";
 
 function when(value?:string){return value?new Date(value).toLocaleDateString():"—"}
 
@@ -109,6 +109,26 @@ function Invites(){
   </section>;
 }
 
+function QuietReminders(){
+  const [days,setDays]=useState<number|null>(null);
+  const [error,setError]=useState("");
+  const [saved,setSaved]=useState(false);
+  const [saving,setSaving]=useState(false);
+  useEffect(()=>{api<AccountSettings>("/account/settings").then(x=>setDays(x.quiet_application_days)).catch(e=>setError((e as Error).message))},[]);
+  async function save(){
+    setError("");setSaved(false);setSaving(true);
+    try{const x=await api<AccountSettings>("/account/settings",{method:"PUT",body:JSON.stringify({quiet_application_days:days})});setDays(x.quiet_application_days);setSaved(true)}catch(e){setError((e as Error).message)}finally{setSaving(false)}
+  }
+  return <section className="card md:col-span-2">
+    <h2 className="font-semibold">Quiet application reminders</h2>
+    <p className="muted mt-2 mb-4">Remind me when an applied or interview application has no status change. Applications quiet for more than 60 days do not open reminders.</p>
+    <ErrorMessage message={error}/>
+    <Field label="Days without a status change"><input type="number" min={1} max={365} step={1} value={days??""} disabled={days===null||saving} onChange={e=>{setDays(Number(e.target.value));setSaved(false)}}/></Field>
+    <button className="btn-primary mt-4" onClick={save} disabled={days===null||!Number.isInteger(days)||days<1||days>365||saving}>{saving?"Saving...":"Save reminders"}</button>
+    {saved&&<p className="mt-3 text-sm text-emerald-700">Reminder settings saved.</p>}
+  </section>;
+}
+
 export default function Settings(){
   const r=useRouter();
   // Members (#128) see their own sections only; the cards about how this
@@ -120,6 +140,7 @@ export default function Settings(){
     <div className="grid gap-5 md:grid-cols-2">
       {admin&&<section className="card"><h2 className="font-semibold">Generation mode</h2><p className="muted mt-2">Deterministic templates are active. They use only profile, experience, skill, and project data—no API key required.</p><span className="mt-4 inline-block rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">OFFLINE-SAFE</span></section>}
       {admin&&<section className="card"><h2 className="font-semibold">Safety boundaries</h2><p className="muted mt-2">This product never submits applications, bypasses CAPTCHA, or automates job boards. Apply links always open for manual review.</p></section>}
+      <QuietReminders/>
       <GoogleLink/>
       {me&&me.agent_tokens!=="off"&&<Tokens policy={me.agent_tokens}/>}
       <Invites/>

@@ -3,11 +3,11 @@
 import Link from "next/link";
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {Notification,NotificationFeed} from "@/lib/types";
+import {KnownNotificationKind,Notification,NotificationFeed} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {Empty,ErrorMessage,Header} from "@/components/UI";
 
-const kindLabel:Record<string,string>={answer:"Answer",cv:"CV",outbox:"Application"};
+const kindLabel:Record<KnownNotificationKind,string>&Partial<Record<string,string>>={answer:"Answer",cv:"CV",outbox:"Application",quiet_application:"Quiet application"};
 
 // href comes from the API; only a path inside this app becomes a link. A
 // second slash or a backslash would make it a link to another host.

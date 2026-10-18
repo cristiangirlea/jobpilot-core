@@ -81,6 +81,43 @@ func TestDraftFollowUp(t *testing.T) {
 	}
 }
 
+func TestDraftFollowUpNotFound(t *testing.T) {
+	for _, tc := range []struct{ name, body, want string }{
+		{"older API", "404 page not found\n", "does not support follow-up drafts"},
+		{"missing application", `{"error":"Record not found."}`, "Application not found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(404)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer api.Close()
+			client, e := NewClient(Options{BaseURL: api.URL, Token: "fake"})
+			if e != nil {
+				t.Fatal(e)
+			}
+			server := NewServer(client, "test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+			st, ct := mcp.NewInMemoryTransports()
+			ctx := context.Background()
+			ss, e := server.Connect(ctx, st, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer ss.Close()
+			host := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil)
+			cs, e := host.Connect(ctx, ct, nil)
+			if e != nil {
+				t.Fatal(e)
+			}
+			defer cs.Close()
+			res, text := call(t, cs, "draft_follow_up", map[string]any{"application_id": "app-1"})
+			if !res.IsError || !strings.Contains(text, tc.want) {
+				t.Fatal(text)
+			}
+		})
+	}
+}
+
 func TestQuietApplicationResolution(t *testing.T) {
 	text := howToResolve(Notification{Kind: "quiet_application", SubjectID: "app-1"})
 	for _, want := range []string{"draft_follow_up", "app-1", "update_application_status", "never sent"} {

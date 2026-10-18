@@ -9,9 +9,15 @@ import (
 func TestQuietApplicationSettingValidation(t *testing.T) {
 	for _, days := range []string{"-1", "366"} {
 		w := httptest.NewRecorder()
-		(&Server{}).saveDiscoverySettings(w, httptest.NewRequest("PUT", "/api/discovery/settings", strings.NewReader(`{"enabled":false,"interval_minutes":360,"auto_prepare":false,"min_score":75,"max_jobs_per_run":100,"quiet_application_days":`+days+`}`)))
+		(&Server{}).saveAccountSettings(w, httptest.NewRequest("PUT", "/api/account/settings", strings.NewReader(`{"quiet_application_days":`+days+`}`)))
 		if w.Code != 422 {
 			t.Fatal(w.Code, w.Body.String())
 		}
+	}
+}
+
+func TestQuietAdditionsKeepContract(t *testing.T) {
+	if Contract != 10 {
+		t.Fatalf("additive follow-up routes and fields changed contract: %d", Contract)
 	}
 }

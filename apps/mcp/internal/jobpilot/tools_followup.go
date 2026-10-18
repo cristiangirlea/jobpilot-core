@@ -2,6 +2,7 @@ package jobpilot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -27,6 +28,15 @@ func addFollowUpTools(s *mcp.Server, c *Client) {
 		var out FollowUpDraft
 		err := c.do(ctx, http.MethodPost, "/api/applications/"+url.PathEscape(id)+"/follow-up", struct{}{}, &out, c.timeout)
 		if err != nil {
+			var apiErr *APIError
+			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {
+				// The API's record lookup returns this JSON problem; Go's missing
+				// route returns a plain 404. New routes do not raise Contract.
+				if apiErr.Message == "Record not found." {
+					return nil, FollowUpDraft{}, fmt.Errorf("Application not found or not accessible to this account: %w", err)
+				}
+				return nil, FollowUpDraft{}, fmt.Errorf("This API does not support follow-up drafts at this route; update the JobPilot API: %w", err)
+			}
 			return nil, FollowUpDraft{}, toolError(err)
 		}
 		return nil, out, nil

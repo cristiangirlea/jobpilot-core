@@ -15,6 +15,90 @@ import (
 	"jobpilot/core/api/internal/store"
 )
 
+func TestAccountQuietSettingsPostgres(t *testing.T) {
+	st := accountsStore(t)
+	ctx := context.Background()
+	member, e := st.CreateUser(ctx, fmt.Sprintf("quiet-settings-%d@example.test", time.Now().UnixNano()), "fake")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer st.DB.Exec(ctx, `DELETE FROM users WHERE id=$1`, member.ID)
+	token, e := auth.Token(member.ID, member.Email, "settings-test", time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	h := (&Server{Store: st, Secret: "settings-test", AdminEmails: []string{"admin@example.test"}, UserAgentTokens: TokensWrite}).Handler()
+	path := "/api/account/settings"
+	check := func(method, body string, code, days int) {
+		t.Helper()
+		w := call(t, h, method, path, token, body)
+		if w.Code != code {
+			t.Fatalf("%s: %d %s", method, w.Code, w.Body)
+		}
+		if days > 0 {
+			var got struct {
+				Days int `json:"quiet_application_days"`
+			}
+			if e := json.Unmarshal(w.Body.Bytes(), &got); e != nil || got.Days != days {
+				t.Fatalf("days: %s %v", w.Body, e)
+			}
+		}
+	}
+	check("GET", "", 200, 10)
+	check("PUT", `{"quiet_application_days":20}`, 200, 20)
+	check("PUT", `{}`, 200, 20)
+	for _, body := range []string{`{"quiet_application_days":0}`, `{"quiet_application_days":-1}`, `{"quiet_application_days":366}`, `{"quiet_application_days":null}`} {
+		check("PUT", body, 422, 0)
+	}
+	check("GET", "", 200, 20)
+	read, _, e := st.CreateAgentToken(ctx, member.ID, "read", []string{auth.ScopeRead}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if w := call(t, h, "PUT", path, read, `{"quiet_application_days":5}`); w.Code != 403 {
+		t.Fatal(w.Code, w.Body)
+	}
+	if w := call(t, h, "GET", path, read, ""); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	write, _, e := st.CreateAgentToken(ctx, member.ID, "write", []string{auth.ScopeRead, auth.ScopeWrite}, nil)
+	if e != nil {
+		t.Fatal(e)
+	}
+	if w := call(t, h, "PUT", path, write, `{"quiet_application_days":30}`); w.Code != 200 {
+		t.Fatal(w.Code, w.Body)
+	}
+	// Discovery updates retain the account preference and do not expose it.
+	d, e := st.DiscoverySettings(ctx, member.ID)
+	if e != nil {
+		t.Fatal(e)
+	}
+	d.Enabled, d.IntervalMinutes, d.MinScore = true, 720, 85
+	if _, e = st.SaveDiscoverySettings(ctx, member.ID, d); e != nil {
+		t.Fatal(e)
+	}
+	check("GET", "", 200, 30)
+	check("PUT", `{"quiet_application_days":1}`, 200, 1)
+	check("PUT", `{"quiet_application_days":365}`, 200, 365)
+	preserved, e := st.DiscoverySettings(ctx, member.ID)
+	if e != nil || !preserved.Enabled || preserved.IntervalMinutes != 720 || preserved.MinScore != 85 || preserved.NextRunAt == nil {
+		t.Fatal("account preference changed discovery schedule", preserved, e)
+	}
+	other, e := st.CreateUser(ctx, fmt.Sprintf("quiet-settings-other-%d@example.test", time.Now().UnixNano()), "fake")
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer st.DB.Exec(ctx, `DELETE FROM users WHERE id=$1`, other.ID)
+	otherToken, e := auth.Token(other.ID, other.Email, "settings-test", time.Hour)
+	if e != nil {
+		t.Fatal(e)
+	}
+	w := call(t, h, "GET", path, otherToken, "")
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"quiet_application_days":10`) {
+		t.Fatal(w.Code, w.Body)
+	}
+}
+
 type followUpAI struct{ calls atomic.Int32 }
 
 func (p *followUpAI) Name() string  { return "fake" }

@@ -194,15 +194,18 @@ type Documents struct {
 	Answers          map[string]string `json:"answers"`
 }
 
+type AccountSettings struct {
+	QuietApplicationDays int `json:"quiet_application_days"`
+}
+
 type DiscoverySettings struct {
-	QuietApplicationDays int        `json:"quiet_application_days"`
-	Enabled              bool       `json:"enabled"`
-	IntervalMinutes      int        `json:"interval_minutes"`
-	AutoPrepare          bool       `json:"auto_prepare"`
-	MinScore             int        `json:"min_score"`
-	MaxJobsPerRun        int        `json:"max_jobs_per_run"`
-	LastRunAt            *time.Time `json:"last_run_at,omitempty"`
-	NextRunAt            *time.Time `json:"next_run_at,omitempty"`
+	Enabled         bool       `json:"enabled"`
+	IntervalMinutes int        `json:"interval_minutes"`
+	AutoPrepare     bool       `json:"auto_prepare"`
+	MinScore        int        `json:"min_score"`
+	MaxJobsPerRun   int        `json:"max_jobs_per_run"`
+	LastRunAt       *time.Time `json:"last_run_at,omitempty"`
+	NextRunAt       *time.Time `json:"next_run_at,omitempty"`
 }
 
 type DiscoverySource struct {

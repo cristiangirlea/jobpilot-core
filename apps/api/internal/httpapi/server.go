@@ -62,8 +62,14 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-//	11: quiet notifications and stored follow-up drafts, capped at two.
-const Contract = 11
+//
+// Additions at contract 10: reading the notification feed opens due quiet
+// reminders; POST /api/applications/{id}/follow-up (403 for an unverified
+// account where verification is required) saves a draft, and POST
+// /api/applications/{id}/dismiss-follow-up dismisses the reminder. GET
+// /api/applications/{id} includes follow_ups; GET/PUT /api/account/settings
+// expose quiet_application_days. These routes and fields do not raise Contract.
+const Contract = 10
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -212,6 +218,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/applications/{id}/dismiss-follow-up", w(s.dismissQuietApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))
+	m.Handle("GET /api/account/settings", p(s.accountSettings))
+	m.Handle("PUT /api/account/settings", w(s.saveAccountSettings))
 	m.Handle("GET /api/discovery/settings", ap(s.discoverySettings))
 	m.Handle("PUT /api/discovery/settings", aw(s.saveDiscoverySettings))
 	m.Handle("GET /api/discovery/sources", ap(s.discoverySources))
@@ -867,10 +875,6 @@ func (s *Server) discoverySettings(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveDiscoverySettings(w http.ResponseWriter, r *http.Request) {
 	var x models.DiscoverySettings
 	if !decode(w, r, &x) {
-		return
-	}
-	if x.QuietApplicationDays < 0 || x.QuietApplicationDays > 365 {
-		problem(w, 422, "Quiet application days must be from 1 to 365.")
 		return
 	}
 	if x.IntervalMinutes < 360 || x.MinScore < 0 || x.MinScore > 100 || x.MaxJobsPerRun < 1 || x.MaxJobsPerRun > 500 {

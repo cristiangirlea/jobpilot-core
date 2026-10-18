@@ -12,7 +12,7 @@ import (
 )
 
 // Notification is one thing that waits, or waited, for the user, as the API
-// returns it. Kind is open: answer, cv and outbox today, more later.
+// returns it. Kind is open: answer, cv, outbox and quiet_application today.
 type Notification struct {
 	ID         string         `json:"id"`
 	Kind       string         `json:"kind"`

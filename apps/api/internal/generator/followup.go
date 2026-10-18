@@ -11,14 +11,20 @@ import (
 )
 
 type FollowUpMaterials struct {
-	CV          string            `json:"cv"`
-	CoverLetter string            `json:"cover_letter"`
-	Answers     map[string]string `json:"answers"`
+	CV            string            `json:"cv"`
+	CoverLetter   string            `json:"cover_letter"`
+	Answers       map[string]string `json:"answers"`
+	AnswerSources map[string]string `json:"answer_sources"`
+	JobTitle      string            `json:"job_title"`
+	Company       string            `json:"company"`
 }
 
 func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, sent FollowUpMaterials) (string, string) {
 	opening := "Hello,"
 	subject := "I am following up on my application."
+	if title, company := strings.Join(strings.Fields(sent.JobTitle), " "), strings.Join(strings.Fields(sent.Company), " "); title != "" && company != "" {
+		subject = "I am following up on my application for " + title + " at " + company + "."
+	}
 	request := "Could you let me know if there is an update on the application?"
 	closing := "Thank you,"
 	if name := strings.Join(strings.Fields(profile.Name), " "); name != "" {
@@ -26,18 +32,14 @@ func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, s
 	}
 	parts := []string{opening, subject}
 	excerpt := ""
-	candidates := []string{sent.CoverLetter, sent.CV}
 	keys := make([]string, 0, len(sent.Answers))
 	for key := range sent.Answers {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
 	for _, key := range keys {
-		candidates = append(candidates, sent.Answers[key])
-	}
-	for _, text := range candidates {
-		text = strings.TrimSpace(text)
-		if text != "" && len(text) <= 300 && !strings.ContainsAny(text, "\r\n") {
+		text := strings.TrimSpace(sent.Answers[key])
+		if quotableFollowUpAnswer(key, text, sent.AnswerSources[key]) {
 			excerpt = "In my application I wrote: \"" + text + "\""
 			break
 		}
@@ -60,4 +62,28 @@ func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, s
 		}
 	}
 	return fallback, LetterSourceTemplate
+}
+
+func quotableFollowUpAnswer(label, text, source string) bool {
+	switch source {
+	case "bank", "bank_similar", "ai", "template":
+	default:
+		return false
+	}
+	// A source alone is not enough: templates include attachment placeholders,
+	// and the answer bank can contain contact details and salary expectations.
+	for _, word := range []string{"email", "e-mail", "name", "phone", "address", "linkedin", "github", "website", "salary", "compensation", "pay", "rate", "attachment", "cover letter", "resume", "cv"} {
+		if strings.Contains(strings.ToLower(label), word) {
+			return false
+		}
+	}
+	if len(text) < 30 || len(text) > 300 || len(strings.Fields(text)) < 6 || strings.ContainsAny(text, "\r\n@()") || !strings.ContainsAny(text[len(text)-1:], ".!?") {
+		return false
+	}
+	for _, word := range []string{"attached", "salary", "compensation", "eur", "usd", "€", "$"} {
+		if strings.Contains(strings.ToLower(text), word) {
+			return false
+		}
+	}
+	return true
 }

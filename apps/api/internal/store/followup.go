@@ -68,26 +68,28 @@ func (s *Store) SaveFollowUp(ctx context.Context, u, id, body string) (FollowUpD
 }
 
 func (s *Store) FollowUpMaterials(ctx context.Context, u, id string) (generator.FollowUpMaterials, error) {
-	sent := generator.FollowUpMaterials{Answers: map[string]string{}}
+	sent := generator.FollowUpMaterials{Answers: map[string]string{}, AnswerSources: map[string]string{}}
 	var raw []byte
 	// Prepared documents and later rewrites do not prove what reached the employer.
-	err := s.DB.QueryRow(ctx, `SELECT COALESCE(c.extracted_text,''),COALESCE(o.cover_letter,''),COALESCE(o.answers,'[]'::jsonb)
- FROM applications a LEFT JOIN application_outbox o ON o.application_id=a.id AND o.user_id=a.user_id
+	err := s.DB.QueryRow(ctx, `SELECT j.title,j.company,COALESCE(c.extracted_text,''),COALESCE(o.cover_letter,''),COALESCE(o.answers,'[]'::jsonb)
+ FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN application_outbox o ON o.application_id=a.id AND o.user_id=a.user_id
  AND o.status='sent' AND o.sent_at IS NOT NULL AND o.updated_at<=o.sent_at
  LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=a.user_id AND c.updated_at<=o.sent_at
- WHERE a.user_id=$1 AND a.id=$2`, u, id).Scan(&sent.CV, &sent.CoverLetter, &raw)
+ WHERE a.user_id=$1 AND a.id=$2`, u, id).Scan(&sent.JobTitle, &sent.Company, &sent.CV, &sent.CoverLetter, &raw)
 	if err != nil {
 		return sent, err
 	}
 	var answers []struct {
 		Label  string `json:"label"`
 		Answer string `json:"answer"`
+		Source string `json:"source"`
 	}
 	if err = json.Unmarshal(raw, &answers); err != nil {
 		return sent, err
 	}
 	for _, a := range answers {
 		sent.Answers[a.Label] = a.Answer
+		sent.AnswerSources[a.Label] = a.Source
 	}
 	return sent, nil
 }
@@ -100,6 +102,9 @@ func (s *Store) DismissQuietApplication(ctx context.Context, u, id string) error
 	defer tx.Rollback(ctx)
 	var own string
 	if err = tx.QueryRow(ctx, `SELECT id FROM applications WHERE user_id=$1 AND id=$2 FOR UPDATE`, u, id).Scan(&own); err != nil {
+		return err
+	}
+	if err = OpenNotification(ctx, tx, u, "quiet_application", id, "Quiet application reminder dismissed", map[string]any{"href": "/applications/" + id}); err != nil {
 		return err
 	}
 	if err = ResolveNotification(ctx, tx, u, "quiet_application", id); err != nil {
