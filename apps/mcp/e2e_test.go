@@ -194,7 +194,8 @@ func TestEndToEnd(t *testing.T) {
 		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
 		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
-		"list_blacklist": true, "add_to_blacklist": true,
+		"prepare_interview": true,
+		"list_blacklist":    true, "add_to_blacklist": true,
 		"get_discovery_settings": true, "set_discovery_settings": true,
 		"update_discovery_source": true, "find_jobs_for_profile": true, "get_catalog_summary": true,
 	}

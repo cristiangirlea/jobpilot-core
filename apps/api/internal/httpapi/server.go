@@ -62,7 +62,8 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
-const Contract = 10
+//	11: interview applications have a read-only interview preparation pack.
+const Contract = 11
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -206,6 +207,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/applications", p(s.listApplications))
 	m.Handle("POST /api/applications", w(s.createApplication))
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
+	m.Handle("GET /api/applications/{id}/interview-prep", p(s.prepareInterview))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))
