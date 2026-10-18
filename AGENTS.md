@@ -36,12 +36,12 @@ go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...   # nothing reachable; `ma
 Both modules name the same Go release in `go.mod` (1.27.2), which CI installs; `apps/api/Dockerfile`
 builds on `golang:1.27.2-alpine` (the golang images run only their own release). Move them together.
 
-then `npm ci && npm run typecheck` in `apps/web`; `docker build` of `apps/api`, `apps/web`
+then `npm ci && npm run typecheck && npm test` in `apps/web`; `docker build` of `apps/api`, `apps/web`
 (`--build-arg NEXT_PUBLIC_API_URL=...`) and `migrations`; kustomize + kubeconform on `deploy/base`
 and `sh scripts/infra-bump-test.sh` (git and jq);
 and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and concurrently), the
 `...Postgres` Go tests, the API, both smoke scripts, and the MCP stdio end-to-end test.
-`make test` covers the Go tests and the typecheck; `/check` runs the CI steps in order.
+`make test` covers the Go tests, web tests and typecheck; `/check` runs the CI steps in order.
 
 - Tests whose subject is SQL are named `...Postgres` and skip unless `JOBPILOT_TEST_DATABASE_URL`
   names a migrated database. A new SQL query gets one.

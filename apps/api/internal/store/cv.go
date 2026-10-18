@@ -45,7 +45,8 @@ func scanCV(row pgx.Row) (models.CVDocument, error) {
 
 // SaveCV stores an uploaded or generated CV. Re-uploading a byte-identical file
 // refreshes the existing row rather than creating a duplicate to review, but it
-// clears approval, because the parse may now differ.
+// clears approval, because the parse may now differ. Regenerating an identical
+// tailored CV preserves an existing approval, including one granted during reuse.
 func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument, data []byte) (models.CVDocument, error) {
 	if len(cvReviewBlockers(doc)) > 0 {
 		doc.Approved = false
@@ -79,9 +80,19 @@ func (s *Store) SaveCV(ctx context.Context, userID string, doc models.CVDocument
 			parsed=CASE WHEN cv_documents.kind='tailored' AND EXCLUDED.kind<>'tailored' THEN cv_documents.parsed ELSE EXCLUDED.parsed END,
 			role_family=EXCLUDED.role_family, technologies=EXCLUDED.technologies,
 			approved=false, approved_at=NULL, updated_at=now()
+		WHERE NOT (cv_documents.kind='tailored' AND cv_documents.approved AND EXCLUDED.kind='tailored')
 		RETURNING `+cvColumns,
 		userID, doc.Kind, doc.Label, doc.Filename, doc.Format, doc.ContentType, doc.SizeBytes,
 		data, doc.ExtractedText, parsed, doc.RoleFamily, doc.Technologies, parent, doc.Fingerprint, doc.Approved))
+	if errors.Is(err, pgx.ErrNoRows) {
+		// The conflict row is locked but unchanged: reuse it without moving
+		// its outbox entries or rewriting the original posting's review.
+		saved, err = scanCV(tx.QueryRow(ctx, `SELECT `+cvColumns+` FROM cv_documents WHERE user_id=$1 AND fingerprint=$2`, userID, doc.Fingerprint))
+		if err != nil {
+			return models.CVDocument{}, err
+		}
+		return saved, tx.Commit(ctx)
+	}
 	if err != nil {
 		return models.CVDocument{}, err
 	}

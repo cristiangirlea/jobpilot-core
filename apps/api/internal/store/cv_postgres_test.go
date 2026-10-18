@@ -128,6 +128,15 @@ func TestCVTextLayerReviewAgainstPostgres(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(doc, before) {
 		t.Fatalf("refresh changed approved CV: %+v %v", doc, err)
 	}
+	t.Run("reupload still clears tailored approval", func(t *testing.T) {
+		uploaded, err := st.SaveCV(ctx, owner.ID, models.CVDocument{Kind: "base", Filename: "upload.pdf", Format: "pdf", Fingerprint: doc.Fingerprint, Parsed: map[string]any{"warnings": []any{"base parse"}}}, []byte("synthetic PDF"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uploaded.Approved || uploaded.ApprovedAt != nil || uploaded.Kind != "tailored" || !reflect.DeepEqual(uploaded.Parsed, before.Parsed) {
+			t.Fatalf("reupload must clear approval and retain tailored findings: %+v", uploaded)
+		}
+	})
 }
 
 func TestCVReviewPreservesApprovedOutboxPostgres(t *testing.T) {

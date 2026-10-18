@@ -249,7 +249,7 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	// review, a ready one is blocked.
 	reuploaded := newCV("reuploaded", true)
 	followed := approves("an entry whose CV will be uploaded again", compose(job, reuploaded.ID, nil))
-	if _, err := st.SaveCV(ctx, ana.ID, models.CVDocument{Kind: "tailored", Filename: "reuploaded.pdf", Format: "pdf", Fingerprint: "approval-reuploaded-" + run}, []byte("%PDF-1.4 test")); err != nil {
+	if _, err := st.SaveCV(ctx, ana.ID, models.CVDocument{Kind: "base", Filename: "reuploaded.pdf", Format: "pdf", Fingerprint: "approval-reuploaded-" + run}, []byte("%PDF-1.4 test")); err != nil {
 		t.Fatal(err)
 	}
 	if back, err := st.OutboxEntry(ctx, ana.ID, followed.ID); err != nil || back.Status != models.OutboxNeedsReview || back.ApprovedAt != nil || len(back.Blockers) != 1 || back.Blockers[0] != CVBlocker {
@@ -349,7 +349,7 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 	approver := waiter("the approval", backend(approving), racingApproval)
 	upload := make(chan error, 1)
 	go func() {
-		_, err := st.SaveCV(bounded, ana.ID, models.CVDocument{Kind: "tailored", Filename: "raced.pdf", Format: "pdf", Fingerprint: "approval-raced-" + run}, []byte("%PDF-1.4 test"))
+		_, err := st.SaveCV(bounded, ana.ID, models.CVDocument{Kind: "base", Filename: "raced.pdf", Format: "pdf", Fingerprint: "approval-raced-" + run}, []byte("%PDF-1.4 test"))
 		upload <- err
 	}()
 	waiter("the re-upload", approver, upload)
