@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"jobpilot/core/api/internal/generator"
+	"jobpilot/core/api/internal/models"
 )
 
 var ErrFollowUpLimit = errors.New("At most two follow-up drafts are allowed per application.")
@@ -74,22 +75,36 @@ func (s *Store) FollowUpMaterials(ctx context.Context, u, id string) (generator.
 	err := s.DB.QueryRow(ctx, `SELECT j.title,j.company,COALESCE(c.extracted_text,''),COALESCE(o.cover_letter,''),COALESCE(o.answers,'[]'::jsonb)
  FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN application_outbox o ON o.application_id=a.id AND o.user_id=a.user_id
  AND o.status='sent' AND o.sent_at IS NOT NULL AND o.updated_at<=o.sent_at
- LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=a.user_id AND c.updated_at<=o.sent_at
+ LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=a.user_id AND c.updated_at<=COALESCE(o.submit_attempted_at,o.sent_at)
  WHERE a.user_id=$1 AND a.id=$2`, u, id).Scan(&sent.JobTitle, &sent.Company, &sent.CV, &sent.CoverLetter, &raw)
 	if err != nil {
 		return sent, err
 	}
-	var answers []struct {
-		Label  string `json:"label"`
-		Answer string `json:"answer"`
-		Source string `json:"source"`
-	}
+	var answers []models.OutboxAnswer
 	if err = json.Unmarshal(raw, &answers); err != nil {
 		return sent, err
 	}
+	// Only what the sender submitted counts: the same rule the sender and the interview pack use.
+	sentCV, sentLetter := false, false
 	for _, a := range answers {
-		sent.Answers[a.Label] = a.Answer
-		sent.AnswerSources[a.Label] = a.Source
+		if !models.SendsFormValue(a) {
+			continue
+		}
+		switch a.Source {
+		case "cv":
+			sentCV = true
+		case "cover_letter":
+			sentLetter = true
+		default:
+			sent.Answers[a.Label] = a.Answer
+			sent.AnswerSources[a.Label] = a.Source
+		}
+	}
+	if !sentCV {
+		sent.CV = ""
+	}
+	if !sentLetter {
+		sent.CoverLetter = ""
 	}
 	return sent, nil
 }

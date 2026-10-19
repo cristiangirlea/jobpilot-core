@@ -432,7 +432,12 @@ func TestFollowUpDraftsAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = pool.Exec(ctx, `INSERT INTO application_outbox(user_id,job_id,application_id,status,cv_document_id,cover_letter,answers,sent_at,updated_at) VALUES($1,$2,$3,'sent',$4,'Sent outbox letter','[{"label":"Experience","answer":"Sent outbox answer","source":"bank_similar"}]',now(),now())`, u.ID, a.JobID, a.ID, cv.ID)
+	// The sender skips an optional AI draft still awaiting review; a required one goes out.
+	sentAnswers := `[{"label":"Resume","source":"cv"},{"label":"Cover letter","source":"cover_letter"},
+		{"label":"Experience","answer":"Sent outbox answer","source":"bank_similar"},
+		{"label":"Motivation","answer":"Unreviewed optional draft","source":"ai","needs_review":true},
+		{"label":"Approach","answer":"Required reviewed draft","source":"ai","needs_review":true,"required":true}]`
+	_, err = pool.Exec(ctx, `INSERT INTO application_outbox(user_id,job_id,application_id,status,cv_document_id,cover_letter,answers,sent_at,updated_at) VALUES($1,$2,$3,'sent',$4,'Sent outbox letter',$5,now(),now())`, u.ID, a.JobID, a.ID, cv.ID, sentAnswers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -442,6 +447,28 @@ func TestFollowUpDraftsAgainstPostgres(t *testing.T) {
 	}
 	if sent.AnswerSources["Experience"] != "bank_similar" || sent.JobTitle != "Engineer" || sent.Company != "Followup Test" {
 		t.Fatal("sent answer provenance or job context lost", sent)
+	}
+	if _, ok := sent.Answers["Motivation"]; ok || sent.Answers["Approach"] != "Required reviewed draft" {
+		t.Fatal("only answers the sender submits belong in the follow-up", sent.Answers)
+	}
+	exec := func(sql string, args ...any) {
+		t.Helper()
+		if _, e := pool.Exec(ctx, sql, args...); e != nil {
+			t.Fatal(e)
+		}
+	}
+	exec(`UPDATE application_outbox SET answers='[{"label":"Experience","answer":"Sent outbox answer","source":"bank_similar"}]' WHERE application_id=$1`, a.ID)
+	sent, err = st.FollowUpMaterials(ctx, u.ID, a.ID)
+	if err != nil || sent.CV != "" || sent.CoverLetter != "" || sent.Answers["Experience"] != "Sent outbox answer" {
+		t.Fatal("a form without CV and letter fields sent neither", sent, err)
+	}
+	exec(`UPDATE application_outbox SET answers=$2 WHERE application_id=$1`, a.ID, sentAnswers)
+	// A CV changed after the submit attempt began may not be what was uploaded.
+	exec(`UPDATE application_outbox SET submit_attempted_at=sent_at-interval '1 minute' WHERE application_id=$1`, a.ID)
+	exec(`UPDATE cv_documents SET updated_at=(SELECT sent_at FROM application_outbox WHERE application_id=$1)-interval '30 seconds' WHERE id=$2`, a.ID, cv.ID)
+	sent, err = st.FollowUpMaterials(ctx, u.ID, a.ID)
+	if err != nil || sent.CV != "" {
+		t.Fatal("CV changed during the submit attempt leaked", sent, err)
 	}
 	_, err = pool.Exec(ctx, `UPDATE cv_documents SET extracted_text='Unsent CV rewrite',updated_at=now() WHERE id=$1`, cv.ID)
 	if err != nil {

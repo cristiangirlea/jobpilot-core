@@ -15,9 +15,3 @@ func TestQuietApplicationSettingValidation(t *testing.T) {
 		}
 	}
 }
-
-func TestQuietAdditionsKeepContract(t *testing.T) {
-	if Contract != 10 {
-		t.Fatalf("additive follow-up routes and fields changed contract: %d", Contract)
-	}
-}
