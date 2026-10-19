@@ -246,9 +246,11 @@ jobs:
       - name: Upload API log
         if: failure()
         uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: api-log
           path: ${{ runner.temp }}/api.log
+          retention-days: 7
 
   # On master, on the lab runners only, once every check has passed: the images the infra overlay
   # deploys, pushed to the cluster's registry (plain HTTP; the nodes and runner pods use it as
@@ -302,9 +304,11 @@ jobs:
           publish jobpilot-migrate migrations
           { echo '### Images for the infra overlay'; echo; echo '```yaml'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: images
           path: ${{ runner.temp }}/images.yaml
+          retention-days: 7
 
   # After publish: the rolling bump PR in infra (branch bump/jobpilot), which pins this commit and
   # its three images in clusters/local/jobpilot.yaml. It skips commits that change nothing deployed,
