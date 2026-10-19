@@ -197,6 +197,10 @@ type Documents struct {
 	Answers          map[string]string `json:"answers"`
 }
 
+type AccountSettings struct {
+	QuietApplicationDays int `json:"quiet_application_days"`
+}
+
 type DiscoverySettings struct {
 	Enabled         bool       `json:"enabled"`
 	IntervalMinutes int        `json:"interval_minutes"`

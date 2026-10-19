@@ -391,6 +391,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	addApplyTools(s, c)
 	addNotificationTools(s, c)
 	addInterviewTools(s, c)
+	addFollowUpTools(s, c)
 	return s
 }
 

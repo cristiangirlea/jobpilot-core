@@ -66,6 +66,13 @@ import (
 //	   reading-order blockers refuse CV approval with 409.
 //	12: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
 //	13: PUT keeps stored eligibility and language rules when their fields are absent.
+//
+// Additions at contract 13: reading the notification feed opens due quiet
+// reminders; POST /api/applications/{id}/follow-up (403 for an unverified
+// account where verification is required) saves a draft, and POST
+// /api/applications/{id}/dismiss-follow-up dismisses the reminder. GET
+// /api/applications/{id} includes follow_ups; GET/PUT /api/account/settings
+// expose quiet_application_days. These routes and fields do not raise Contract.
 const Contract = 13
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
@@ -212,8 +219,12 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
 	m.Handle("GET /api/applications/{id}/interview-prep", p(s.prepareInterview))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
+	m.Handle("POST /api/applications/{id}/follow-up", w(s.requireVerified(s.draftFollowUp)))
+	m.Handle("POST /api/applications/{id}/dismiss-follow-up", w(s.dismissQuietApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))
+	m.Handle("GET /api/account/settings", p(s.accountSettings))
+	m.Handle("PUT /api/account/settings", w(s.saveAccountSettings))
 	m.Handle("GET /api/discovery/settings", ap(s.discoverySettings))
 	m.Handle("PUT /api/discovery/settings", aw(s.saveDiscoverySettings))
 	m.Handle("GET /api/discovery/sources", ap(s.discoverySources))
@@ -855,7 +866,12 @@ func (s *Server) getApplication(w http.ResponseWriter, r *http.Request) {
 		internal(w, e)
 		return
 	}
-	write(w, 200, map[string]any{"application": a, "documents": d, "blocked": job.Match.Rejected, "block_reasons": job.Match.RejectionReasons})
+	followUps, e := s.Store.FollowUps(ctx, uid, a.ID)
+	if e != nil {
+		internal(w, e)
+		return
+	}
+	write(w, 200, map[string]any{"application": a, "documents": d, "follow_ups": followUps, "blocked": job.Match.Rejected, "block_reasons": job.Match.RejectionReasons})
 }
 
 type applicationUpdate struct {
