@@ -210,6 +210,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/applications", p(s.listApplications))
 	m.Handle("POST /api/applications", w(s.createApplication))
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
+	m.Handle("GET /api/applications/{id}/interview-prep", p(s.prepareInterview))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
 	m.Handle("GET /api/dashboard", p(s.dashboard))
 	m.Handle("GET /api/notifications", p(s.listNotifications))

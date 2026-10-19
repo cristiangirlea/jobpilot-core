@@ -673,6 +673,10 @@ Application statuses are:
 
 Every status change creates an `application_events` history row.
 
+`GET /api/applications/{id}/interview-prep` (MCP: `prepare_interview`) reads a deterministic preparation pack for an application in `interview` status; every other status gets 409, and another user's application gets 404. It returns the stored posting and match (strengths, gaps and warnings), available sent CV text, cover letter and form answers, STAR prompts mapped to relevant profile experiences and projects, an honest bridge prompt per gap, and questions grounded in the posting. The user fills in situation, task, action and result with real examples; results and missing skills are never invented. It works with `LLM_PROVIDER=none`, writes nothing and fetches nothing from the web.
+
+Only a confirmed `sent` outbox entry linked to this application supplies sent documents, with its stored wording preserved; draft documents and the current answer bank are never substituted. CV text and a nonempty cover letter appear only when the sent form had their respective fields. Optional unreviewed drafts and personal/declaration/upload fields the sender omits are left out of the answers. A missing CV or any change to the CV after sending, including a change to its approval, makes the sent text unavailable even if its bytes and extracted text are unchanged. For manually recorded applications without a sent outbox entry, sent documents are unavailable. Notices explain these limits: the schema retains the current posting, match and profile, not application-time snapshots, so the pack does not claim to reconstruct those historical versions.
+
 Apply buttons use the protected `POST /api/jobs/{id}/outbound` endpoint. It records user, job, and optional application attribution. The endpoint applies at the authorized partner link first, when one is configured; otherwise at the employer's own page (`employer_url`) when known, else the apply URL. It is blocked for rejected jobs. That order is decided in one place, `models.Job.ApplyTarget`. Composing and the MCP server use a different order with no partner link: the employer's page, else the apply URL. Composing reads the form at `models.Job.FormTarget` (a partner link is attribution, never a form), and the MCP server's `applyLinkOrder` sentence tells agents to give the user the `employer_url`, else the `apply_url` (it never sees a partner link).
 
 Click attribution alone does not create revenue. Monetization requires a real employer, affiliate, CPA, recruiting, or hiring-partner agreement plus suitable user disclosure. Do not create or guess third-party referral codes.
@@ -893,6 +897,7 @@ Apply engine:
 | `list_answers` | read | The answer bank; pending answers are drafts awaiting approval |
 | `list_cvs`, `get_cv` | read | CVs and their extracted text, parse warnings, and tailored PDF text-layer blockers and keyword findings; no ATS pass percentage |
 | `list_outbox`, `get_outbox_entry` | read | Composed applications, their blockers and every answer's provenance |
+| `prepare_interview` | read | Interview-stage prep from the stored posting and available sent documents; STAR and gap prompts for the user to fill with real examples |
 | `detect_board` | read | Work out the provider and identifier behind a careers URL |
 | `list_board_suggestions` | read | Curated employer boards known to work as sources |
 | `resolve_screening_answers` | write | Answer a job's questions; drafts are persisted unapproved |
