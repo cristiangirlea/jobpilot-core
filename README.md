@@ -1015,6 +1015,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `024_email_tokens.sql` | Verified addresses (existing accounts count as verified) and single-use verify and reset links, stored as digests |
 | `025_filter_eligibility_language.sql` | Opt-in eligibility and unlisted-language rejection rules, both off for existing presets |
 | `026_quiet_applications.sql` | Per-user quiet-day threshold, status clock and resolve trigger, and follow-up drafts limited to two per application |
+| `027_sent_cv_version.sql` | The CV version read by the sender, so later edits are not reported as sent |
 
 Core entities:
 

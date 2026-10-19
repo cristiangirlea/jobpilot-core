@@ -2,6 +2,8 @@ package sender
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -90,6 +92,52 @@ func TestSweepSendsApprovedEntriesAgainstPostgres(t *testing.T) {
 	if e.posted() != 1 {
 		t.Fatal("a sent entry must never be posted again")
 	}
+
+	t.Run("the recorded CV version is the one read before fetching the form", func(t *testing.T) {
+		entry := approve("edited-cv", "greenhouse")
+		fake := newEmployer(t)
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodGet {
+				if _, err := pool.Exec(ctx, `UPDATE cv_documents SET data=$2,extracted_text='Unsent edit',updated_at=now() WHERE id=$1`, cv.ID, []byte("new CV bytes")); err != nil {
+					t.Error(err)
+					http.Error(w, "fake edit failed", http.StatusInternalServerError)
+					return
+				}
+			}
+			fake.server.Config.Handler.ServeHTTP(w, r)
+		}))
+		defer server.Close()
+		service := New(st, NewGreenhouse(server.URL), 0)
+		service.onlyUser = ana.ID
+		service.Sweep(ctx)
+		var recorded *time.Time
+		if err := pool.QueryRow(ctx, `SELECT sent_cv_updated_at FROM application_outbox WHERE id=$1`, entry.ID).Scan(&recorded); err != nil {
+			t.Fatal(err)
+		}
+		if recorded == nil || !recorded.Equal(cv.UpdatedAt) {
+			t.Errorf("want read CV version %v, got %v", cv.UpdatedAt, recorded)
+		}
+		if got := stored(entry.ID); got.Status != models.OutboxSent || fake.posted() != 1 || fake.files["resume"] != "ana-cv.pdf:%PDF-1.4 ana" {
+			t.Fatalf("the original file must still be posted once: status %s, posts %d, files %v", got.Status, fake.posted(), fake.files)
+		}
+	})
+
+	t.Run("a form without a CV records no CV version", func(t *testing.T) {
+		entry := approve("no-cv", "greenhouse")
+		if _, err := pool.Exec(ctx, `UPDATE application_outbox SET answers=(SELECT jsonb_agg(a) FROM jsonb_array_elements(answers) a WHERE a->>'source'<>'cv') WHERE id=$1`, entry.ID); err != nil {
+			t.Fatal(err)
+		}
+		fake := newEmployer(t)
+		fake.page = strings.Replace(formPage, `<input type="file" name="resume" required>`, "", 1)
+		sweep(fake)
+		var recorded *time.Time
+		if err := pool.QueryRow(ctx, `SELECT sent_cv_updated_at FROM application_outbox WHERE id=$1`, entry.ID).Scan(&recorded); err != nil {
+			t.Fatal(err)
+		}
+		if got := stored(entry.ID); recorded != nil || got.Status != models.OutboxSent || fake.posted() != 1 || len(fake.files) != 0 {
+			t.Fatalf("want one post without a CV and NULL version: version %v, status %s, posts %d, files %v", recorded, got.Status, fake.posted(), fake.files)
+		}
+	})
 
 	captcha := approve("captcha", "greenhouse")
 	other := approve("ashby", "ashby")
