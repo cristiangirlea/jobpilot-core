@@ -196,7 +196,7 @@ func (s *Store) DeleteOwned(ctx context.Context, table, u, id string) error {
 }
 
 func (s *Store) Filters(ctx context.Context, u string) ([]models.FilterPreset, error) {
-	rows, err := s.DB.Query(ctx, `SELECT id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days FROM filter_presets WHERE user_id=$1 ORDER BY created_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages FROM filter_presets WHERE user_id=$1 ORDER BY created_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (s *Store) Filters(ctx context.Context, u string) ([]models.FilterPreset, e
 	out := []models.FilterPreset{}
 	for rows.Next() {
 		var x models.FilterPreset
-		if err = rows.Scan(&x.ID, &x.Name, &x.Active, &x.IncludedTitles, &x.ExcludedTitleWords, &x.Locations, &x.RemoteTypes, &x.MinSalary, &x.Currency, &x.EmploymentTypes, &x.ExcludedIndustries, &x.RequiredSkills, &x.IncludedTechnologies, &x.ExcludedTechnologies, &x.MaxAgeDays); err != nil {
+		if err = rows.Scan(&x.ID, &x.Name, &x.Active, &x.IncludedTitles, &x.ExcludedTitleWords, &x.Locations, &x.RemoteTypes, &x.MinSalary, &x.Currency, &x.EmploymentTypes, &x.ExcludedIndustries, &x.RequiredSkills, &x.IncludedTechnologies, &x.ExcludedTechnologies, &x.MaxAgeDays, &x.RejectEligibilityRequirements, &x.RejectUnlistedLanguages); err != nil {
 			return nil, err
 		}
 		out = append(out, x)
@@ -235,9 +235,9 @@ func (s *Store) SaveFilter(ctx context.Context, u string, x models.FilterPreset)
 		}
 	}
 	if x.ID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO filter_presets(user_id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays).Scan(&x.ID)
+		err = tx.QueryRow(ctx, `INSERT INTO filter_presets(user_id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages).Scan(&x.ID)
 	} else {
-		tag, e := tx.Exec(ctx, `UPDATE filter_presets SET name=$3,active=$4,included_titles=$5,excluded_title_words=$6,locations=$7,remote_types=$8,min_salary=$9,currency=$10,employment_types=$11,excluded_industries=$12,required_skills=$13,included_technologies=$14,excluded_technologies=$15,max_age_days=$16 WHERE id=$1 AND user_id=$2`, x.ID, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays)
+		tag, e := tx.Exec(ctx, `UPDATE filter_presets SET name=$3,active=$4,included_titles=$5,excluded_title_words=$6,locations=$7,remote_types=$8,min_salary=$9,currency=$10,employment_types=$11,excluded_industries=$12,required_skills=$13,included_technologies=$14,excluded_technologies=$15,max_age_days=$16,reject_eligibility_requirements=$17,reject_unlisted_languages=$18 WHERE id=$1 AND user_id=$2`, x.ID, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages)
 		err = e
 		if err == nil && tag.RowsAffected() == 0 {
 			err = pgx.ErrNoRows
@@ -1189,7 +1189,7 @@ func profileAction(p models.Profile) string {
 func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error) {
 	out := map[string]any{}
 	var profileFields, total, blacklistRejected, filterRejected, good, draft, applied int
-	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%')),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
+	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
 	if err != nil {
 		return nil, err
 	}

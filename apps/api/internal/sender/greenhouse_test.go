@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"jobpilot/core/api/internal/generator"
 	"jobpilot/core/api/internal/models"
 )
 
@@ -130,6 +131,57 @@ func TestSubmitFillsTheFormAndPostsIt(t *testing.T) {
 	}
 	if !strings.HasPrefix(e.agent, "JobPilot") {
 		t.Errorf("the sender must say what it is, got user agent %q", e.agent)
+	}
+}
+
+func TestInterviewAnswersMatchSentForm(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, value string
+		required, review    bool
+		want                bool
+	}{
+		{"profile", "profile", " Exact\n", false, false, true},
+		{"bank", "bank", " Exact\n", false, false, true},
+		{"human", "human", " Exact\n", false, false, true},
+		{"AI draft", "ai", "Draft", false, true, false},
+		{"template draft", "template", "Draft", false, true, false},
+		{"required AI checked at approval", "ai", "Reviewed", true, true, true},
+		{"required template checked at approval", "template", "Reviewed", true, true, true},
+		{"reviewed AI", "ai", "Reviewed", false, false, true},
+		{"reviewed template", "template", "Reviewed", false, false, true},
+		{"declaration", "declaration", "Yes", true, false, false},
+		{"personal", "personal", "Yes", true, false, false},
+		{"upload", "upload", "File", true, false, false},
+		{"blank", "human", " \n\t", false, false, false},
+		{"empty", "profile", "", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newEmployer(t)
+			e.page = strings.Replace(formPage, `<textarea name="cover_letter">`, `<textarea name="value"></textarea><textarea name="cover_letter">`, 1)
+			before := 0
+			sub := submission(&before)
+			sub.Answers = append(sub.Answers, models.OutboxAnswer{Field: "value", Source: tc.source, Answer: tc.value, Required: tc.required, NeedsReview: tc.review})
+			if err := NewGreenhouse(e.server.URL).Submit(context.Background(), sub); err != nil {
+				t.Fatal(err)
+			}
+			pack, err := generator.PrepareInterview(models.Application{Status: "interview"}, models.Profile{}, models.JobWithMatch{}, &models.InterviewDocuments{Answers: sub.Answers})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, sent := e.parts["value"]
+			included := false
+			for _, answer := range pack.SentDocuments.Answers {
+				if answer.Field == "value" {
+					included = true
+					if answer.Answer != e.parts["value"] {
+						t.Fatalf("pack and form must preserve the same wording: %q vs %q", answer.Answer, e.parts["value"])
+					}
+				}
+			}
+			if sent != tc.want || included != sent {
+				t.Fatalf("want sent=%t, form sent=%t, pack included=%t", tc.want, sent, included)
+			}
+		})
 	}
 }
 

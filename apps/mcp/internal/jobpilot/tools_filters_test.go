@@ -1,10 +1,62 @@
 package jobpilot
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestSetFiltersEligibilityLanguageRules(t *testing.T) {
+	cs, fake := session(t)
+	for _, enabled := range []bool{true, false} {
+		res, message := call(t, cs, "set_filters", map[string]any{
+			"name": "Eligibility", "reject_eligibility_requirements": enabled, "reject_unlisted_languages": enabled,
+		})
+		if res.IsError {
+			t.Fatal(message)
+		}
+		_, bodies := fake.savedFilters()
+		for _, key := range []string{"reject_eligibility_requirements", "reject_unlisted_languages"} {
+			if bodies[len(bodies)-1][key] != enabled {
+				t.Fatalf("%s: %v", key, bodies)
+			}
+		}
+	}
+	var base FilterPreset
+	if err := json.Unmarshal([]byte(`{"name":"Stored","reject_eligibility_requirements":true,"reject_unlisted_languages":true}`), &base); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{`{}`, `{"reject_eligibility_requirements":false}`, `{"reject_unlisted_languages":false}`} {
+		var in setFiltersInput
+		if err := json.Unmarshal([]byte(input), &in); err != nil {
+			t.Fatal(err)
+		}
+		got, err := applyFilterChanges(base, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := json.Marshal(got)
+		var fields map[string]any
+		_ = json.Unmarshal(data, &fields)
+		for _, key := range []string{"reject_eligibility_requirements", "reject_unlisted_languages"} {
+			want := !strings.Contains(input, key)
+			if fields[key] != want {
+				t.Fatalf("input=%s %s=%v want %v", input, key, fields[key], want)
+			}
+		}
+	}
+	res, message := call(t, cs, "set_filters", map[string]any{"name": "Default rules"})
+	if res.IsError {
+		t.Fatal(message)
+	}
+	_, bodies := fake.savedFilters()
+	for _, key := range []string{"reject_eligibility_requirements", "reject_unlisted_languages"} {
+		if bodies[len(bodies)-1][key] != false {
+			t.Fatalf("%s must default off", key)
+		}
+	}
+}
 
 func (f *fakeAPI) savedFilters() ([]string, []map[string]any) {
 	f.mu.Lock()

@@ -62,14 +62,18 @@ import (
 //	   403 on running discovery,
 //	   generating, composing or tailoring documents, resolving a job's
 //	   answers, creating agent tokens, and linking a Google identity.
+//	11: tailored CVs carry PDF text layer findings in parsed; contact and
+//	   reading-order blockers refuse CV approval with 409.
+//	12: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
+//	13: PUT keeps stored eligibility and language rules when their fields are absent.
 //
-// Additions at contract 10: reading the notification feed opens due quiet
+// Additions at contract 13: reading the notification feed opens due quiet
 // reminders; POST /api/applications/{id}/follow-up (403 for an unverified
 // account where verification is required) saves a draft, and POST
 // /api/applications/{id}/dismiss-follow-up dismisses the reminder. GET
 // /api/applications/{id} includes follow_ups; GET/PUT /api/account/settings
 // expose quiet_application_days. These routes and fields do not raise Contract.
-const Contract = 10
+const Contract = 13
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -213,6 +217,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/applications", p(s.listApplications))
 	m.Handle("POST /api/applications", w(s.createApplication))
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))
+	m.Handle("GET /api/applications/{id}/interview-prep", p(s.prepareInterview))
 	m.Handle("PATCH /api/applications/{id}", w(s.updateApplication))
 	m.Handle("POST /api/applications/{id}/follow-up", w(s.requireVerified(s.draftFollowUp)))
 	m.Handle("POST /api/applications/{id}/dismiss-follow-up", w(s.dismissQuietApplication))
@@ -536,14 +541,46 @@ func (s *Server) listFilters(w http.ResponseWriter, r *http.Request) {
 	respond(w, x, e)
 }
 func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
-	var x models.FilterPreset
-	if !decode(w, r, &x) {
+	var input struct {
+		models.FilterPreset
+		RejectEligibilityRequirements *bool `json:"reject_eligibility_requirements"`
+		RejectUnlistedLanguages       *bool `json:"reject_unlisted_languages"`
+	}
+	if !decode(w, r, &input) {
 		return
 	}
+	x := input.FilterPreset
 	x.ID = r.PathValue("id")
 	if strings.TrimSpace(x.Name) == "" || x.MinSalary < 0 || x.MaxAgeDays < 0 {
 		problem(w, 422, "Filter name is required and numeric limits cannot be negative.")
 		return
+	}
+	// Older clients omit rules they cannot represent.
+	if r.Method == http.MethodPut && (input.RejectEligibilityRequirements == nil || input.RejectUnlistedLanguages == nil) {
+		presets, err := s.Store.Filters(r.Context(), auth.UserID(r.Context()))
+		if err != nil {
+			internal(w, err)
+			return
+		}
+		found := false
+		for _, stored := range presets {
+			if stored.ID == x.ID {
+				x.RejectEligibilityRequirements = stored.RejectEligibilityRequirements
+				x.RejectUnlistedLanguages = stored.RejectUnlistedLanguages
+				found = true
+				break
+			}
+		}
+		if !found {
+			problem(w, http.StatusNotFound, "Filter not found.")
+			return
+		}
+	}
+	if input.RejectEligibilityRequirements != nil {
+		x.RejectEligibilityRequirements = *input.RejectEligibilityRequirements
+	}
+	if input.RejectUnlistedLanguages != nil {
+		x.RejectUnlistedLanguages = *input.RejectUnlistedLanguages
 	}
 	x.IncludedTitles = nonNil(x.IncludedTitles)
 	x.ExcludedTitleWords = nonNil(x.ExcludedTitleWords)
@@ -1037,7 +1074,7 @@ func internal(w http.ResponseWriter, err error) {
 	problem(w, 500, "An internal error occurred.")
 }
 func respond(w http.ResponseWriter, v any, err error) {
-	if errors.Is(err, store.ErrApplicationBlocked) {
+	if errors.Is(err, store.ErrApplicationBlocked) || errors.Is(err, store.ErrCVReviewBlocked) {
 		problem(w, 409, err.Error())
 		return
 	}

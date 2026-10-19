@@ -300,6 +300,9 @@ type FilterPreset struct {
 	IncludedTechnologies []string `json:"included_technologies"`
 	ExcludedTechnologies []string `json:"excluded_technologies"`
 	MaxAgeDays           int      `json:"max_age_days"`
+
+	RejectEligibilityRequirements bool `json:"reject_eligibility_requirements"`
+	RejectUnlistedLanguages       bool `json:"reject_unlisted_languages"`
 }
 
 type DiscoverySource struct {
