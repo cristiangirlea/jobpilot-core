@@ -470,6 +470,11 @@ func TestFollowUpDraftsAgainstPostgres(t *testing.T) {
 	if err != nil || sent.CV != "" {
 		t.Fatal("CV changed during the submit attempt leaked", sent, err)
 	}
+	exec(`UPDATE cv_documents SET updated_at=(SELECT submit_attempted_at FROM application_outbox WHERE application_id=$1)-interval '30 seconds' WHERE id=$2`, a.ID, cv.ID)
+	sent, err = st.FollowUpMaterials(ctx, u.ID, a.ID)
+	if err != nil || sent.CV != "Sent CV fact" {
+		t.Fatal("a CV unchanged since the submit attempt is what was sent", sent, err)
+	}
 	_, err = pool.Exec(ctx, `UPDATE cv_documents SET extracted_text='Unsent CV rewrite',updated_at=now() WHERE id=$1`, cv.ID)
 	if err != nil {
 		t.Fatal(err)
