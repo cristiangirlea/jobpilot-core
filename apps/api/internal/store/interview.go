@@ -17,7 +17,8 @@ func (s *Store) InterviewDocuments(ctx context.Context, userID, applicationID, j
 	// Any later CV update (including approval or a byte-identical re-upload)
 	// makes the historical text uncertain; never substitute its current text.
 	err := s.DB.QueryRow(ctx, `SELECT o.id,o.sent_at,
-		CASE WHEN c.updated_at <= COALESCE(o.submit_attempted_at,o.sent_at) THEN NULLIF(c.extracted_text,'') END,
+		CASE WHEN c.updated_at = o.sent_cv_updated_at OR (o.sent_cv_updated_at IS NULL
+			AND c.updated_at <= COALESCE(o.submit_attempted_at,o.sent_at)) THEN NULLIF(c.extracted_text,'') END,
 		o.cover_letter,o.answers
 		FROM application_outbox o
 		LEFT JOIN cv_documents c ON c.id=o.cv_document_id AND c.user_id=o.user_id

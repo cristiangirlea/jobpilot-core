@@ -137,6 +137,7 @@ func (s *Service) submit(ctx context.Context, userID string, entry models.Outbox
 	board, _ := entry.Form["board"].(string)
 	jobID, _ := entry.Form["job_id"].(string)
 	sub := Submission{Board: board, JobID: jobID, Answers: entry.Answers, CoverLetter: entry.CoverLetter}
+	var cvUpdatedAt *time.Time
 	for _, answer := range entry.Answers {
 		if answer.Source != "cv" {
 			continue
@@ -146,9 +147,10 @@ func (s *Service) submit(ctx context.Context, userID string, entry models.Outbox
 			return HandBack("The approved CV could not be read, so nothing was sent. Prepare the application again.")
 		}
 		sub.CV = &File{Name: doc.Filename, ContentType: doc.ContentType, Data: data}
+		cvUpdatedAt = &doc.UpdatedAt
 		break
 	}
-	sub.BeforePost = func() error { return s.Store.RecordSubmitAttempt(ctx, userID, entry.ID) }
+	sub.BeforePost = func() error { return s.Store.RecordSubmitAttempt(ctx, userID, entry.ID, cvUpdatedAt) }
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
 	return s.Greenhouse.Submit(ctx, sub)

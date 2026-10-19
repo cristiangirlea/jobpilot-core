@@ -100,9 +100,9 @@ func (s *Store) ClaimOutboxEntry(ctx context.Context, delay time.Duration, onlyU
 // RecordSubmitAttempt notes, just before an entry is posted, that it may reach
 // the employer from now on. It fails unless the entry is still being sent, so
 // an entry already written off as interrupted is never posted after all.
-func (s *Store) RecordSubmitAttempt(ctx context.Context, userID, id string) error {
-	tag, err := s.DB.Exec(ctx, `UPDATE application_outbox SET submit_attempted_at=now(), updated_at=now()
-		WHERE user_id=$1 AND id=$2 AND status='sending'`, userID, id)
+func (s *Store) RecordSubmitAttempt(ctx context.Context, userID, id string, cvUpdatedAt *time.Time) error {
+	tag, err := s.DB.Exec(ctx, `UPDATE application_outbox SET submit_attempted_at=now(), sent_cv_updated_at=$3, updated_at=now()
+		WHERE user_id=$1 AND id=$2 AND status='sending'`, userID, id, cvUpdatedAt)
 	if err != nil {
 		return err
 	}

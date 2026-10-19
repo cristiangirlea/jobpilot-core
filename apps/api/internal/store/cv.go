@@ -141,12 +141,8 @@ func (s *Store) CV(ctx context.Context, userID, id string) (models.CVDocument, e
 func (s *Store) CVFile(ctx context.Context, userID, id string) (models.CVDocument, []byte, error) {
 	var doc models.CVDocument
 	var data []byte
-	err := s.DB.QueryRow(ctx, `SELECT id,filename,content_type,format,approved FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id).
-		Scan(&doc.ID, &doc.Filename, &doc.ContentType, &doc.Format, &doc.Approved)
-	if err != nil {
-		return doc, nil, err
-	}
-	err = s.DB.QueryRow(ctx, `SELECT data FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id).Scan(&data)
+	err := s.DB.QueryRow(ctx, `SELECT id,filename,content_type,format,approved,updated_at,data FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, id).
+		Scan(&doc.ID, &doc.Filename, &doc.ContentType, &doc.Format, &doc.Approved, &doc.UpdatedAt, &data)
 	return doc, data, err
 }
 

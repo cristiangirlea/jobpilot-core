@@ -103,6 +103,29 @@ func TestOutboxSendingAgainstPostgres(t *testing.T) {
 		}
 	}
 
+	t.Run("a submit without a CV records no version", func(t *testing.T) {
+		entry := approved("no-cv-version", false)
+		if got, ok := claim(0); !ok || got.Entry.ID != entry.ID {
+			t.Fatal("expected the entry taken")
+		}
+		if _, err := pool.Exec(ctx, `UPDATE application_outbox SET sent_cv_updated_at=$2 WHERE id=$1`, entry.ID, cv.UpdatedAt); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecordSubmitAttempt(ctx, ana.ID, entry.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+		var version, attempted *time.Time
+		if err := pool.QueryRow(ctx, `SELECT sent_cv_updated_at,submit_attempted_at FROM application_outbox WHERE id=$1`, entry.ID).Scan(&version, &attempted); err != nil {
+			t.Fatal(err)
+		}
+		if version != nil || attempted == nil {
+			t.Fatalf("want NULL CV version and a submit attempt, got %v, %v", version, attempted)
+		}
+		if err := st.FinishOutboxSend(ctx, ana.ID, entry.ID, false, "fake outcome"); err != nil {
+			t.Fatal(err)
+		}
+	})
+
 	t.Run("an approval waits out the delay, then is sent once", func(t *testing.T) {
 		entry := approved("sent", false)
 		if _, ok := claim(time.Hour); ok {
@@ -116,7 +139,7 @@ func TestOutboxSendingAgainstPostgres(t *testing.T) {
 			t.Fatal("an entry being sent must not be taken twice")
 		}
 		refusedWhileSending(entry.ID)
-		if err := st.RecordSubmitAttempt(ctx, ana.ID, entry.ID); err != nil {
+		if err := st.RecordSubmitAttempt(ctx, ana.ID, entry.ID, nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.FinishOutboxSend(ctx, ana.ID, entry.ID, true, "ignored"); err != nil {
@@ -180,7 +203,7 @@ func TestOutboxSendingAgainstPostgres(t *testing.T) {
 		if _, ok := claim(0); !ok {
 			t.Fatal("expected the entry taken")
 		}
-		if err := st.RecordSubmitAttempt(ctx, ana.ID, entry.ID); err != nil {
+		if err := st.RecordSubmitAttempt(ctx, ana.ID, entry.ID, nil); err != nil {
 			t.Fatal(err)
 		}
 		if err := st.FinishOutboxSend(ctx, ana.ID, entry.ID, false, "The employer's form failed (502)."); err != nil {
@@ -225,7 +248,7 @@ func TestOutboxSendingAgainstPostgres(t *testing.T) {
 		claim(0)
 		during := approved("stopped-during", false)
 		claim(0)
-		if err := st.RecordSubmitAttempt(ctx, ana.ID, during.ID); err != nil {
+		if err := st.RecordSubmitAttempt(ctx, ana.ID, during.ID, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := pool.Exec(ctx, `UPDATE application_outbox SET updated_at=now()-interval '1 hour' WHERE id IN ($1,$2)`, before.ID, during.ID); err != nil {
@@ -240,7 +263,7 @@ func TestOutboxSendingAgainstPostgres(t *testing.T) {
 		if got := stored(during.ID); got.Status != models.OutboxFailed || got.Error != SendOutcomeUnknown {
 			t.Fatalf("one stopped after posting may have arrived, got %+v", got)
 		}
-		if err := st.RecordSubmitAttempt(ctx, ana.ID, before.ID); err == nil {
+		if err := st.RecordSubmitAttempt(ctx, ana.ID, before.ID, nil); err == nil {
 			t.Fatal("an entry written off must never be posted after all")
 		}
 	})
