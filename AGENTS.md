@@ -33,8 +33,8 @@ go test -race ./...       # -race needs cgo: on Windows without gcc run it in a 
 go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...   # nothing reachable; `make vulncheck`
 ```
 
-Both modules name the same Go release in `go.mod` (1.27.2), which CI installs; `apps/api/Dockerfile`
-builds on `golang:1.27.2-alpine` (the golang images run only their own release). Move them together.
+Both modules name the same Go release in `go.mod` (1.27.3), which CI installs; `apps/api/Dockerfile`
+builds on `golang:1.27.3-alpine` (the golang images run only their own release). Move them together.
 
 then `npm ci && npm run typecheck && npm test` in `apps/web`; `docker build` of `apps/api`, `apps/web`
 (`--build-arg NEXT_PUBLIC_API_URL=...`) and `migrations`; kustomize + kubeconform on `deploy/base`
