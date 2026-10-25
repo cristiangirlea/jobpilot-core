@@ -20,7 +20,7 @@ step's result in one line; on a failure, show the error text and fix it before r
 
    `-race` needs cgo. If `go env CGO_ENABLED` is `0` (Windows without gcc), run the tests in a
    container instead, from the repository root in Git Bash:
-   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version, e.g. 1.27.2> go test -race ./...`,
+   `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src -w /src/apps/<module> golang:<go.mod version, e.g. 1.27.3> go test -race ./...`,
    or run `go test ./...` and say in the report that `-race` was skipped.
 2. Web: `cd apps/web && npm ci && npm run typecheck && npm test`.
 3. Images, only when a Dockerfile, `go.mod`, `package*.json` or `migrations/` changed:
