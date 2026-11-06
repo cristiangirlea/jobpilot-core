@@ -857,6 +857,7 @@ Drop `-Write` for a read-only token, and pass `-ExpiresInDays 90` for one that l
 | Variable | Purpose |
 |---|---|
 | `JOBPILOT_API_URL` | API origin, default `http://localhost:8080`; a trailing `/api` is accepted |
+| `JOBPILOT_TOKEN_FILE`, `JOBPILOT_PASSWORD_FILE` | File alternatives to `JOBPILOT_TOKEN` and `JOBPILOT_PASSWORD`; see [API environment](#api-environment) for the shared secret-file rules |
 | `JOBPILOT_TOKEN` | An agent token created under **Settings > Agent tokens**, or a short-lived login token |
 | `JOBPILOT_EMAIL`, `JOBPILOT_PASSWORD` | Fallback when no token is set; the server logs in on first use and once more after a `401`. Prefer an agent token: it is revocable and can be read-only, while a password is not and gives away the account |
 | `JOBPILOT_CV_DIR` | The one folder `upload_cv` may read a CV from, as an absolute path (`~` is not expanded, and a relative path is refused). Unset, the default, turns the tool off. Point it at a folder holding only CV files, never your home folder |
@@ -1052,6 +1053,9 @@ When changing schema:
 ## Configuration
 
 ### API environment
+
+`DATABASE_URL`, `JWT_SECRET`, `GOOGLE_CLIENT_SECRET` and `SMTP_PASSWORD` also accept `NAME_FILE`, a path to a regular file whose content is the value; MCP supports `JOBPILOT_TOKEN_FILE` and `JOBPILOT_PASSWORD_FILE` in the same way.
+Set either the value or its file path, never both; files must be non-empty and at most 64 KiB, and exactly one trailing LF or CRLF is removed.
 
 | Variable | Compose/default behavior |
 |---|---|

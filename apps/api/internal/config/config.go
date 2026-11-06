@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -107,7 +108,23 @@ type LLMConfig struct {
 	CallsPerHour int
 }
 
-func Load() Config {
+func Load() (Config, error) {
+	databaseURL, err := secret("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable")
+	if err != nil {
+		return Config{}, err
+	}
+	jwtSecret, err := secret("JWT_SECRET", "development-only-change-me")
+	if err != nil {
+		return Config{}, err
+	}
+	googleSecret, err := secret("GOOGLE_CLIENT_SECRET", "")
+	if err != nil {
+		return Config{}, err
+	}
+	smtpPassword, err := secret("SMTP_PASSWORD", "")
+	if err != nil {
+		return Config{}, err
+	}
 	hours, _ := strconv.Atoi(env("TOKEN_TTL_HOURS", "168"))
 	delay, err := strconv.Atoi(env("OUTBOX_SEND_DELAY_SECONDS", "120"))
 	if err != nil || delay < 0 {
@@ -115,8 +132,8 @@ func Load() Config {
 	}
 	return Config{
 		Addr:             env("API_ADDR", ":8080"),
-		DatabaseURL:      env("DATABASE_URL", "postgres://jobpilot:jobpilot@localhost:5432/jobpilot?sslmode=disable"),
-		JWTSecret:        env("JWT_SECRET", "development-only-change-me"),
+		DatabaseURL:      databaseURL,
+		JWTSecret:        jwtSecret,
 		FrontendURL:      env("FRONTEND_URL", "http://localhost:3000"),
 		ATSGreenhouseURL: env("ATS_GREENHOUSE_URL", "https://boards-api.greenhouse.io"),
 		ATSAshbyURL:      env("ATS_ASHBY_URL", "https://jobs.ashbyhq.com"),
@@ -127,16 +144,16 @@ func Load() Config {
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
 		UserAgentTokens:  strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
 		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
-		Mail:             loadMail(),
+		Mail:             loadMail(smtpPassword),
 		Google: GoogleConfig{
 			ClientID:     env("GOOGLE_CLIENT_ID", ""),
-			ClientSecret: env("GOOGLE_CLIENT_SECRET", ""),
+			ClientSecret: googleSecret,
 			RedirectURL:  env("GOOGLE_REDIRECT_URL", ""),
 			AllowSignup:  env("GOOGLE_ALLOW_SIGNUP", "") == "true",
 		},
 		OutboxSending:   env("OUTBOX_SENDER_ENABLED", "false") == "true",
 		OutboxSendDelay: time.Duration(delay) * time.Second,
-	}
+	}, nil
 }
 
 func loadLLM() LLMConfig {
@@ -153,7 +170,7 @@ func loadLLM() LLMConfig {
 	}
 }
 
-func loadMail() MailConfig {
+func loadMail(password string) MailConfig {
 	port, err := strconv.Atoi(env("SMTP_PORT", "587"))
 	if err != nil {
 		port = -1 // refused by the sender's validation at startup
@@ -162,7 +179,7 @@ func loadMail() MailConfig {
 		SMTPHost:     strings.TrimSpace(os.Getenv("SMTP_HOST")),
 		SMTPPort:     port,
 		SMTPUsername: os.Getenv("SMTP_USERNAME"),
-		SMTPPassword: os.Getenv("SMTP_PASSWORD"),
+		SMTPPassword: password,
 		From:         strings.TrimSpace(os.Getenv("MAIL_FROM")),
 	}
 }
@@ -182,4 +199,48 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// secret reads name, or the file named by name_FILE, as Docker and Kubernetes mount secrets.
+func secret(name, fallback string) (string, error) {
+	value, path := os.Getenv(name), os.Getenv(name+"_FILE")
+	if value != "" && path != "" {
+		return "", fmt.Errorf("set %s or %s_FILE, not both (%s_FILE path %q)", name, name, name, path)
+	}
+	if path == "" {
+		return env(name, fallback), nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s_FILE path %q: must be a regular file", name, path)
+	}
+	if info.Size() > 64*1024 {
+		return "", fmt.Errorf("%s_FILE path %q: exceeds 64 KiB", name, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	defer file.Close()
+	// Bounded so a file that grows after the Stat cannot be read without limit.
+	raw, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	if len(raw) > 64*1024 {
+		return "", fmt.Errorf("%s_FILE path %q: exceeds 64 KiB", name, path)
+	}
+	value = string(raw)
+	if strings.HasSuffix(value, "\r\n") {
+		value = strings.TrimSuffix(value, "\r\n")
+	} else {
+		value = strings.TrimSuffix(value, "\n")
+	}
+	if value == "" {
+		return "", fmt.Errorf("%s_FILE path %q: empty secret", name, path)
+	}
+	return value, nil
 }
