@@ -7,8 +7,10 @@
 //	JOBPILOT_API_URL   API origin, default http://localhost:8080
 //	JOBPILOT_TOKEN     agent token created in Settings (preferred), or a
 //	                   short-lived token from /api/auth/login
+//	JOBPILOT_TOKEN_FILE path to a file containing JOBPILOT_TOKEN
 //	JOBPILOT_EMAIL     with JOBPILOT_PASSWORD: log in instead of, or to
 //	JOBPILOT_PASSWORD  refresh, a token
+//	JOBPILOT_PASSWORD_FILE path to a file containing JOBPILOT_PASSWORD
 //	JOBPILOT_CV_DIR    the one folder upload_cv may read a CV from, as an
 //	                   absolute path; unset, upload_cv refuses
 //
@@ -19,9 +21,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -43,13 +47,18 @@ func main() {
 			return
 		}
 	}
+	token, tokenErr := secret("JOBPILOT_TOKEN", "")
+	password, passwordErr := secret("JOBPILOT_PASSWORD", "")
 	client, err := jobpilot.NewClient(jobpilot.Options{
 		BaseURL:  env("JOBPILOT_API_URL", "http://localhost:8080"),
-		Token:    os.Getenv("JOBPILOT_TOKEN"),
+		Token:    token,
 		Email:    os.Getenv("JOBPILOT_EMAIL"),
-		Password: os.Getenv("JOBPILOT_PASSWORD"),
+		Password: password,
 		CVDir:    os.Getenv("JOBPILOT_CV_DIR"),
 	})
+	if secretErr := errors.Join(tokenErr, passwordErr); secretErr != nil {
+		err = secretErr
+	}
 	if err != nil {
 		// Start anyway. Exiting here would show the host only a closed
 		// connection; starting lets every tool say what is wrong and how to
@@ -94,8 +103,10 @@ func usage() {
 Serves JobPilot to an MCP host over stdio. Environment:
   JOBPILOT_API_URL   API origin (default http://localhost:8080)
   JOBPILOT_TOKEN     agent token from Settings (preferred), or a login token
+  JOBPILOT_TOKEN_FILE path to a file containing JOBPILOT_TOKEN
   JOBPILOT_EMAIL     with JOBPILOT_PASSWORD, logs in and refreshes the token
   JOBPILOT_PASSWORD  prefer a token: the host stores -e values in plaintext
+  JOBPILOT_PASSWORD_FILE path to a file containing JOBPILOT_PASSWORD
   JOBPILOT_CV_DIR    the absolute path of the one folder upload_cv may read a
                      .pdf or .docx from; unset (the default), upload_cv refuses
 
@@ -109,4 +120,48 @@ func env(key, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// secret reads name, or the file named by name_FILE, as Docker and Kubernetes mount secrets.
+func secret(name, fallback string) (string, error) {
+	value, path := os.Getenv(name), os.Getenv(name+"_FILE")
+	if value != "" && path != "" {
+		return "", fmt.Errorf("set %s or %s_FILE, not both (%s_FILE path %q)", name, name, name, path)
+	}
+	if path == "" {
+		return env(name, fallback), nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("%s_FILE path %q: must be a regular file", name, path)
+	}
+	if info.Size() > 64*1024 {
+		return "", fmt.Errorf("%s_FILE path %q: exceeds 64 KiB", name, path)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	defer file.Close()
+	// Bounded so a file that grows after the Stat cannot be read without limit.
+	raw, err := io.ReadAll(io.LimitReader(file, 64*1024+1))
+	if err != nil {
+		return "", fmt.Errorf("%s_FILE path %q: %w", name, path, err)
+	}
+	if len(raw) > 64*1024 {
+		return "", fmt.Errorf("%s_FILE path %q: exceeds 64 KiB", name, path)
+	}
+	value = string(raw)
+	if strings.HasSuffix(value, "\r\n") {
+		value = strings.TrimSuffix(value, "\r\n")
+	} else {
+		value = strings.TrimSuffix(value, "\n")
+	}
+	if value == "" {
+		return "", fmt.Errorf("%s_FILE path %q: empty secret", name, path)
+	}
+	return value, nil
 }

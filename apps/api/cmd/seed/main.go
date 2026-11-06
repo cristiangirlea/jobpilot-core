@@ -10,7 +10,11 @@ import (
 
 func main() {
 	ctx := context.Background()
-	pool, err := database.Open(ctx, config.Load().DatabaseURL)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatal(err)
+	}
+	pool, err := database.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		log.Fatal(err)
 	}
