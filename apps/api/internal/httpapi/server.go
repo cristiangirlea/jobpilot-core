@@ -72,7 +72,9 @@ import (
 // account where verification is required) saves a draft, and POST
 // /api/applications/{id}/dismiss-follow-up dismisses the reminder. GET
 // /api/applications/{id} includes follow_ups; GET/PUT /api/account/settings
-// expose quiet_application_days. These routes and fields do not raise Contract.
+// expose quiet_application_days. GET /api/application-history and POST
+// /api/application-history/import read and add private external history.
+// These routes and fields do not raise Contract.
 const Contract = 13
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
@@ -214,6 +216,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/jobs/{id}/generate", w(s.requireVerified(s.generate)))
 	m.Handle("GET /api/matches", p(s.listMatches))
 	m.Handle("GET /api/matches/{id}", p(s.getMatch))
+	m.Handle("GET /api/application-history", p(s.listExternalHistory))
+	m.Handle("POST /api/application-history/import", w(s.importExternalHistory))
 	m.Handle("GET /api/applications", p(s.listApplications))
 	m.Handle("POST /api/applications", w(s.createApplication))
 	m.Handle("GET /api/applications/{id}", p(s.getApplication))

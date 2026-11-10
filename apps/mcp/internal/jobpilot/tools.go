@@ -47,6 +47,7 @@ Rules the API enforces and you must respect:
 - Nothing here submits an application, opens a browser, or records an apply click. compose_application assembles a whole application into the outbox for the user to review; approving it, and any sending, happen only in the web app. For a job whose form cannot be read, give the user its apply link and let them apply themselves, then record the outcome with update_application_status. ` + applyLinkOrder + `
 - Anything marked needs_review or unapproved, and every blocker, must be shown to the user in the exact words the tool returned. Never describe an application as approved, submitted, or sent.
 - When you write anything for the user, use only facts returned by get_profile, get_cv, get_job, and generate_documents. Never invent experience, skills, or claims. An answer or CV whose source is ai or template is a draft until the user reads it and approves it.
+- External history belongs in import_external_application, never import_job. Preview first; preserve unknown dates and ambiguous receipts. History records are claims backed by the supplied reference, not proof independently verified by JobPilot. History import never submits or creates an actionable job.
 - Listing tools return summaries without the job description; call get_job for the full text and the score breakdown.`
 
 var applicationStatuses = []string{"draft", "ready", "applied", "interview", "rejected", "offer", "withdrawn"}
@@ -388,6 +389,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 
 	addCatalogTools(s, c)
 	addAppTools(s, c)
+	addHistoryTools(s, c)
 	addApplyTools(s, c)
 	addNotificationTools(s, c)
 	addInterviewTools(s, c)
