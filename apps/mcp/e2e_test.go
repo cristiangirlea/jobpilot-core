@@ -192,7 +192,7 @@ func TestEndToEnd(t *testing.T) {
 		"get_ai_status": true, "list_answers": true, "resolve_screening_answers": true,
 		"save_answer": true, "approve_answer": true, "list_cvs": true, "get_cv": true,
 		"upload_cv": true, "approve_cv": true, "tailor_cv_for_job": true, "compose_application": true,
-		"list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
+		"propose_profile_repair": true, "get_profile_repairs": true, "list_outbox": true, "get_outbox_entry": true, "cancel_outbox_entry": true,
 		"detect_board": true, "list_board_suggestions": true,
 		"report_job_unavailable": true, "set_filters": true, "list_pending_decisions": true,
 		"prepare_interview": true,
@@ -895,6 +895,114 @@ func TestEndToEndUploadCV(t *testing.T) {
 	r.call("GET", "/api/cv", nil, &stored)
 	if len(stored) != 1 || !stored[0].Approved {
 		t.Fatalf("the approved CV should stand, unchanged: %+v", stored)
+	}
+	profileRepairFromTheAgent(t, ctx, cs, r, agent.Token, uploaded.ID)
+}
+
+// profileRepairFromTheAgent proposes a repair of the profile from the uploaded
+// CV through the MCP server, checks that proposing changed nothing and that the
+// agent's token cannot decide, then applies it as the browser session would.
+func profileRepairFromTheAgent(t *testing.T, ctx context.Context, cs *mcp.ClientSession, r *rest, agentToken, cvID string) {
+	t.Helper()
+	type profile struct {
+		Email  string `json:"email"`
+		Skills []struct {
+			Name string `json:"name"`
+		} `json:"skills"`
+	}
+	var before profile
+	r.call("GET", "/api/profile", nil, &before)
+
+	tool := func(name string, args map[string]any) (string, bool) {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: args})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		raw, _ := json.Marshal(res.StructuredContent)
+		if res.IsError {
+			raw, _ = json.Marshal(res.Content)
+		}
+		return string(raw), res.IsError
+	}
+	text, isErr := tool("propose_profile_repair", map[string]any{"source_cv_id": cvID})
+	var proposed struct {
+		Proposal struct {
+			ID       string `json:"id"`
+			Status   string `json:"status"`
+			ReviewAt string `json:"review_at"`
+			Changes  []struct {
+				Field string   `json:"field"`
+				Added []string `json:"added"`
+			} `json:"changes"`
+		} `json:"proposal"`
+	}
+	if isErr || json.Unmarshal([]byte(text), &proposed) != nil || proposed.Proposal.ID == "" || proposed.Proposal.Status != "pending" || proposed.Proposal.ReviewAt != "/profile/repairs" {
+		t.Fatalf("propose_profile_repair: %s", text)
+	}
+	added := ""
+	for _, c := range proposed.Proposal.Changes {
+		if c.Field == "skills" {
+			added = strings.Join(c.Added, ",")
+		}
+	}
+	for _, skill := range []string{"Go", "Kubernetes", "PostgreSQL"} {
+		if !strings.Contains(added, skill) {
+			t.Fatalf("the proposal should add the CV's skill %s: %s", skill, text)
+		}
+	}
+	if strings.Contains(text, "extracted_text") || strings.Contains(text, `"before":{"profile"`) {
+		t.Fatalf("the tool must return a summary, not the CV text or the snapshots: %s", text)
+	}
+	var unchanged profile
+	r.call("GET", "/api/profile", nil, &unchanged)
+	if len(unchanged.Skills) != len(before.Skills) {
+		t.Fatalf("proposing must not change the profile: %+v", unchanged)
+	}
+	if text, isErr = tool("get_profile_repairs", nil); isErr || !strings.Contains(text, proposed.Proposal.ID) || !strings.Contains(text, "pending") {
+		t.Fatalf("get_profile_repairs: %s", text)
+	}
+	if text, isErr = tool("get_profile_repairs", map[string]any{"proposal_id": proposed.Proposal.ID}); isErr || !strings.Contains(text, "Kubernetes") {
+		t.Fatalf("get_profile_repairs by id: %s", text)
+	}
+
+	// The decision belongs to the browser session: the agent's token is refused.
+	var full struct {
+		BeforeFingerprint string `json:"before_fingerprint"`
+	}
+	r.call("GET", "/api/profile/repairs/"+proposed.Proposal.ID, nil, &full)
+	decision := map[string]string{"decision": "apply", "expected_fingerprint": full.BeforeFingerprint}
+	raw, _ := json.Marshal(decision)
+	req, err := http.NewRequestWithContext(ctx, "POST", r.base+"/api/profile/repairs/"+proposed.Proposal.ID+"/decision", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+agentToken)
+	resp, err := r.http.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("an agent token applied a profile repair: %d", resp.StatusCode)
+	}
+	r.call("GET", "/api/profile", nil, &unchanged)
+	if len(unchanged.Skills) != len(before.Skills) {
+		t.Fatalf("a refused decision changed the profile: %+v", unchanged)
+	}
+
+	r.call("POST", "/api/profile/repairs/"+proposed.Proposal.ID+"/decision", decision, nil)
+	var after profile
+	r.call("GET", "/api/profile", nil, &after)
+	names := ""
+	for _, skill := range after.Skills {
+		names += skill.Name + ","
+	}
+	if len(after.Skills) != 3 || !strings.Contains(names, "Kubernetes") {
+		t.Fatalf("the applied repair should leave exactly the CV's three skills: %s", names)
+	}
+	if text, isErr = tool("get_profile_repairs", nil); isErr || !strings.Contains(text, "applied") {
+		t.Fatalf("get_profile_repairs after apply: %s", text)
 	}
 }
 

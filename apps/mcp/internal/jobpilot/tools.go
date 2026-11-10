@@ -389,6 +389,7 @@ func NewServer(c *Client, version string, logger *slog.Logger) *mcp.Server {
 	addCatalogTools(s, c)
 	addAppTools(s, c)
 	addApplyTools(s, c)
+	addProfileRepairTools(s, c)
 	addNotificationTools(s, c)
 	addInterviewTools(s, c)
 	addFollowUpTools(s, c)

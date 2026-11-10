@@ -66,6 +66,8 @@ import (
 //	   reading-order blockers refuse CV approval with 409.
 //	12: filter presets carry reject_eligibility_requirements and reject_unlisted_languages, which POST and PUT honour.
 //	13: PUT keeps stored eligibility and language rules when their fields are absent.
+//	14: POST /api/cv/{id}/import writes the profile fields and the added roles
+//	   and skills in one transaction, so a failed import changes nothing.
 //
 // Additions at contract 13: reading the notification feed opens due quiet
 // reminders; POST /api/applications/{id}/follow-up (403 for an unverified
@@ -73,10 +75,13 @@ import (
 // /api/applications/{id}/dismiss-follow-up dismisses the reminder. GET
 // /api/applications/{id} includes follow_ups; GET/PUT /api/account/settings
 // expose quiet_application_days. These routes and fields do not raise Contract.
-const Contract = 13
+const Contract = 14
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
+
+// RepairNeedsSession is the refusal an agent token gets from the repair decision route.
+const RepairNeedsSession = "Review profile repairs in the web app: applying, rejecting or restoring one is your decision, which an agent token cannot make."
 
 type Server struct {
 	Store       *store.Store
@@ -160,6 +165,11 @@ func (s *Server) Handler() http.Handler {
 	consent := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireSession(ApprovalNeedsSession, h))
 	}
+	// repair: browser logins only. An agent may propose a profile repair, but
+	// applying, rejecting or restoring one is the user's own decision.
+	repair := func(h http.HandlerFunc) http.Handler {
+		return w(auth.RequireSession(RepairNeedsSession, h).ServeHTTP)
+	}
 	// admin: browser logins of the accounts ADMIN_EMAILS names, for invites.
 	admin := func(h http.HandlerFunc) http.Handler {
 		return auth.Middleware(s.Secret, s.Store, auth.RequireSession("Use the web app to manage invites.", s.requireAdmin(h)))
@@ -185,6 +195,10 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/outbox/{id}", p(s.getOutboxEntry))
 	m.Handle("POST /api/outbox/{id}/approve", consent(s.approveOutboxEntry))
 	m.Handle("POST /api/outbox/{id}/cancel", w(s.cancelOutboxEntry))
+	m.Handle("POST /api/profile/repairs", w(s.proposeProfileRepair))
+	m.Handle("GET /api/profile/repairs", p(s.listProfileRepairs))
+	m.Handle("GET /api/profile/repairs/{id}", p(s.getProfileRepair))
+	m.Handle("POST /api/profile/repairs/{id}/decision", repair(s.decideProfileRepair))
 	m.Handle("GET /api/profile", p(s.getProfile))
 	m.Handle("PUT /api/profile", w(s.putProfile))
 	m.Handle("GET /api/experiences", p(s.listExperiences))
