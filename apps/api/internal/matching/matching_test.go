@@ -75,16 +75,18 @@ func TestSeniorityUsesBestSelectedLevel(t *testing.T) {
 }
 
 // splitWords replaced a regexp in the hot path of every evaluation, so it has
-// to tokenise as the pattern it replaced did, with one deliberate difference:
-// dots at the end of a word are punctuation and are dropped, so that a word
-// ending a sentence is still that word.
+// to tokenise as a pattern would: a word starts at a-z, a digit, +, #, a dot
+// or a Latin letter, and a combining accent continues it. One deliberate
+// difference: dots at the end of a word are punctuation and are dropped, so
+// that a word ending a sentence is still that word.
 func TestSplitWordsMatchesTheWordPattern(t *testing.T) {
-	pattern := regexp.MustCompile(`[a-z0-9+#.]+`)
+	pattern := regexp.MustCompile(`[a-z0-9+#.\p{Latin}](?:[a-z0-9+#.\p{Latin}]|[^\P{Mn}\x{180b}-\x{180d}\x{180f}\x{fe00}-\x{fe0f}\x{e0100}-\x{e01ef}])*`)
 	for _, text := range []string{
 		"", "   ", "go", "Senior Go/PostgreSQL engineer (m/w/d)",
 		"C++, C#, .NET and Node.js; 5+ years", "trailing.dot. and ...dots",
 		"Überweisung für Entwickler — naïve café", "ÀÉÎ ßẞ ǅ İstanbul", "tabs\tand\nnewlines\r\n",
 		"emoji 🚀 inside, go-live, e-mail", `under_score and back\slash`,
+		"Ku\U00000308nstliche \U00000308lone accent, k\U00001ab0unstliche", "1\U0000fe0f\U000020e3 go \U00002714\U0000fe0frust", "熟悉go和python на rust", "go\xffrust\xc3",
 	} {
 		lower := strings.ToLower(text)
 		var want []string
@@ -221,5 +223,98 @@ func TestSkillScoreWeighsWhatTheJobAsksFor(t *testing.T) {
 	workflow := Evaluate(profile, nil, nil, models.JobInput{Title: "Backend Engineer", Description: "Orchestrate workflows with Temporal."}, time.Now())
 	if strings.Join(workflow.MatchedSkills, ",") != "Temporal" || workflow.Breakdown["skill_match"] != 30 {
 		t.Fatalf("a profile skill the job names should count, got %v and %d", workflow.MatchedSkills, workflow.Breakdown["skill_match"])
+	}
+}
+
+// A skill of several words matched whenever each word was somewhere in the
+// posting, so "customer success" matched "customer feedback" in one paragraph
+// and "our success" in another. Its words must be next to each other.
+func TestMultiWordSkillsNeedTheirWordsTogether(t *testing.T) {
+	// "..." has no words, so it is never named, whatever joins title and description.
+	profile := models.Profile{Skills: []models.Skill{{Name: "Customer success"}, {Name: "Go test"}, {Name: "End-to-end testing"}, {Name: "..."}}}
+	matched := func(filter *models.FilterPreset, title, description string) string {
+		return strings.Join(Evaluate(profile, nil, filter, models.JobInput{Title: title, Description: description}, time.Now()).MatchedSkills, ",")
+	}
+	for name, job := range map[string][2]string{
+		"words apart":            {"Backend Engineer", "You act on customer feedback and write Go.\n\nOur success rests on test generation, from one end of the system to the other end, and on testing."},
+		"words in another order": {"Backend Engineer", "Success with every customer. We test Go services."},
+		"half in the title":      {"Engineer, Customer", "Success is shared. Go is our language."},
+	} {
+		if got := matched(nil, job[0], job[1]); got != "" {
+			t.Errorf("%s: no skill is named as a phrase, got %s", name, got)
+		}
+	}
+	for name, job := range map[string][2]string{
+		"in the description": {"Backend Engineer", "You work with customer success, run go test in CI and own end-to-end testing."},
+		"in the title":       {"Customer Success Engineer", "Run `go test`; end to end testing is yours."},
+	} {
+		if got := matched(nil, job[0], job[1]); got != "Customer success,End-to-end testing,Go test" {
+			t.Errorf("%s: all three skills are named, got %s", name, got)
+		}
+	}
+
+	// The filter's skills are read the same way.
+	filter := &models.FilterPreset{RequiredSkills: []string{"Ledger reconciliation"}}
+	apart := Evaluate(profile, nil, filter, models.JobInput{Title: "Backend Engineer", Description: "Reconciliation runs nightly against the ledger."}, time.Now())
+	if len(apart.MissingSkills) != 0 {
+		t.Errorf("a listed skill whose words are apart is not asked for, got %v", apart.MissingSkills)
+	}
+	named := Evaluate(profile, nil, filter, models.JobInput{Title: "Backend Engineer", Description: "You own ledger reconciliation."}, time.Now())
+	if strings.Join(named.MissingSkills, ",") != "Ledger reconciliation" {
+		t.Errorf("a listed skill the job names is the gap, got %v", named.MissingSkills)
+	}
+	// The score follows: nothing asked is the neutral 15, a named skill that is
+	// held is the full 30, and a named skill that is not held is 0.
+	for description, want := range map[string]int{
+		"You act on customer feedback. Our success is shared.": 15,
+		"You work with customer success.":                      30,
+	} {
+		if got := Evaluate(profile, nil, nil, models.JobInput{Title: "Engineer", Description: description}, time.Now()).Breakdown["skill_match"]; got != want {
+			t.Errorf("%q: skill score %d, want %d", description, got, want)
+		}
+	}
+	if got := named.Breakdown["skill_match"]; got != 0 {
+		t.Errorf("the only skill asked for is not held, so the score is 0, got %d", got)
+	}
+}
+
+// Only a-z counted as letters, so "Künstliche" was read as "k" and "nstliche"
+// and a one-letter skill matched a German posting with a full skill score.
+func TestAccentedLettersStayInsideTheirWord(t *testing.T) {
+	for text, want := range map[string]string{
+		"Künstliche Intelligenz für große Projekte": "künstliche intelligenz für große projekte",
+		"naïve café in Łódź":                        "naïve café in łódź",
+		// A letter and a combining accent are one letter.
+		"Ku\U00000308nstliche, k\U00001ab0unstliche": "ku\U00000308nstliche k\U00001ab0unstliche",
+		// Everything else separates words as before: a non-breaking space, a
+		// dash, a curly apostrophe, an emoji with its variation selector, a
+		// script written without spaces, a byte that is not UTF-8.
+		"senior\U000000a0engineer, go\U00002014rust, team\U00002019s":      "senior engineer go rust team s",
+		"\U00002714\U0000fe0fgo 1\U0000fe0f\U000020e3 熟悉go和python на rust": "go 1 go python rust",
+		"go\xffrust": "go rust",
+	} {
+		if got := strings.Join(splitWords(strings.ToLower(text)), " "); got != want {
+			t.Errorf("splitWords(%q) = %q, want %q", text, got, want)
+		}
+	}
+
+	profile := models.Profile{Skills: []models.Skill{{Name: "K"}, {Name: "Qualität"}, {Name: "Qualitätssicherung"}}}
+	for _, description := range []string{
+		"Erfahrung in Künstlicher Intelligenz und Qualitätssicherung.",
+		"Erfahrung in Ku\U00000308nstlicher Intelligenz, k\U00001ab0unstlich und Qualitätssicherung.",
+	} {
+		german := Evaluate(profile, nil, nil, models.JobInput{Title: "Entwickler", Description: description}, time.Now())
+		if got := strings.Join(german.MatchedSkills, ","); got != "Qualitätssicherung" {
+			t.Errorf("%q: only the skill the posting names as a whole word matches, got %s", description, got)
+		}
+	}
+
+	// The filters read words the same way: "für" is not the technology R.
+	filter := &models.FilterPreset{ExcludedTechnologies: []string{"R"}}
+	if e := Evaluate(profile, nil, filter, models.JobInput{Title: "Entwickler", Company: "Other", Description: "Wir suchen für unser Team."}, time.Now()); e.Rejected {
+		t.Errorf("an excluded technology is not a fragment of an accented word: %v", e.RejectionReasons)
+	}
+	if e := Evaluate(profile, nil, filter, models.JobInput{Title: "Entwickler", Company: "Other", Description: "Statistik in R für unser Team."}, time.Now()); !e.Rejected {
+		t.Error("an excluded technology the posting names still rejects")
 	}
 }
