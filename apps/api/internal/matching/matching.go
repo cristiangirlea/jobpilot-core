@@ -6,33 +6,39 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"jobpilot/core/api/internal/company"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/technology"
 )
 
-// splitWords returns the runs of [a-z0-9+#.] in s, the way the regexp of that
-// class did, without trailing dots. Every evaluation tokenises the whole job
-// description, and the regexp engine made that most of what re-scoring a
-// user's matches cost.
-// Callers lowercase first; bytes of multi-byte UTF-8 runes are all 0x80 or
-// above, so they separate words exactly as the regexp's character class did.
+// splitWords returns the words of s, which callers lowercase first: runs of
+// [a-z0-9+#.] and accented Latin letters, without trailing dots. ASCII is
+// read by the byte, since every evaluation tokenises a whole job description.
+// Other scripts separate words, so a name inside text written without spaces
+// ("熟悉go和python") is still found.
 func splitWords(s string) []string {
 	var out []string
 	start := -1
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '#' || c == '.' {
-			if start < 0 {
-				start = i
-			}
-			continue
+	for i := 0; i < len(s); {
+		c, size := s[i], 1
+		inWord := c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '+' || c == '#' || c == '.'
+		if c >= utf8.RuneSelf {
+			var r rune
+			r, size = utf8.DecodeRuneInString(s[i:])
+			// A combining accent belongs to the letter before it; a variation
+			// selector, also a nonspacing mark, belongs to an emoji.
+			inWord = unicode.Is(unicode.Latin, r) || start >= 0 && unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Variation_Selector, r)
 		}
-		if start >= 0 {
+		if inWord && start < 0 {
+			start = i
+		} else if !inWord && start >= 0 {
 			out = appendWord(out, s[start:i])
 			start = -1
 		}
+		i += size
 	}
 	if start >= 0 {
 		out = appendWord(out, s[start:])
@@ -241,7 +247,16 @@ func scoreTitle(desired []string, title string) int {
 // names nothing to go on scores a neutral 15. Matched skills keep the
 // profile's own spelling, since generated text quotes them.
 func scoreSkills(profile []models.Skill, required []string, title, description string) (int, []string, []string) {
-	jobWords := words(strings.ToLower(title + " " + description))
+	titleWords, descriptionWords := splitWords(strings.ToLower(title)), splitWords(strings.ToLower(description))
+	jobWords := map[string]bool{}
+	for _, word := range titleWords {
+		jobWords[word] = true
+	}
+	for _, word := range descriptionWords {
+		jobWords[word] = true
+	}
+	// Two spaces keep title and description apart, so no phrase is read across them.
+	jobText := " " + strings.Join(titleWords, " ") + "  " + strings.Join(descriptionWords, " ") + " "
 	held := map[string]string{}
 	for _, s := range profile {
 		if name := strings.TrimSpace(s.Name); name != "" {
@@ -267,7 +282,7 @@ func scoreSkills(profile []models.Skill, required []string, title, description s
 	for _, name := range named {
 		name = strings.TrimSpace(name)
 		key := technology.Canonical(name)
-		if _, ok := asked[key]; ok || name == "" || technology.IsPractice(key) || !phraseInWords(strings.ToLower(name), jobWords) {
+		if _, ok := asked[key]; ok || name == "" || technology.IsPractice(key) || !namesPhrase(name, jobWords, jobText) {
 			continue
 		}
 		asked[key] = ask{name, 1}
@@ -399,17 +414,21 @@ func words(s string) map[string]bool {
 	}
 	return out
 }
-func phraseInWords(s string, w map[string]bool) bool {
-	parts := splitWords(strings.ToLower(s))
+
+// namesPhrase reports whether a job names phrase: its words next to each other
+// in text, the job's words joined by spaces. The word set is asked first, so
+// a skill the job lacks costs no scan of the text.
+func namesPhrase(phrase string, jobWords map[string]bool, text string) bool {
+	parts := splitWords(strings.ToLower(phrase))
 	if len(parts) == 0 {
 		return false
 	}
 	for _, x := range parts {
-		if !w[x] {
+		if !jobWords[x] {
 			return false
 		}
 	}
-	return true
+	return len(parts) == 1 || strings.Contains(text, " "+strings.Join(parts, " ")+" ")
 }
 func jaccard(a, b map[string]bool) float64 {
 	inter := 0
