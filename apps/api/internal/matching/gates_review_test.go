@@ -185,3 +185,44 @@ func BenchmarkEvaluate(b *testing.B) {
 	}
 	b.ReportMetric(float64(len(description)), "chars/job")
 }
+
+// A definition in brackets after "citizen", or "to fill this position" where
+// "to apply" was expected, hid the requirement. It warns, with or without the
+// filter; rejecting stays with the smaller strict grammar.
+func TestCitizenshipWithADefinitionOrARoleWarns(t *testing.T) {
+	for _, tc := range []struct {
+		text    string
+		warning bool
+	}{
+		{"You must be a United States citizen to apply.", true},
+		{"Due to customer requirements, you must be a United States Citizen (defined as any individual who is a citizen by law, birth, or naturalization) to fill this position.", true},
+		{"You must be a U.S. citizen (as defined by statute).", true},
+		{"Applicants must be a United States citizen to fill this position.", true},
+		{"You must be a Swiss citizen to be considered for the role.", true},
+		{"Candidates need to be a Swiss citizen for this position", true},
+		{"Applicants must be Swiss citizens to hold this job.", true},
+		// Without a nationality the words say nothing about a legal status,
+		// and a capital letter does not make a nationality.
+		{"We must be citizens (in the broad sense) of our community.", false},
+		{"You must be a citizen (and a neighbour) of the open-source community.", false},
+		{"You must be a good citizen for this role.", false},
+		{"You must be a Good Citizen for this role.", false},
+		{"We must be Global Citizens (people who contribute to our community).", false},
+		{"We must be Good Citizens.", false},
+		{"You do not need to be a United States citizen (or a resident) for this role.", false},
+		{"Ideally you would be a United States citizen (defined by law) for this role.", false},
+	} {
+		for name, filter := range map[string]*models.FilterPreset{"filter on": {RejectEligibilityRequirements: true}, "no filter": nil} {
+			t.Run(name+": "+tc.text, func(t *testing.T) {
+				e := Evaluate(models.Profile{}, nil, filter, models.JobInput{Description: tc.text}, time.Time{})
+				warned := false
+				for _, warning := range e.Warnings {
+					warned = warned || strings.HasPrefix(warning, "Posting requires eligibility: ")
+				}
+				if warned != tc.warning || e.Rejected {
+					t.Fatalf("warned %v, want %v; rejected %v: %+v", warned, tc.warning, e.Rejected, e.Warnings)
+				}
+			})
+		}
+	}
+}
