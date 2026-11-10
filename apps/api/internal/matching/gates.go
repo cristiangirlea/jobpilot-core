@@ -15,17 +15,22 @@ const securityQualifier = `(?:` + personnelClearance + `|government|federal)`
 const clearanceModifiers = `(?:(?:a|an|the|active|current|valid|uk|us|eligible) ){0,2}`
 const statusModifiers = `(?:(?:a|an|the|dual|full|valid|eu|us|uk|(?-i:[A-Z][A-Za-z.]*)) ){0,2}`
 
+// A citizen with a nationality, then a definition in brackets or the role.
+// Without the nationality, "citizens (in the broad sense)" is not a legal status.
+const namedCitizen = `(?:be|become) (?:a |an )?(?:(?-i:[A-Z][A-Za-z.-]*) ){1,2}citizens? (?:\(|(?:for|to (?:fill|hold|be considered for)) (?:this|the) (?:role|position|job)\b)`
+
 var eligibilityRules = []struct {
 	required *regexp.Regexp
 	negated  *regexp.Regexp
 }{
-	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:(?:be|become) (?:a |an )?(?:(?-i:[A-Z][A-Za-z.-]*) ){0,2}citizens?(?: of (?-i:\p{Lu})| to apply\b| or (?:a )?(?:green card holder|(?:lawful )?permanent resident)\b|[.!?,;]|$)|(?:have|hold|possess) ` + statusModifiers + `citizenship\b)|citizenship (?:is )?(?:required|mandatory|essential)|requires? ` + statusModifiers + `citizenship\b|restricted to ` + statusModifiers + `citizens\b|citizens only\b|only ` + statusModifiers + `citizens (?:may|can|are eligible))`), regexp.MustCompile(`(?i)\b(?:no citizenship|citizenship (?:is )?not (?:required|necessary|mandatory)|citizenship (?:is )?optional)\b`)},
+	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:(?:be|become) (?:a |an )?(?:(?-i:[A-Z][A-Za-z.-]*) ){0,2}citizens?(?: of (?-i:\p{Lu})| to apply\b| or (?:a )?(?:green card holder|(?:lawful )?permanent resident)\b|[.!?,;]|$)|` + namedCitizen + `|(?:have|hold|possess) ` + statusModifiers + `citizenship\b)|citizenship (?:is )?(?:required|mandatory|essential)|requires? ` + statusModifiers + `citizenship\b|restricted to ` + statusModifiers + `citizens\b|citizens only\b|only ` + statusModifiers + `citizens (?:may|can|are eligible))`), regexp.MustCompile(`(?i)\b(?:no citizenship|citizenship (?:is )?not (?:required|necessary|mandatory)|citizenship (?:is )?optional)\b`)},
 	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|are required to) (?:be|have|hold) ` + statusModifiers + `permanent residen(?:t|cy|ce)\b|permanent (?:residen(?:cy|ce)|resident status) (?:is )?(?:required|mandatory|essential)|permanent residents only|(?:requires?|restricted to) ` + statusModifiers + `permanent residen(?:ts?|cy|ce)\b)`), regexp.MustCompile(`(?i)\b(?:no permanent residen(?:cy|ce)|permanent residen(?:cy|ce) (?:is )?not (?:required|necessary|mandatory))\b`)},
 	// Government approval of products is not a personnel clearance.
 	{regexp.MustCompile(`(?i)\b(?:(?:must|shall|need to|requires?|are required to) (?:(?:(?:have|hold|possess|obtain)|be eligible to (?:obtain|hold)|be able to obtain(?: \(?and maintain\)?)?|the ability to obtain) ` + clearanceModifiers + securityQualifier + `|` + clearanceModifiers + personnelClearance + `) clearance\b|(?:active |current )?` + personnelClearance + ` clearance (?:is )?(?:required|mandatory|essential)|(?:active|current) ` + securityQualifier + ` clearance\b)`), regexp.MustCompile(`(?i)\b(?:no (?:[a-z/]+ ){0,2}clearance|clearance (?:(?:is )?not|isn['?]t) (?:required|necessary|mandatory|needed|essential)|clearance (?:is )?optional|must not (?:[a-z /-]+ )?clearance)\b`)},
 }
 
-var civicCitizenship = regexp.MustCompile(`(?i)\b(?:(?:corporate|digital|global|good|strong|social|responsible|engineering|team) ){1,3}citizenship\b`)
+var civicCitizenship = regexp.MustCompile(`(?i)\b(?:(?:corporate|digital|global|good|strong|social|responsible|engineering|team) ){1,3}citizen(?:s|ship)?\b`)
+var citizenOfCountry = regexp.MustCompile(`^ of \p{Lu}`)
 var statusObject = regexp.MustCompile(`(?i)^\s+(?:applications|cases|process|services|law|records)\b`)
 var negatedRequirement = regexp.MustCompile(`(?i)(?:\b(?:not|never|no|nor|none|neither|without)|n['’]t)(?:\s+[\pL]+){0,3}\s*$`)
 var optionalRequirement = regexp.MustCompile(`(?i)\b(?:plus|bonus|nice[- ]to[- ]have|preferred|preferably|desired|desirable|advantage|advantageous|asset|beneficial|priority|encouraged|welcome|helpful|ideally|optional)\b`)
@@ -156,7 +161,9 @@ func languageRequirementSpan(pattern *regexp.Regexp, clause string, hit language
 
 func isCivicCitizenship(clause string, start, end int) bool {
 	for _, span := range civicCitizenship.FindAllStringIndex(clause[:end], -1) {
-		if span[1] > start {
+		// "Good Citizens of Canada" names a country; "good citizenship" never does.
+		noun := !strings.HasSuffix(strings.ToLower(clause[span[0]:span[1]]), "ship")
+		if span[1] > start && !(noun && citizenOfCountry.MatchString(clause[span[1]:])) {
 			return true
 		}
 	}
