@@ -76,6 +76,13 @@ func main() {
 		} else if closed > 0 {
 			slog.Info("closed older copies of reposted jobs", "count", closed)
 		}
+		// History imported before an employer's other names were kept
+		// matches only its whole name until this fills them in once.
+		if filled, err := dataStore.BackfillHistoryEmployerKeys(ctx); err != nil {
+			slog.Error("filling in history employer names failed", "error", err, "filled", filled)
+		} else if filled > 0 {
+			slog.Info("filled in history employer names", "count", filled)
+		}
 	}()
 	aiClient, err := llm.Build(llm.Options{
 		Provider:     cfg.LLM.Provider,

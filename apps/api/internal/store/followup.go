@@ -46,6 +46,7 @@ func (s *Store) SaveFollowUp(ctx context.Context, u, id, body string) (FollowUpD
 	defer tx.Rollback(ctx)
 	var status string
 	var rejected bool
+	// History never excludes an already-applied job, so the table flag is effective here.
 	err = tx.QueryRow(ctx, `SELECT a.status,COALESCE(m.rejected,false) FROM applications a LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2 FOR UPDATE OF a`, u, id).Scan(&status, &rejected)
 	if err != nil {
 		return FollowUpDraft{}, err

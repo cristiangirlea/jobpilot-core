@@ -715,9 +715,35 @@ External application history section on `/applications`. MCP imports use
 `import_external_application` with the same body. Historical URLs are text references, with no
 apply action. Closed/excluded employers are valid historical facts; live rejection locks remain
 unchanged. Import never creates a job, live application, outbox item, discovery run or outbound
-click, and never calls an employer or sender. This ledger does not yet gate live submissions.
+click, and never calls an employer or sender. The [application history filter](#application-history-filter) can warn or exclude new jobs using these records.
 Deploy migration `028_external_application_history.sql`, the API, web and rebuilt MCP together
 before using it; a local implementation does not change the running service.
+
+## Application history filter
+
+Filter presets carry `history_mode`, `history_lookback` and `history_since` (API contract 15).
+`warn` is the default: it shows earlier applications without hiding a job. `company` excludes
+new jobs at a company you applied to; `role` excludes only the same role. A job you already
+applied to is never excluded by this rule.
+History combines imported records asserting an application (never alerts or generic receipts)
+and applications recorded here that reached applied. Companies match by normalized name,
+including every name stated in an imported employer such as "A aka B". A role is exactly the
+same posting on a known employer board: Greenhouse, Lever, Ashby, SmartRecruiters or Recruitee;
+a title never establishes the same role.
+Lookback is `all` (default), `three_months`, or `since` with `history_since` as `YYYY-MM-DD`.
+Three months means calendar months in UTC, clamped at month ends. An unknown date keeps
+warning and excludes only with "all history". The rule is read when a match is read, so imports
+and the passing of time need no re-score. JobPilot checks no mailbox: entries are imported or
+recorded here. Previewing and reusing a previous CV is tracked in issue #231.
+
+An exclusion is a rejection like any other: documents, applications, the applied status,
+approval and sending are refused, and the links are withheld, also for a draft or an outbox
+entry composed before the history arrived. The company of a job is its normalized name only;
+state the other names on the imported record (a record imported before those names were kept
+gets them when the API next starts). A warning and a job card say whether the earlier
+application was to this role or only to this company. The views apply the rule to each job that shares
+a company with the history, which the planner prices high enough to start its JIT compiler, so
+the API's connections turn JIT off.
 
 ## Applications and referral attribution
 
@@ -931,7 +957,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is 40,036 bytes for 48 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
+The catalog an agent host downloads at the start of every session is 40,344 bytes for 48 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
 
 ### Tools
 
@@ -947,7 +973,7 @@ The catalog an agent host downloads at the start of every session is 40,036 byte
 | `get_filters` | read | Filter presets, so the agent can explain exactly why a job was rejected |
 | `list_blacklist` | read | The user's excluded companies and reasons |
 | `add_to_blacklist` | write | Exclude a company and re-score the user's jobs; removal stays in the web app |
-| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, including opt-in `reject_eligibility_requirements` and `reject_unlisted_languages` (both default off); `active` makes it the only active one, and every save re-scores the user's jobs |
+| `set_filters` | write | Create a filter preset or change one by id: only the named rules change, including `history_mode`, `history_lookback`, `history_since`, and opt-in `reject_eligibility_requirements` and `reject_unlisted_languages` (both default off); `active` makes it the only active one, and every save re-scores the user's jobs |
 | `import_external_application` | write | Preview external history, then commit with the returned token; no catalog job or sending |
 | `list_external_applications` | read | Private external history with original dates, evidence and CV reference; paginated |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
@@ -1088,6 +1114,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `027_sent_cv_version.sql` | The CV version read by the sender, so later edits are not reported as sent |
 | `028_external_application_history.sql` | Private immutable external application history, separate from catalog jobs |
 | `029_profile_repairs.sql` | Retained source-bound profile repair proposals and reversible snapshots |
+| `030_application_history_policy.sql` | The application-history rule on filter presets, the names an imported employer was stated under, and the views that apply the rule when a match is read |
 
 Core entities:
 

@@ -237,10 +237,58 @@ func (s *Store) ImportExternalHistory(ctx context.Context, user string, in model
 		return out, ErrHistoryConflict
 	}
 	raw, _ = json.Marshal(r)
-	x, e := scanHistory(tx.QueryRow(ctx, `INSERT INTO external_application_history(user_id,external_key,employer_normalized,requisition,canonical_url,record) VALUES($1,$2,$3,$4,$5,$6) RETURNING `+historyColumns, user, r.ExternalKey, company.Normalize(r.Employer), r.Requisition, r.CanonicalURL, raw))
+	x, e := scanHistory(tx.QueryRow(ctx, `INSERT INTO external_application_history(user_id,external_key,employer_normalized,requisition,canonical_url,record,employer_keys) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING `+historyColumns, user, r.ExternalKey, company.Normalize(r.Employer), r.Requisition, r.CanonicalURL, raw, employerKeys(r.Employer)))
 	if e != nil {
 		return out, e
 	}
 	out.Record = &x
 	return out, tx.Commit(ctx)
+}
+
+// BackfillHistoryEmployerKeys gives records imported before employer_keys
+// existed every name their employer was stated under. The migration could only
+// copy the whole normalized name; later runs find nothing to do.
+func (s *Store) BackfillHistoryEmployerKeys(ctx context.Context) (int, error) {
+	rows, err := s.DB.Query(ctx, `SELECT id, record->>'employer' FROM external_application_history
+		WHERE employer_keys = ARRAY[employer_normalized] AND record->>'employer' ~* '\s(aka|a/k/a|dba|d/b/a|formerly)\s'`)
+	if err != nil {
+		return 0, err
+	}
+	stated := map[string]string{}
+	for rows.Next() {
+		var id, employer string
+		if err = rows.Scan(&id, &employer); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		stated[id] = employer
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return 0, err
+	}
+	done := 0
+	for id, employer := range stated {
+		keys := employerKeys(employer)
+		if len(keys) < 2 {
+			continue
+		}
+		if _, err = s.DB.Exec(ctx, `UPDATE external_application_history SET employer_keys=$2 WHERE id=$1`, id, keys); err != nil {
+			return done, err
+		}
+		done++
+	}
+	return done, nil
+}
+
+func employerKeys(name string) []string {
+	keys := []string{}
+	seen := map[string]bool{}
+	for _, key := range append(company.Aliases(name), company.Normalize(name)) {
+		if key != "" && !seen[key] {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+	}
+	return keys
 }

@@ -40,6 +40,9 @@ type sourceInput struct {
 // setFiltersInput changes only what it names: a missing list or value keeps
 // the stored one, and an empty list clears that rule.
 type setFiltersInput struct {
+	HistoryMode          *string  `json:"history_mode,omitempty" jsonschema:"warn, company or role: effect of earlier applications"`
+	HistoryLookback      *string  `json:"history_lookback,omitempty" jsonschema:"all, three_months or since"`
+	HistorySince         *string  `json:"history_since,omitempty" jsonschema:"YYYY-MM-DD when lookback is since; empty clears"`
 	ID                   string   `json:"id,omitempty" jsonschema:"The preset to change; leave out to create one"`
 	Name                 *string  `json:"name,omitempty" jsonschema:"Required when creating"`
 	Active               *bool    `json:"active,omitempty" jsonschema:"true makes this the only active preset; a new one is inactive unless set"`
@@ -69,6 +72,15 @@ var remoteTypes = []string{"remote", "hybrid", "onsite"}
 // every job that states its arrangement.
 func applyFilterChanges(base FilterPreset, in setFiltersInput) (FilterPreset, error) {
 	out := base
+	if in.HistoryMode != nil {
+		out.HistoryMode = *in.HistoryMode
+	}
+	if in.HistoryLookback != nil {
+		out.HistoryLookback = *in.HistoryLookback
+	}
+	if in.HistorySince != nil {
+		out.HistorySince = *in.HistorySince
+	}
 	if in.RejectEligibilityRequirements != nil {
 		out.RejectEligibilityRequirements = *in.RejectEligibilityRequirements
 	}
@@ -220,6 +232,9 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		if (in.RejectEligibilityRequirements != nil || in.RejectUnlistedLanguages != nil) && !c.supports(ctx, filterGatesContract) {
 			return nil, FilterPreset{}, errors.New("this API predates reject_eligibility_requirements and reject_unlisted_languages, or its version could not be confirmed, and would ignore them; omit these fields or update the API to contract 12 or later")
 		}
+		if (in.HistoryMode != nil || in.HistoryLookback != nil || in.HistorySince != nil) && !c.supports(ctx, historyPolicyContract) {
+			return nil, FilterPreset{}, errors.New("this API predates history_mode, history_lookback and history_since, or its version could not be confirmed, and would ignore them; omit these fields or update the API to contract 15 or later")
+		}
 		base := FilterPreset{}
 		if id := strings.TrimSpace(in.ID); id != "" {
 			// Only the caller's own presets are listed, so an id that is not
@@ -242,7 +257,7 @@ func addCatalogTools(s *mcp.Server, c *Client) {
 		if err != nil {
 			return nil, FilterPreset{}, err
 		}
-		out, err := c.SaveFilter(ctx, preset)
+		out, err := c.SaveFilter(ctx, filterSave{FilterPreset: preset, HistoryMode: in.HistoryMode, HistoryLookback: in.HistoryLookback, HistorySince: in.HistorySince})
 		if err != nil {
 			return nil, FilterPreset{}, toolError(err)
 		}

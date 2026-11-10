@@ -7,7 +7,44 @@ import "time"
 // what list tools return: they drop the job description so a page of matches
 // stays small in the host model's context; get_job carries the full text.
 
+type ApplicationHistory struct {
+	Mode     string         `json:"mode"`
+	Lookback string         `json:"lookback"`
+	Cutoff   string         `json:"cutoff,omitempty"`
+	Blocked  bool           `json:"blocked"`
+	Entries  []HistoryEntry `json:"entries"`
+}
+
+type HistoryEntry struct {
+	ID           string     `json:"id"`
+	JobID        string     `json:"job_id,omitempty"`
+	Employer     string     `json:"employer"`
+	Title        string     `json:"title"`
+	Requisition  string     `json:"requisition"`
+	CanonicalURL string     `json:"canonical_url,omitempty"`
+	AppliedAt    string     `json:"applied_at"`
+	OutcomeAt    string     `json:"outcome_at"`
+	Status       string     `json:"status"`
+	Source       string     `json:"source"`
+	EvidenceKind string     `json:"evidence_kind"`
+	EvidenceRef  string     `json:"evidence_ref"`
+	Relation     string     `json:"relation"`
+	TitleChanged bool       `json:"title_changed"`
+	InWindow     bool       `json:"in_window"`
+	DateUnknown  bool       `json:"date_unknown"`
+	CV           *HistoryCV `json:"cv,omitempty"`
+	CVLabel      string     `json:"cv_label,omitempty"`
+}
+
+type HistoryCV struct {
+	DocumentID string `json:"document_id"`
+	Filename   string `json:"filename"`
+	VersionAt  string `json:"version_at"`
+}
+
 type Job struct {
+	ApplicationHistory *ApplicationHistory `json:"application_history,omitempty"`
+
 	ID             string     `json:"id"`
 	Title          string     `json:"title"`
 	Company        string     `json:"company"`
@@ -72,6 +109,8 @@ type JobWithMatch struct {
 }
 
 type JobSummary struct {
+	ApplicationHistory *ApplicationHistory `json:"application_history,omitempty"`
+
 	ID             string     `json:"id"`
 	Title          string     `json:"title"`
 	Company        string     `json:"company"`
@@ -99,7 +138,7 @@ func summarizeJob(j Job) JobSummary {
 	case source == "":
 		source = j.SourceProvider
 	}
-	return JobSummary{ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, EmployerURL: j.EmployerURL, PostedAt: j.PostedAt, Source: source, Closed: j.ClosedAt != nil, ClosedReason: j.ClosedReason}
+	return JobSummary{ApplicationHistory: j.ApplicationHistory, ID: j.ID, Title: j.Title, Company: j.Company, Location: j.Location, RemoteType: j.RemoteType, SalaryMin: j.SalaryMin, SalaryMax: j.SalaryMax, Currency: j.Currency, EmploymentType: j.EmploymentType, Industry: j.Industry, ApplyURL: j.ApplyURL, EmployerURL: j.EmployerURL, PostedAt: j.PostedAt, Source: source, Closed: j.ClosedAt != nil, ClosedReason: j.ClosedReason}
 }
 
 type MatchSummary struct {
@@ -285,6 +324,9 @@ func nonNil(in []string) []string {
 // FilterPreset mirrors the API's filter shape. Positive lists are OR rules
 // and the excluded lists are NOT rules; only the active preset is applied.
 type FilterPreset struct {
+	HistoryMode          string   `json:"history_mode"`
+	HistoryLookback      string   `json:"history_lookback"`
+	HistorySince         string   `json:"history_since"`
 	ID                   string   `json:"id,omitempty"`
 	Name                 string   `json:"name"`
 	Active               bool     `json:"active"`

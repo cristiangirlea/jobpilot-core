@@ -4,6 +4,7 @@ import Link from "next/link";
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
 import {OutboxEntry} from "@/lib/types";
+import {ApplicationHistory} from "@/components/ApplicationHistory";
 import {Shell} from "@/components/Shell";
 import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
@@ -122,6 +123,8 @@ function Detail({entry,busy,sending,onAct,onApproveCV,onApplied}:{entry:OutboxEn
           onClick={()=>onAct(entry,"approve")}>{entry.status==="approved"?"Approved":"Approve"}</button>}
       </div>
     </div>
+
+    <ApplicationHistory history={entry.job?.application_history}/>
 
     {blocked&&<div className="rounded-xl bg-amber-50 px-4 py-3">
       <p className="text-sm font-semibold text-amber-900">Needs you before this can be approved</p>

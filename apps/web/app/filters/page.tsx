@@ -13,6 +13,7 @@ const newFilter=():Filter=>({
   employment_types:[],excluded_industries:[],required_skills:[],
   included_technologies:[],excluded_technologies:[],max_age_days:30,
   reject_eligibility_requirements:false,reject_unlisted_languages:false,
+  history_mode:"warn",history_lookback:"all",history_since:"",
 });
 
 export default function Filters(){
@@ -32,7 +33,7 @@ export default function Filters(){
       setForm(newFilter());setSaved("Filter saved. Existing jobs were re-evaluated with the active rules.");load();
     }catch(e){setError(e instanceof Error?e.message:"Unable to save filter")}
   }
-  function edit(item:Filter){setForm({...item,reject_eligibility_requirements:item.reject_eligibility_requirements??false,reject_unlisted_languages:item.reject_unlisted_languages??false,included_technologies:item.included_technologies||[],excluded_technologies:item.excluded_technologies||[]});window.scrollTo({top:0,behavior:"smooth"})}
+  function edit(item:Filter){setForm({...item,history_mode:item.history_mode??"warn",history_lookback:item.history_lookback??"all",history_since:item.history_since??"",reject_eligibility_requirements:item.reject_eligibility_requirements??false,reject_unlisted_languages:item.reject_unlisted_languages??false,included_technologies:item.included_technologies||[],excluded_technologies:item.excluded_technologies||[]});window.scrollTo({top:0,behavior:"smooth"})}
   async function remove(id?:string){if(!id)return;setError("");try{await api(`/filters/${id}`,{method:"DELETE"});load()}catch(e){setError(e instanceof Error?e.message:"Unable to delete filter")}}
 
   return <Shell>
@@ -68,6 +69,15 @@ export default function Filters(){
           <label className="!flex items-center gap-2 !normal-case !tracking-normal"><input className="!w-auto" type="checkbox" checked={form.active} onChange={e=>setForm({...form,active:e.target.checked})}/> Use this preset for matching</label>
         </section>
       </div>
+      <section className="mt-6 space-y-4" aria-label="Application history">
+        <h2 className="font-semibold">Application history</h2>
+        <p className="muted">Warn only never hides a job. An exclusion applies to new jobs only, never to one you already applied to.</p>
+        <div className="grid gap-4 sm:grid-cols-3">
+          <Field label="History rule"><select value={form.history_mode} onChange={e=>setForm({...form,history_mode:e.target.value as Filter["history_mode"]})}><option value="warn">Warn only</option><option value="company">Exclude companies I applied to</option><option value="role">Exclude roles I applied to</option></select></Field>
+          <Field label="History lookback"><select value={form.history_lookback} onChange={e=>setForm({...form,history_lookback:e.target.value as Filter["history_lookback"],history_since:e.target.value==="since"?form.history_since:""})}><option value="all">All history</option><option value="three_months">Last three months</option><option value="since">Since a date</option></select></Field>
+          {form.history_lookback==="since"&&<Field label="History since"><input type="date" required value={form.history_since} onChange={e=>setForm({...form,history_since:e.target.value})}/></Field>}
+        </div>
+      </section>
       <div className="mt-6 flex gap-2"><button className="btn">{form.id?"Update preset":"Save preset"}</button>{form.id&&<button type="button" className="btn-secondary" onClick={()=>setForm(newFilter())}>Cancel</button>}</div>
     </form>
     <div className="mt-7"><CompanyExclusions/></div>

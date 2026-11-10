@@ -274,11 +274,27 @@ func (s *Store) OutboxEntries(ctx context.Context, userID, status string) ([]mod
 	}
 	// A queue is unreadable without knowing which job each row is for.
 	for i := range out {
-		if job, jobErr := s.CatalogJob(ctx, out[i].JobID); jobErr == nil {
-			out[i].Job = &job
-		}
+		out[i].Job = s.outboxJob(ctx, userID, out[i].JobID)
 	}
 	return out, nil
+}
+
+// outboxJob reads an entry's job as the user's match shows it, so it carries
+// the application history and a rejected match's withheld links. An entry
+// whose job was never matched still gets the catalog's copy; a failed read
+// gets none, since the catalog's copy would show links a rejection withholds.
+func (s *Store) outboxJob(ctx context.Context, userID, jobID string) *models.Job {
+	job, err := s.Job(ctx, userID, jobID)
+	if err == nil {
+		return &job.Job
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if job, err := s.CatalogJob(ctx, jobID); err == nil {
+		return &job
+	}
+	return nil
 }
 
 func (s *Store) OutboxEntry(ctx context.Context, userID, id string) (models.OutboxEntry, error) {
@@ -286,9 +302,7 @@ func (s *Store) OutboxEntry(ctx context.Context, userID, id string) (models.Outb
 	if err != nil {
 		return entry, err
 	}
-	if job, jobErr := s.CatalogJob(ctx, entry.JobID); jobErr == nil {
-		entry.Job = &job
-	}
+	entry.Job = s.outboxJob(ctx, userID, entry.JobID)
 	return entry, nil
 }
 
@@ -373,6 +387,16 @@ func (s *Store) ApproveOutboxEntry(ctx context.Context, userID, id string) (mode
 
 // approvalRefusal is the first reason the entry cannot be approved now, or "".
 func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models.OutboxEntry) (OutboxRefusal, error) {
+	// A match rejected since the entry was composed, by a filter or by
+	// application history, cannot be approved; the sender checks it again.
+	var rejected bool
+	err := tx.QueryRow(ctx, `SELECT rejected FROM effective_job_matches WHERE user_id=$1 AND job_id=$2`, userID, entry.JobID).Scan(&rejected)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
+	}
+	if rejected {
+		return OutboxRefusal(ErrApplicationBlocked.Error()), nil
+	}
 	if len(entry.Blockers) > 0 {
 		return OutboxRefusal("This application cannot be approved yet: " + entry.Blockers[0]), nil
 	}
@@ -384,7 +408,7 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 	}
 	var kind string
 	var cvApproved bool
-	err := tx.QueryRow(ctx, `SELECT kind, approved FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, entry.CVDocumentID).Scan(&kind, &cvApproved)
+	err = tx.QueryRow(ctx, `SELECT kind, approved FROM cv_documents WHERE user_id=$1 AND id=$2`, userID, entry.CVDocumentID).Scan(&kind, &cvApproved)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return OutboxRefusal("This application's CV was deleted. Prepare it again to attach another."), nil
 	}
@@ -470,9 +494,7 @@ func (s *Store) CancelOutboxEntry(ctx context.Context, userID, id string) (model
 // withJob attaches the job an entry is for, since a queue entry is unreadable
 // without it, and the summary of the CV it carries, as OutboxEntry reads them.
 func (s *Store) withJob(ctx context.Context, userID string, entry models.OutboxEntry) models.OutboxEntry {
-	if job, err := s.CatalogJob(ctx, entry.JobID); err == nil {
-		entry.Job = &job
-	}
+	entry.Job = s.outboxJob(ctx, userID, entry.JobID)
 	return s.withCV(ctx, userID, entry)
 }
 

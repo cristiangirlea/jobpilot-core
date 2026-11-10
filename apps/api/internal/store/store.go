@@ -130,6 +130,7 @@ func (s *profileStore) Skills(ctx context.Context, u string) ([]models.Skill, er
 // MatchTexts returns the title and description of the user's best matches,
 // accepted ones first, for counting which technologies postings ask for.
 func (s *Store) MatchTexts(ctx context.Context, u string, limit int) ([]string, error) {
+	// Text sampling uses the stored score; history does not change the posting text.
 	rows, err := s.DB.Query(ctx, `SELECT j.title||' '||j.description FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 ORDER BY m.rejected ASC,m.score DESC,j.created_at DESC LIMIT $2`, u, limit)
 	if err != nil {
 		return nil, err
@@ -185,7 +186,7 @@ func (s *profileStore) AddBlacklist(ctx context.Context, u string, x models.Blac
 }
 
 func (s *Store) Filters(ctx context.Context, u string) ([]models.FilterPreset, error) {
-	rows, err := s.DB.Query(ctx, `SELECT id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages FROM filter_presets WHERE user_id=$1 ORDER BY created_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages,history_mode,history_lookback,COALESCE(to_char(history_cutoff_date,'YYYY-MM-DD'),'') FROM filter_presets WHERE user_id=$1 ORDER BY created_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +194,7 @@ func (s *Store) Filters(ctx context.Context, u string) ([]models.FilterPreset, e
 	out := []models.FilterPreset{}
 	for rows.Next() {
 		var x models.FilterPreset
-		if err = rows.Scan(&x.ID, &x.Name, &x.Active, &x.IncludedTitles, &x.ExcludedTitleWords, &x.Locations, &x.RemoteTypes, &x.MinSalary, &x.Currency, &x.EmploymentTypes, &x.ExcludedIndustries, &x.RequiredSkills, &x.IncludedTechnologies, &x.ExcludedTechnologies, &x.MaxAgeDays, &x.RejectEligibilityRequirements, &x.RejectUnlistedLanguages); err != nil {
+		if err = rows.Scan(&x.ID, &x.Name, &x.Active, &x.IncludedTitles, &x.ExcludedTitleWords, &x.Locations, &x.RemoteTypes, &x.MinSalary, &x.Currency, &x.EmploymentTypes, &x.ExcludedIndustries, &x.RequiredSkills, &x.IncludedTechnologies, &x.ExcludedTechnologies, &x.MaxAgeDays, &x.RejectEligibilityRequirements, &x.RejectUnlistedLanguages, &x.HistoryMode, &x.HistoryLookback, &x.HistorySince); err != nil {
 			return nil, err
 		}
 		out = append(out, x)
@@ -213,6 +214,9 @@ func (s *Store) ActiveFilter(ctx context.Context, u string) (*models.FilterPrese
 	return nil, nil
 }
 func (s *Store) SaveFilter(ctx context.Context, u string, x models.FilterPreset) (models.FilterPreset, error) {
+	if err := ValidateHistoryPolicy(&x); err != nil {
+		return x, err
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return x, err
@@ -224,9 +228,9 @@ func (s *Store) SaveFilter(ctx context.Context, u string, x models.FilterPreset)
 		}
 	}
 	if x.ID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO filter_presets(user_id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages).Scan(&x.ID)
+		err = tx.QueryRow(ctx, `INSERT INTO filter_presets(user_id,name,active,included_titles,excluded_title_words,locations,remote_types,min_salary,currency,employment_types,excluded_industries,required_skills,included_technologies,excluded_technologies,max_age_days,reject_eligibility_requirements,reject_unlisted_languages,history_mode,history_lookback,history_cutoff_date) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,NULLIF($20,'')::date) RETURNING id`, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages, x.HistoryMode, x.HistoryLookback, x.HistorySince).Scan(&x.ID)
 	} else {
-		tag, e := tx.Exec(ctx, `UPDATE filter_presets SET name=$3,active=$4,included_titles=$5,excluded_title_words=$6,locations=$7,remote_types=$8,min_salary=$9,currency=$10,employment_types=$11,excluded_industries=$12,required_skills=$13,included_technologies=$14,excluded_technologies=$15,max_age_days=$16,reject_eligibility_requirements=$17,reject_unlisted_languages=$18 WHERE id=$1 AND user_id=$2`, x.ID, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages)
+		tag, e := tx.Exec(ctx, `UPDATE filter_presets SET name=$3,active=$4,included_titles=$5,excluded_title_words=$6,locations=$7,remote_types=$8,min_salary=$9,currency=$10,employment_types=$11,excluded_industries=$12,required_skills=$13,included_technologies=$14,excluded_technologies=$15,max_age_days=$16,reject_eligibility_requirements=$17,reject_unlisted_languages=$18,history_mode=$19,history_lookback=$20,history_cutoff_date=NULLIF($21,'')::date WHERE id=$1 AND user_id=$2`, x.ID, u, x.Name, x.Active, x.IncludedTitles, x.ExcludedTitleWords, x.Locations, x.RemoteTypes, x.MinSalary, x.Currency, x.EmploymentTypes, x.ExcludedIndustries, x.RequiredSkills, x.IncludedTechnologies, x.ExcludedTechnologies, x.MaxAgeDays, x.RejectEligibilityRequirements, x.RejectUnlistedLanguages, x.HistoryMode, x.HistoryLookback, x.HistorySince)
 		err = e
 		if err == nil && tag.RowsAffected() == 0 {
 			err = pgx.ErrNoRows
@@ -275,6 +279,7 @@ func (s *Store) InsertJob(ctx context.Context, u string, in models.JobInput, e m
 	if filterID != "" {
 		fid = filterID
 	}
+	// Scoring writes the base match; history is applied when it is read.
 	err = tx.QueryRow(ctx, `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`, u, j.ID, fid, e.Rejected, e.Score, rej, warn, reasons, matched, missing, red, breakdown).Scan(&matchID)
 	if err != nil {
 		return models.JobWithMatch{}, err
@@ -282,7 +287,7 @@ func (s *Store) InsertJob(ctx context.Context, u string, in models.JobInput, e m
 	if err = tx.Commit(ctx); err != nil {
 		return models.JobWithMatch{}, err
 	}
-	return models.JobWithMatch{Job: j, Match: e, MatchID: matchID}, nil
+	return s.Job(ctx, u, j.ID)
 }
 
 // CatalogJob reads a job from the shared catalog by id, without a per-user
@@ -472,6 +477,7 @@ type LinkToCheck struct {
 // LinksToCheck returns open jobs that somebody still matches, least recently
 // checked first. Jobs nobody could apply to anyway are not worth a request.
 func (s *Store) LinksToCheck(ctx context.Context, olderThan time.Duration, limit int) ([]LinkToCheck, error) {
+	// This checks all users at once; history-excluded jobs may still need their links checked.
 	rows, err := s.DB.Query(ctx, `SELECT j.id,j.apply_url,j.source_provider,j.employer_url FROM jobs j WHERE j.closed_at IS NULL AND j.apply_url<>''
 		AND (j.last_checked_at IS NULL OR j.last_checked_at < now()-$1::interval)
 		AND EXISTS(SELECT 1 FROM job_matches m WHERE m.job_id=j.id AND NOT m.rejected)
@@ -669,6 +675,7 @@ func (s *Store) NameUnnamedJobs(ctx context.Context) (int, error) {
 	}
 }
 
+// Scoring writes the base match; history is applied when it is read.
 const upsertJobMatch = `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id,job_id) DO UPDATE SET filter_id=EXCLUDED.filter_id,rejected=EXCLUDED.rejected,score=EXCLUDED.score,rejection_reasons=EXCLUDED.rejection_reasons,warnings=EXCLUDED.warnings,reasons=EXCLUDED.reasons,matched_skills=EXCLUDED.matched_skills,missing_skills=EXCLUDED.missing_skills,red_flags=EXCLUDED.red_flags,breakdown=EXCLUDED.breakdown,created_at=now() RETURNING id`
 
 func jobMatchArgs(u, jobID string, e models.Evaluation, filterID string) []any {
@@ -737,14 +744,14 @@ func searchPattern(term string) string {
 }
 
 const (
-	jobMatchColumns        = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url`
-	jobMatchSummaryColumns = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,'',j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url`
+	jobMatchColumns        = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url,m.application_history`
+	jobMatchSummaryColumns = `j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,'',j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url,m.application_history`
 )
 
 // Jobs returns the user's evaluated jobs that match q, and how many match
 // before Limit and Offset apply.
 func (s *Store) Jobs(ctx context.Context, u string, q JobQuery) ([]models.JobWithMatch, int, error) {
-	where, args := ` FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1`, []any{u}
+	where, args := ` FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE m.user_id=$1`, []any{u}
 	switch q.State {
 	case "accepted":
 		where += ` AND m.rejected=false`
@@ -813,12 +820,12 @@ func jobRefColumn(ref string) string {
 
 // Job finds one of the user's jobs by id or by slug.
 func (s *Store) Job(ctx context.Context, u, ref string) (models.JobWithMatch, error) {
-	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
+	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url,m.application_history FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
 	return scanJobMatch(row)
 }
 
 func (s *Store) Match(ctx context.Context, u, id string) (models.JobWithMatch, error) {
-	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND m.id=$2`, u, id)
+	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url,m.application_history FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND m.id=$2`, u, id)
 	return scanJobMatch(row)
 }
 
@@ -826,10 +833,15 @@ type scanner interface{ Scan(...any) error }
 
 func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 	var x models.JobWithMatch
-	var rejection, warnings, reasons, matched, missing, red, breakdown []byte
-	err := row.Scan(&x.Job.ID, &x.Job.Title, &x.Job.Company, &x.Job.CompanyNormalized, &x.Job.CompanyDomain, &x.Job.Location, &x.Job.RemoteType, &x.Job.SalaryMin, &x.Job.SalaryMax, &x.Job.Currency, &x.Job.EmploymentType, &x.Job.Industry, &x.Job.Description, &x.Job.ApplyURL, &x.Job.PostedAt, &x.Job.CreatedAt, &x.Job.SourceID, &x.Job.ExternalID, &x.Job.DiscoveredAt, &x.Job.ReferralPartner, &x.Job.ReferralDisclosure, &x.Job.SourceName, &x.Job.SourceProvider, &x.MatchID, &x.Match.Rejected, &x.Match.Score, &rejection, &warnings, &reasons, &matched, &missing, &red, &breakdown, &x.Job.Slug, &x.Job.ClosedAt, &x.Job.ClosedReason, &x.Job.EmployerURL)
+	var rejection, warnings, reasons, matched, missing, red, breakdown, history []byte
+	err := row.Scan(&x.Job.ID, &x.Job.Title, &x.Job.Company, &x.Job.CompanyNormalized, &x.Job.CompanyDomain, &x.Job.Location, &x.Job.RemoteType, &x.Job.SalaryMin, &x.Job.SalaryMax, &x.Job.Currency, &x.Job.EmploymentType, &x.Job.Industry, &x.Job.Description, &x.Job.ApplyURL, &x.Job.PostedAt, &x.Job.CreatedAt, &x.Job.SourceID, &x.Job.ExternalID, &x.Job.DiscoveredAt, &x.Job.ReferralPartner, &x.Job.ReferralDisclosure, &x.Job.SourceName, &x.Job.SourceProvider, &x.MatchID, &x.Match.Rejected, &x.Match.Score, &rejection, &warnings, &reasons, &matched, &missing, &red, &breakdown, &x.Job.Slug, &x.Job.ClosedAt, &x.Job.ClosedReason, &x.Job.EmployerURL, &history)
 	if err != nil {
 		return x, err
+	}
+	if len(history) > 0 {
+		if err := json.Unmarshal(history, &x.Job.ApplicationHistory); err != nil {
+			return x, err
+		}
 	}
 	json.Unmarshal(rejection, &x.Match.RejectionReasons)
 	json.Unmarshal(warnings, &x.Match.Warnings)
@@ -859,7 +871,7 @@ func scanJobMatch(row scanner) (models.JobWithMatch, error) {
 }
 
 func (s *Store) Applications(ctx context.Context, u string) ([]models.Application, error) {
-	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
+	rows, err := s.DB.Query(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason,m.application_history FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN effective_job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 ORDER BY a.updated_at DESC`, u)
 	if err != nil {
 		return nil, err
 	}
@@ -875,13 +887,22 @@ func (s *Store) Applications(ctx context.Context, u string) ([]models.Applicatio
 	return out, rows.Err()
 }
 func (s *Store) Application(ctx context.Context, u, id string) (models.Application, error) {
-	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
+	return scanApplication(s.DB.QueryRow(ctx, `SELECT a.id,a.job_id,a.status,a.notes,a.created_at,a.updated_at,j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(m.rejected,false),j.employer_url,j.closed_at,j.closed_reason,m.application_history FROM applications a JOIN jobs j ON j.id=a.job_id LEFT JOIN effective_job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.user_id=$1 AND a.id=$2`, u, id))
 }
 func scanApplication(row scanner) (models.Application, error) {
 	var a models.Application
 	var j models.Job
 	var rejected bool
-	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected, &j.EmployerURL, &j.ClosedAt, &j.ClosedReason)
+	var history []byte
+	err := row.Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt, &j.ID, &j.Title, &j.Company, &j.CompanyNormalized, &j.CompanyDomain, &j.Location, &j.RemoteType, &j.SalaryMin, &j.SalaryMax, &j.Currency, &j.EmploymentType, &j.Industry, &j.Description, &j.ApplyURL, &j.PostedAt, &j.CreatedAt, &rejected, &j.EmployerURL, &j.ClosedAt, &j.ClosedReason, &history)
+	if err != nil {
+		return a, err
+	}
+	if len(history) > 0 {
+		if err := json.Unmarshal(history, &j.ApplicationHistory); err != nil {
+			return a, err
+		}
+	}
 	if rejected {
 		j.ApplyURL, j.EmployerURL = "", ""
 	}
@@ -890,10 +911,10 @@ func scanApplication(row scanner) (models.Application, error) {
 }
 func (s *Store) CreateApplication(ctx context.Context, u, jobID string) (models.Application, error) {
 	var a models.Application
-	err := s.DB.QueryRow(ctx, `INSERT INTO applications(user_id,job_id,status) SELECT $1,$2,'draft' WHERE EXISTS(SELECT 1 FROM job_matches WHERE job_id=$2 AND user_id=$1 AND rejected=false) ON CONFLICT(user_id,job_id) DO UPDATE SET updated_at=applications.updated_at RETURNING id,job_id,status,notes,created_at,updated_at`, u, jobID).Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt)
+	err := s.DB.QueryRow(ctx, `INSERT INTO applications(user_id,job_id,status) SELECT $1,$2,'draft' WHERE EXISTS(SELECT 1 FROM effective_job_matches WHERE job_id=$2 AND user_id=$1 AND rejected=false) ON CONFLICT(user_id,job_id) DO UPDATE SET updated_at=applications.updated_at RETURNING id,job_id,status,notes,created_at,updated_at`, u, jobID).Scan(&a.ID, &a.JobID, &a.Status, &a.Notes, &a.CreatedAt, &a.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var rejected bool
-		checkErr := s.DB.QueryRow(ctx, `SELECT rejected FROM job_matches WHERE user_id=$1 AND job_id=$2`, u, jobID).Scan(&rejected)
+		checkErr := s.DB.QueryRow(ctx, `SELECT rejected FROM effective_job_matches WHERE user_id=$1 AND job_id=$2`, u, jobID).Scan(&rejected)
 		if checkErr == nil && rejected {
 			return a, ErrApplicationBlocked
 		}
@@ -923,7 +944,7 @@ func (s *Store) UpdateApplication(ctx context.Context, u, id, status string, not
 	}
 	if status == "applied" && old != "applied" {
 		var eligible bool
-		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM applications a JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.id=$1 AND a.user_id=$2 AND m.rejected=false)`, id, u).Scan(&eligible); err != nil {
+		if err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM applications a JOIN effective_job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id WHERE a.id=$1 AND a.user_id=$2 AND m.rejected=false)`, id, u).Scan(&eligible); err != nil {
 			return models.Application{}, err
 		}
 		if !eligible {
@@ -984,10 +1005,10 @@ func (s *Store) Documents(ctx context.Context, u, jobID string) (models.Document
 
 func (s *Store) RecordOutbound(ctx context.Context, u, jobID string) (string, string, string, error) {
 	var job models.Job
-	err := s.DB.QueryRow(ctx, `SELECT j.partner_apply_url,j.employer_url,j.apply_url,j.referral_partner,j.referral_disclosure FROM jobs j JOIN job_matches m ON m.job_id=j.id WHERE j.id=$1 AND m.user_id=$2 AND m.rejected=false`, jobID, u).Scan(&job.PartnerApplyURL, &job.EmployerURL, &job.ApplyURL, &job.ReferralPartner, &job.ReferralDisclosure)
+	err := s.DB.QueryRow(ctx, `SELECT j.partner_apply_url,j.employer_url,j.apply_url,j.referral_partner,j.referral_disclosure FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE j.id=$1 AND m.user_id=$2 AND m.rejected=false`, jobID, u).Scan(&job.PartnerApplyURL, &job.EmployerURL, &job.ApplyURL, &job.ReferralPartner, &job.ReferralDisclosure)
 	if errors.Is(err, pgx.ErrNoRows) {
 		var rejected bool
-		checkErr := s.DB.QueryRow(ctx, `SELECT rejected FROM job_matches WHERE user_id=$1 AND job_id=$2`, u, jobID).Scan(&rejected)
+		checkErr := s.DB.QueryRow(ctx, `SELECT rejected FROM effective_job_matches WHERE user_id=$1 AND job_id=$2`, u, jobID).Scan(&rejected)
 		if checkErr == nil && rejected {
 			return "", "", "", ErrApplicationBlocked
 		}
@@ -1178,7 +1199,7 @@ func profileAction(p models.Profile) string {
 func (s *Store) Dashboard(ctx context.Context, u string) (map[string]any, error) {
 	out := map[string]any{}
 	var profileFields, total, blacklistRejected, filterRejected, good, draft, applied int
-	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM job_matches WHERE user_id=$1),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
+	err := s.DB.QueryRow(ctx, `SELECT (SELECT count(*) FROM effective_job_matches WHERE user_id=$1),(SELECT count(*) FROM effective_job_matches WHERE user_id=$1 AND rejected=true AND EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM effective_job_matches WHERE user_id=$1 AND rejected=true AND NOT EXISTS(SELECT 1 FROM jsonb_array_elements_text(rejection_reasons) x WHERE x NOT LIKE 'Active filter rejects %' AND (x ILIKE '%employer%' OR x ILIKE '%blacklist%' OR x ILIKE '%domain%'))),(SELECT count(*) FROM effective_job_matches m JOIN jobs j ON j.id=m.job_id WHERE m.user_id=$1 AND m.rejected=false AND m.score>=70 AND j.closed_at IS NULL AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('draft','ready')),(SELECT count(*) FROM applications WHERE user_id=$1 AND status IN ('applied','interview','offer','rejected'))`, u).Scan(&total, &blacklistRejected, &filterRejected, &good, &draft, &applied)
 	if err != nil {
 		return nil, err
 	}

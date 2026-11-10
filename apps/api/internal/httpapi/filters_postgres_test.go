@@ -27,6 +27,24 @@ func TestFilterPutPreservesOmittedGatesPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := (&Server{Store: st, Discovery: discovery.NewService(st), Secret: secret, TokenTTL: time.Hour}).Handler()
+	for _, method := range []string{http.MethodPost, http.MethodPut} {
+		path := "/api/filters"
+		if method == http.MethodPut {
+			created := call(t, h, http.MethodPost, path, token, `{"name":"Invalid policy test"}`)
+			if created.Code != http.StatusCreated {
+				t.Fatalf("create: %d %s", created.Code, created.Body)
+			}
+			var f models.FilterPreset
+			if err := json.Unmarshal(created.Body.Bytes(), &f); err != nil {
+				t.Fatal(err)
+			}
+			path += "/" + f.ID
+		}
+		invalid := call(t, h, method, path, token, `{"name":"Invalid policy","history_mode":"never"}`)
+		if invalid.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("%s invalid history_mode: %d %s", method, invalid.Code, invalid.Body)
+		}
+	}
 	for _, tc := range []struct {
 		name, fields          string
 		eligibility, language bool
@@ -38,7 +56,7 @@ func TestFilterPutPreservesOmittedGatesPostgres(t *testing.T) {
 		{"explicit true", `,"reject_eligibility_requirements":true,"reject_unlisted_languages":true`, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			created := call(t, h, http.MethodPost, "/api/filters", token, `{"name":"Gates","reject_eligibility_requirements":true,"reject_unlisted_languages":true}`)
+			created := call(t, h, http.MethodPost, "/api/filters", token, `{"name":"Gates","history_mode":"company","history_lookback":"since","history_since":"2026-01-15","reject_eligibility_requirements":true,"reject_unlisted_languages":true}`)
 			if created.Code != http.StatusCreated {
 				t.Fatalf("create: %d %s", created.Code, created.Body)
 			}
@@ -53,6 +71,9 @@ func TestFilterPutPreservesOmittedGatesPostgres(t *testing.T) {
 			if err := json.Unmarshal(updated.Body.Bytes(), &f); err != nil {
 				t.Fatal(err)
 			}
+			if f.HistoryMode != "company" || f.HistoryLookback != "since" || f.HistorySince != "2026-01-15" {
+				t.Fatalf("response history policy changed: %+v", f)
+			}
 			if f.RejectEligibilityRequirements != tc.eligibility || f.RejectUnlistedLanguages != tc.language || f.MaxAgeDays != 7 {
 				t.Fatalf("response rules changed: %+v", f)
 			}
@@ -64,6 +85,9 @@ func TestFilterPutPreservesOmittedGatesPostgres(t *testing.T) {
 			for _, got := range stored {
 				if got.ID == f.ID {
 					found = true
+					if got.HistoryMode != "company" || got.HistoryLookback != "since" || got.HistorySince != "2026-01-15" {
+						t.Fatalf("stored history policy changed: %+v", got)
+					}
 					if got.RejectEligibilityRequirements != tc.eligibility || got.RejectUnlistedLanguages != tc.language || got.MaxAgeDays != 7 {
 						t.Fatalf("stored rules changed: %+v", got)
 					}

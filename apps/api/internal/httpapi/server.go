@@ -68,6 +68,11 @@ import (
 //	13: PUT keeps stored eligibility and language rules when their fields are absent.
 //	14: POST /api/cv/{id}/import writes the profile fields and the added roles
 //	   and skills in one transaction, so a failed import changes nothing.
+//	15: a match is also rejected when the active filter's history_mode excludes a
+//	   company or role the user already applied to (documents, applications, the applied
+//	   status and sending are refused as for any rejection); jobs carry application_history;
+//	   filter presets carry history_mode, history_lookback and history_since, which POST
+//	   and PUT honour, and PUT keeps the stored values when they are absent.
 //
 // Additions at contract 13: reading the notification feed opens due quiet
 // reminders; POST /api/applications/{id}/follow-up (403 for an unverified
@@ -77,7 +82,7 @@ import (
 // expose quiet_application_days. GET /api/application-history and POST
 // /api/application-history/import read and add private external history.
 // These routes and fields do not raise Contract.
-const Contract = 14
+const Contract = 15
 
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
@@ -561,8 +566,11 @@ func (s *Server) listFilters(w http.ResponseWriter, r *http.Request) {
 func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		models.FilterPreset
-		RejectEligibilityRequirements *bool `json:"reject_eligibility_requirements"`
-		RejectUnlistedLanguages       *bool `json:"reject_unlisted_languages"`
+		RejectEligibilityRequirements *bool   `json:"reject_eligibility_requirements"`
+		RejectUnlistedLanguages       *bool   `json:"reject_unlisted_languages"`
+		HistoryMode                   *string `json:"history_mode"`
+		HistoryLookback               *string `json:"history_lookback"`
+		HistorySince                  *string `json:"history_since"`
 	}
 	if !decode(w, r, &input) {
 		return
@@ -574,7 +582,7 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Older clients omit rules they cannot represent.
-	if r.Method == http.MethodPut && (input.RejectEligibilityRequirements == nil || input.RejectUnlistedLanguages == nil) {
+	if r.Method == http.MethodPut && (input.RejectEligibilityRequirements == nil || input.RejectUnlistedLanguages == nil || input.HistoryMode == nil || input.HistoryLookback == nil || input.HistorySince == nil) {
 		presets, err := s.Store.Filters(r.Context(), auth.UserID(r.Context()))
 		if err != nil {
 			internal(w, err)
@@ -585,6 +593,7 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 			if stored.ID == x.ID {
 				x.RejectEligibilityRequirements = stored.RejectEligibilityRequirements
 				x.RejectUnlistedLanguages = stored.RejectUnlistedLanguages
+				x.HistoryMode, x.HistoryLookback, x.HistorySince = stored.HistoryMode, stored.HistoryLookback, stored.HistorySince
 				found = true
 				break
 			}
@@ -599,6 +608,19 @@ func (s *Server) saveFilter(w http.ResponseWriter, r *http.Request) {
 	}
 	if input.RejectUnlistedLanguages != nil {
 		x.RejectUnlistedLanguages = *input.RejectUnlistedLanguages
+	}
+	if input.HistoryMode != nil {
+		x.HistoryMode = *input.HistoryMode
+	}
+	if input.HistoryLookback != nil {
+		x.HistoryLookback = *input.HistoryLookback
+	}
+	if input.HistorySince != nil {
+		x.HistorySince = *input.HistorySince
+	}
+	if err := store.ValidateHistoryPolicy(&x); err != nil {
+		problem(w, 422, err.Error())
+		return
 	}
 	x.IncludedTitles = nonNil(x.IncludedTitles)
 	x.ExcludedTitleWords = nonNil(x.ExcludedTitleWords)
@@ -715,13 +737,14 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 		internal(w, getErr)
 		return
 	}
-	matchID, getErr := s.Store.SaveJobMatch(ctx, uid, job.ID, evaluation, fid)
-	// This response is assembled here rather than read back through
-	// scanJobMatch, so it has to withhold the apply URL itself.
-	if evaluation.Rejected {
-		job.ApplyURL = ""
+	if _, getErr = s.Store.SaveJobMatch(ctx, uid, job.ID, evaluation, fid); getErr != nil {
+		internal(w, getErr)
+		return
 	}
-	respondCreated(w, models.JobWithMatch{Job: job, Match: evaluation, MatchID: matchID}, getErr)
+	// Read back, so the answer carries the application-history rule and the
+	// links a rejection withholds, as every later read of this job will.
+	saved, getErr := s.Store.Job(ctx, uid, job.ID)
+	respondCreated(w, saved, getErr)
 }
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request) {
 	s.respondJobs(w, r, "")
