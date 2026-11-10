@@ -50,7 +50,7 @@ func (s *Store) Credentials(ctx context.Context, email string) (models.User, str
 	return u, hash, err
 }
 
-func (s *Store) Profile(ctx context.Context, userID string) (models.Profile, error) {
+func (s *profileStore) Profile(ctx context.Context, userID string) (models.Profile, error) {
 	var p models.Profile
 	err := s.DB.QueryRow(ctx, `SELECT name,given_name,family_name,email,phone,location,linkedin,github,portfolio,current_title,desired_titles,seniority,seniorities,years_experience,certifications,languages,salary_expectation,rate_expectation,currency,work_preference,preferred_countries,preferred_timezones,work_authorization,notice_period,industry_preferences,summary FROM user_profiles WHERE user_id=$1`, userID).Scan(&p.Name, &p.GivenName, &p.FamilyName, &p.Email, &p.Phone, &p.Location, &p.LinkedIn, &p.GitHub, &p.Portfolio, &p.CurrentTitle, &p.DesiredTitles, &p.Seniority, &p.Seniorities, &p.YearsExperience, &p.Certifications, &p.Languages, &p.SalaryExpectation, &p.RateExpectation, &p.Currency, &p.WorkPreference, &p.PreferredCountries, &p.PreferredTimezones, &p.WorkAuthorization, &p.NoticePeriod, &p.IndustryPreferences, &p.Summary)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -75,7 +75,7 @@ func (s *Store) Profile(ctx context.Context, userID string) (models.Profile, err
 	}
 	return p, nil
 }
-func (s *Store) SaveProfile(ctx context.Context, u string, p models.Profile) error {
+func (s *profileStore) SaveProfile(ctx context.Context, u string, p models.Profile) error {
 	// The profile's list columns are NOT NULL. A caller that builds a profile in
 	// Go rather than decoding one from JSON leaves these nil, so they are
 	// normalised here instead of at every call site.
@@ -89,7 +89,7 @@ func (s *Store) SaveProfile(ctx context.Context, u string, p models.Profile) err
 	return err
 }
 
-func (s *Store) Experiences(ctx context.Context, u string) ([]models.WorkExperience, error) {
+func (s *profileStore) Experiences(ctx context.Context, u string) ([]models.WorkExperience, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id,company,company_domain,title,start_date,end_date,current,description FROM work_experiences WHERE user_id=$1 ORDER BY current DESC,start_date DESC`, u)
 	if err != nil {
 		return nil, err
@@ -105,12 +105,12 @@ func (s *Store) Experiences(ctx context.Context, u string) ([]models.WorkExperie
 	}
 	return out, rows.Err()
 }
-func (s *Store) AddExperience(ctx context.Context, u string, x models.WorkExperience) (models.WorkExperience, error) {
+func (s *profileStore) AddExperience(ctx context.Context, u string, x models.WorkExperience) (models.WorkExperience, error) {
 	err := s.DB.QueryRow(ctx, `INSERT INTO work_experiences(user_id,company,company_domain,title,start_date,end_date,current,description) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`, u, x.Company, x.CompanyDomain, x.Title, x.StartDate, x.EndDate, x.Current, x.Description).Scan(&x.ID)
 	return x, err
 }
 
-func (s *Store) Skills(ctx context.Context, u string) ([]models.Skill, error) {
+func (s *profileStore) Skills(ctx context.Context, u string) ([]models.Skill, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id,name,level,years FROM skills WHERE user_id=$1 ORDER BY lower(name)`, u)
 	if err != nil {
 		return nil, err
@@ -136,12 +136,12 @@ func (s *Store) MatchTexts(ctx context.Context, u string, limit int) ([]string, 
 	}
 	return pgx.CollectRows(rows, pgx.RowTo[string])
 }
-func (s *Store) AddSkill(ctx context.Context, u string, x models.Skill) (models.Skill, error) {
+func (s *profileStore) AddSkill(ctx context.Context, u string, x models.Skill) (models.Skill, error) {
 	err := s.DB.QueryRow(ctx, `INSERT INTO skills(user_id,name,level,years) VALUES($1,$2,$3,$4) ON CONFLICT(user_id,name) DO UPDATE SET level=EXCLUDED.level,years=EXCLUDED.years RETURNING id`, u, x.Name, x.Level, x.Years).Scan(&x.ID)
 	return x, err
 }
 
-func (s *Store) Projects(ctx context.Context, u string) ([]models.Project, error) {
+func (s *profileStore) Projects(ctx context.Context, u string) ([]models.Project, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id,name,description,url,skills FROM projects WHERE user_id=$1 ORDER BY name`, u)
 	if err != nil {
 		return nil, err
@@ -157,12 +157,12 @@ func (s *Store) Projects(ctx context.Context, u string) ([]models.Project, error
 	}
 	return out, rows.Err()
 }
-func (s *Store) AddProject(ctx context.Context, u string, x models.Project) (models.Project, error) {
+func (s *profileStore) AddProject(ctx context.Context, u string, x models.Project) (models.Project, error) {
 	err := s.DB.QueryRow(ctx, `INSERT INTO projects(user_id,name,description,url,skills) VALUES($1,$2,$3,$4,$5) RETURNING id`, u, x.Name, x.Description, x.URL, x.Skills).Scan(&x.ID)
 	return x, err
 }
 
-func (s *Store) Blacklist(ctx context.Context, u string) ([]models.BlacklistEntry, error) {
+func (s *profileStore) Blacklist(ctx context.Context, u string) ([]models.BlacklistEntry, error) {
 	rows, err := s.DB.Query(ctx, `SELECT id,company_name,company_domain,normalized_name,reason,created_at FROM company_blacklist WHERE user_id=$1 ORDER BY company_name`, u)
 	if err != nil {
 		return nil, err
@@ -178,21 +178,10 @@ func (s *Store) Blacklist(ctx context.Context, u string) ([]models.BlacklistEntr
 	}
 	return out, rows.Err()
 }
-func (s *Store) AddBlacklist(ctx context.Context, u string, x models.BlacklistEntry) (models.BlacklistEntry, error) {
+func (s *profileStore) AddBlacklist(ctx context.Context, u string, x models.BlacklistEntry) (models.BlacklistEntry, error) {
 	x.NormalizedName = company.Normalize(x.CompanyName)
 	err := s.DB.QueryRow(ctx, `INSERT INTO company_blacklist(user_id,company_name,company_domain,normalized_name,reason) VALUES($1,$2,$3,$4,$5) ON CONFLICT(user_id,normalized_name,company_domain) DO UPDATE SET company_name=EXCLUDED.company_name,reason=EXCLUDED.reason RETURNING id,created_at`, u, x.CompanyName, company.NormalizeDomain(x.CompanyDomain), x.NormalizedName, x.Reason).Scan(&x.ID, &x.CreatedAt)
 	return x, err
-}
-func (s *Store) DeleteOwned(ctx context.Context, table, u, id string) error {
-	allowed := map[string]bool{"work_experiences": true, "skills": true, "projects": true, "company_blacklist": true, "filter_presets": true}
-	if !allowed[table] {
-		return errors.New("invalid table")
-	}
-	tag, err := s.DB.Exec(ctx, fmt.Sprintf(`DELETE FROM %s WHERE id=$1 AND user_id=$2`, table), id, u)
-	if err == nil && tag.RowsAffected() == 0 {
-		return pgx.ErrNoRows
-	}
-	return err
 }
 
 func (s *Store) Filters(ctx context.Context, u string) ([]models.FilterPreset, error) {
@@ -1237,16 +1226,18 @@ func (s *Store) SeedFirstUser(ctx context.Context) error {
 	if err := s.DB.QueryRow(ctx, `SELECT id FROM users ORDER BY created_at LIMIT 1`).Scan(&u); err != nil {
 		return fmt.Errorf("register a user before seeding: %w", err)
 	}
-	_, err := s.DB.Exec(ctx, `INSERT INTO user_profiles(user_id,name,email,current_title,desired_titles,seniority,years_experience,currency,work_preference,preferred_countries,work_authorization,notice_period) SELECT id,'Demo Candidate',email,'Backend Engineer',ARRAY['Backend Engineer','Go Developer'],'senior',7,'EUR',ARRAY['remote'],ARRAY['Romania','Germany'],'EU citizen','30 days' FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING`, u)
-	if err != nil {
+	return s.writeProfile(ctx, u, func(ps *profileStore) error {
+		_, err := ps.DB.Exec(ctx, `INSERT INTO user_profiles(user_id,name,email,current_title,desired_titles,seniority,years_experience,currency,work_preference,preferred_countries,work_authorization,notice_period) SELECT id,'Demo Candidate',email,'Backend Engineer',ARRAY['Backend Engineer','Go Developer'],'senior',7,'EUR',ARRAY['remote'],ARRAY['Romania','Germany'],'EU citizen','30 days' FROM users WHERE id=$1 ON CONFLICT(user_id) DO NOTHING`, u)
+		if err != nil {
+			return err
+		}
+		_, err = ps.DB.Exec(ctx, `INSERT INTO skills(user_id,name,level,years) VALUES($1,'Go','advanced',5),($1,'PostgreSQL','advanced',5),($1,'TypeScript','intermediate',3) ON CONFLICT DO NOTHING`, u)
+		if err != nil {
+			return err
+		}
+		_, err = ps.DB.Exec(ctx, `INSERT INTO work_experiences(user_id,company,title,current,description) SELECT $1,'CurrentCo','Senior Backend Engineer',true,'Built reliable backend services.' WHERE NOT EXISTS(SELECT 1 FROM work_experiences WHERE user_id=$1)`, u)
 		return err
-	}
-	_, err = s.DB.Exec(ctx, `INSERT INTO skills(user_id,name,level,years) VALUES($1,'Go','advanced',5),($1,'PostgreSQL','advanced',5),($1,'TypeScript','intermediate',3) ON CONFLICT DO NOTHING`, u)
-	if err != nil {
-		return err
-	}
-	_, err = s.DB.Exec(ctx, `INSERT INTO work_experiences(user_id,company,title,current,description) SELECT $1,'CurrentCo','Senior Backend Engineer',true,'Built reliable backend services.' WHERE NOT EXISTS(SELECT 1 FROM work_experiences WHERE user_id=$1)`, u)
-	return err
+	})
 }
 
 // LookupCompletion implements llm.Cache. A miss is not an error.

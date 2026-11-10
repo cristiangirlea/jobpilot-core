@@ -46,3 +46,7 @@ export interface ExternalApplication {
  evidence_kind:string; cv_version?:string; imported_at:string;
 }
 export interface HistoryPage {items:ExternalApplication[];next:string}
+
+export type ProfileSnapshot={profile:Profile;blacklist:CompanyExclusion[]};
+export type ProfileRepairSummary={id:string;status:'pending'|'applied'|'rejected'|'restored';created_at:string;proposed_by:'browser'|'agent'|''};
+export type ProfileRepair=ProfileRepairSummary&{source:CVDocument;source_sha256:string;source_fingerprint:string;before_fingerprint:string;applied_fingerprint?:string;before:ProfileSnapshot;after:ProfileSnapshot;changes:{field:string;before:unknown;after:unknown}[];warnings:string[]};

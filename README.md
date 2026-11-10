@@ -552,6 +552,22 @@ The approval gate:
 
 The original bytes are kept so the file the user approved is the file that gets sent, never a re-render of it. Re-uploading a byte-identical file updates the existing record and clears approval, since the parse may now differ. The MCP server's `upload_cv` refuses the file of a CV that is already approved instead, so an agent's copy cannot quietly send the applications using it back to review (#155).
 
+### Reviewed profile repair
+
+A profile filled from a CV that parsed badly keeps the damage: the import above only adds, so it never removes a broken skill or a merged role. `/profile/repairs` replaces them from **the stored parse of one base CV the user chooses**. It does not read the file again, call a model, approve the CV or send anything. If that CV's stored parse is wrong, upload a corrected CV first. This is a bounded slice of #91 and #59: per-field acceptance and proposals for other profile edits are not built.
+
+What a proposal holds. Creating one changes nothing. The record keeps who asked for it (the browser or an agent token, shown on the review page), the source CV's record and parsed facts as they were with the SHA-256 of its file (not the CV's text: the record outlives the CV), the whole profile before (fields, roles, skills, projects and excluded companies), the profile as proposed, the list of fields that differ with both values, and the parser's warnings plus one for each role with unknown dates or no employer. It is the user's private data, kept even when the source CV is deleted later and removed only with the account; there is no route that deletes a repair.
+
+What is replaced. Only facts the CV states: name, email, phone, location, links, current title, summary, certifications, languages, and overall years when the parse has a positive value (zero means the parser found none). The role list and the skill list are each replaced whole when the CV has one, and kept whole when it has none. Given and family name, desired titles, seniorities, salary, rate, currency, work preference, countries, time zones, authorization, notice period, industries and projects are never touched. An employer that leaves the role list is added to the excluded companies, by its name and domain (by its domain alone when the role had no company name), so a repair never lets a previous employer back into the matches; the user's own exclusions stay.
+
+Who decides. `POST /api/profile/repairs/{id}/decision` takes `apply`, `reject` or `restore` from a browser session only; an agent token gets 403 whatever its scope. Each decision names the fingerprint the page showed (`expected_fingerprint`), and apply is refused with 409 when the profile, the excluded companies or the source CV (file, parse or text) differ from what the proposal was built from; approving or relabelling that CV in between does not. Restore puts back the whole state before the repair, with the rows' original ids, and is refused when the profile was edited after the apply, so it never overwrites later work. Apply and restore run the usual re-scoring of stored jobs; neither approves a CV or releases an outbox entry.
+
+Limits and locking. A proposal is refused, with a message saying which limit, beyond 200 roles or 500 skills (in the CV or in the profile), beyond 2 MiB for the stored record, and when 20 proposals already wait for review; the cheap checks run in SQL before the snapshots are read. The list returns the newest 100; older ones stay readable by id. Every write to one user's profile (the fields, roles, skills, projects and excluded companies, a repair and `POST /api/cv/{id}/import` included) runs in a transaction that holds that user's advisory lock, so no profile edit can slip between a repair's comparison and its write, and an import that fails leaves nothing half written (contract 14). The lock is per user: one account's repair never makes another account wait. Requests for the same user queue inside the API process before they take a database connection, so many of them cannot use up the pool. A repair or an import has 10 seconds in all, each statement 5 and the wait for the lock 5; one that runs out is rolled back and answered with 503. Each list of a snapshot is written with one statement, so a long profile is no slower to apply.
+
+The CV's text is untrusted input. Nothing in it is interpreted: the review page shows it as text, the API stores it as JSON values, and the MCP tools return only a summary of a proposal (changed text fields, and roles, skills and exclusions as added and removed names), never the CV text or the snapshots.
+
+Tests, all on invented data: `TestRepairCandidateKeepsAbsentFactsAndLogistics`, `TestRetainedExclusions`, `TestProfileRepairsPostgres`, `TestProfileRepairImportSerializationPostgres`, `TestProfileLockIsPerUserPostgres`, `TestProfileRepairLongListsPostgres`, `TestProfileTransactionBoundsPostgres` and `TestProfileRepairRoutesPostgres` in the API (the `...Postgres` ones need a migrated throwaway database), `TestProfileRepairTools` and `TestProfileRepairView` in the MCP server, and `components/ProfileRepairReview.test.cjs` and `app/profile/repairs/page.test.cjs` (what each button sends) in the web app.
+
 ## CV tailoring and reuse
 
 `POST /api/jobs/{id}/cv` decides which CV an application should carry, and returns one of three decisions:
@@ -777,6 +793,9 @@ Browser sessions of the accounts in `ADMIN_EMAILS` only; agent tokens are refuse
 | Method | Path | Purpose |
 |---|---|---|
 | `GET`, `PUT` | `/api/profile` | Read or save the main profile |
+| `GET`, `POST` | `/api/profile/repairs` | List the newest 100 repair proposals, or propose one from a stored base CV (`source_cv_id`); proposing changes nothing |
+| `GET` | `/api/profile/repairs/{id}` | One proposal: the source CV, both profile snapshots, the changes and the warnings |
+| `POST` | `/api/profile/repairs/{id}/decision` | `apply`, `reject` or `restore` with `expected_fingerprint`; browser sessions only, 409 when the profile or the source CV changed |
 | `GET`, `POST` | `/api/experiences` | List or add work experience |
 | `DELETE` | `/api/experiences/{id}` | Remove work experience |
 | `GET`, `POST` | `/api/skills` | List or add skills |
@@ -912,13 +931,15 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is 35,859 bytes for 44 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
+The catalog an agent host downloads at the start of every session is 40,036 bytes for 48 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
 
 ### Tools
 
 | Tool | Kind | Purpose |
 |---|---|---|
 | `get_profile` | read | Candidate facts the agent may use when writing |
+| `propose_profile_repair` | write | Propose refreshing the profile from one stored base CV. Changes nothing until the user applies it in the web app; returns the warnings and a summary of the changes |
+| `get_profile_repairs` | read | The newest 100 repair proposals with their status, or one proposal's warnings and changes by `proposal_id` |
 | `list_jobs` | read | Accepted (default), rejected, or all evaluated jobs as summaries, with `min_score` and `limit`; one page is fetched from the API. Closed postings only with `include_closed`, marked closed |
 | `get_job` | read | Full posting plus score breakdown, reasons, warnings, and rejection reasons |
 | `list_pending_decisions` | read | Everything waiting for the user, oldest first, each with `how_to_resolve`; `include_resolved` adds the history, and `after` the following page |
@@ -975,7 +996,7 @@ List tools return summaries without the job description so a page of matches sta
 - `approve_outbox_entry`. Approving a composed application is consent to send it, and the product's boundary is that the user releases their own applications. Approving an answer or a CV is different: the agent can show the exact text it is asking about, so the user approves something they have read. Approval is what lets the sender send an application, so the gate belongs with the user, and the REST route enforces it too: it refuses agent tokens.
 - `POST /api/jobs/{id}/outbound`, because an agent must not fire attribution clicks.
 - Any other upload, send or delete tool. `upload_cv` is the one exception, chosen by the owner on 2026-10-16: it puts a CV into the user's own JobPilot, where it waits unapproved like a web upload, and sends nothing to an employer. Because the server holds the user's token on their machine, it is off unless `JOBPILOT_CV_DIR` names a folder, and it reads only a `.pdf` or `.docx` within the API's 12 MB limit from inside that folder. The file is opened through Go's `os.Root`, which refuses `..`, symbolic links and Windows junctions that lead out of the folder as it opens, so nothing can be swapped in between a check and the read; a link inside the folder must be relative, since `os.Root` refuses every absolute one. Anything but a regular file (a named pipe, a device) is refused before it is opened, and the file's first bytes must match its extension. A prompt-injected agent can therefore send at most a PDF or DOCX that is in that folder, never an arbitrary file it can name. The host's own file tools are outside this server's reach, so the folder should be one the agent is not also allowed to write to.
-- Registration, deletes, and profile edits.
+- Registration, deletes, and profile edits. `propose_profile_repair` only creates a proposal; applying, rejecting and restoring one stay in the web app, and the REST route refuses agent tokens.
 
 Server instructions tell the host that composing does not send, that blockers and anything marked `needs_review` must be shown to the user verbatim, and that an application must never be described as approved or sent. Protected-characteristic questions are never answered and declarations the user must make personally are left blank; both are enforced by the API, not by the model.
 
@@ -1066,6 +1087,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `026_quiet_applications.sql` | Per-user quiet-day threshold, status clock and resolve trigger, and follow-up drafts limited to two per application |
 | `027_sent_cv_version.sql` | The CV version read by the sender, so later edits are not reported as sent |
 | `028_external_application_history.sql` | Private immutable external application history, separate from catalog jobs |
+| `029_profile_repairs.sql` | Retained source-bound profile repair proposals and reversible snapshots |
 
 Core entities:
 
