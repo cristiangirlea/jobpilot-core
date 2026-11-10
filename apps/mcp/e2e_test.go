@@ -183,7 +183,7 @@ func TestEndToEnd(t *testing.T) {
 	// Compare the set, not the count, so adding a tool is a deliberate edit
 	// here rather than a number nobody can interpret.
 	want := map[string]bool{
-		"get_profile": true, "list_jobs": true, "get_job": true, "list_applications": true,
+		"get_profile": true, "list_jobs": true, "get_job": true, "import_external_application": true, "list_external_applications": true, "list_applications": true,
 		"get_application": true, "get_dashboard": true, "list_discovery_runs": true,
 		"get_filters": true, "list_discovery_sources": true, "validate_discovery_source": true,
 		"generate_documents": true, "create_application": true, "update_application_status": true,
@@ -247,6 +247,44 @@ func TestEndToEnd(t *testing.T) {
 			}
 		}
 		return false
+	}
+
+	// Historical receipts need no posting text and do not create catalog jobs.
+	historyRecord := map[string]any{"external_key": "synthetic:closed-receipt", "employer": "CurrentCo LLC", "requisition": "OLD-2024", "canonical_url": "https://example.test/closed-role", "status": "applied", "applied_at": "2024-01-12", "source": "synthetic archive", "evidence_kind": "application_receipt", "evidence_ref": "archive:receipt-2024", "cv_version": "sha256:synthetic-old-cv"}
+	hp, ht, he := call("import_external_application", map[string]any{"record": historyRecord})
+	if he || hp["action"] != "create" {
+		t.Fatalf("history preview: %s", ht)
+	}
+	empty, ht, he := call("list_external_applications", nil)
+	if he || len(empty["items"].([]any)) != 0 {
+		t.Fatalf("preview wrote history: %s", ht)
+	}
+	commit := map[string]any{"record": historyRecord, "mode": "commit", "preview_token": hp["preview_token"]}
+	hp, ht, he = call("import_external_application", commit)
+	if he || hp["record"] == nil {
+		t.Fatalf("history commit: %s", ht)
+	}
+	hp, ht, he = call("import_external_application", commit)
+	if he || hp["action"] != "unchanged" {
+		t.Fatalf("history retry: %s", ht)
+	}
+	historyRecord["status"] = "rejected"
+	historyRecord["evidence_kind"] = "rejection"
+	historyRecord["evidence_ref"] = "archive:rejection"
+	historyRecord["outcome_at"] = "2024-01-20"
+	_, ht, he = call("import_external_application", commit)
+	if !he || !strings.Contains(ht, "reconciliation") {
+		t.Fatalf("history overwrote outcome: %s", ht)
+	}
+	historyRecord["external_key"] = "ambiguous:receipt"
+	historyRecord["evidence_kind"] = "generic_receipt"
+	_, ht, he = call("import_external_application", map[string]any{"record": historyRecord})
+	if !he || !strings.Contains(ht, "unknown") {
+		t.Fatalf("ambiguous receipt accepted: %s", ht)
+	}
+	hp, ht, he = call("list_external_applications", map[string]any{"limit": 1})
+	if he || !strings.Contains(ht, "2024-01-12") || !strings.Contains(ht, "synthetic-old-cv") || !strings.Contains(ht, "archive:receipt-2024") || strings.Contains(ht, "archive:rejection") {
+		t.Fatalf("history readback: %s", ht)
 	}
 
 	out, text, isErr := call("get_profile", nil)

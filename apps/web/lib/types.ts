@@ -40,6 +40,13 @@ export type KnownNotificationKind="answer"|"cv"|"outbox"|"quiet_application";
 export type Notification={id:string;kind:string;subject_id:string;title:string;detail:Record<string,unknown>;created_at:string;updated_at:string;resolved_at?:string};
 export type NotificationFeed={open:number;items:Notification[];next?:string};
 
+export interface ExternalApplication {
+ id:string; external_key:string; employer:string; title?:string; requisition?:string; canonical_url?:string;
+ applied_at?:string; outcome_at?:string; status:string; source:string; evidence_ref:string;
+ evidence_kind:string; cv_version?:string; imported_at:string;
+}
+export interface HistoryPage {items:ExternalApplication[];next:string}
+
 export type ProfileSnapshot={profile:Profile;blacklist:CompanyExclusion[]};
 export type ProfileRepairSummary={id:string;status:'pending'|'applied'|'rejected'|'restored';created_at:string;proposed_by:'browser'|'agent'|''};
 export type ProfileRepair=ProfileRepairSummary&{source:CVDocument;source_sha256:string;source_fingerprint:string;before_fingerprint:string;applied_fingerprint?:string;before:ProfileSnapshot;after:ProfileSnapshot;changes:{field:string;before:unknown;after:unknown}[];warnings:string[]};

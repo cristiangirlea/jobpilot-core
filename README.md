@@ -675,6 +675,50 @@ One list per user of everything that waits for the user's decision: unapproved a
 
 Triggers on `answer_bank`, `cv_documents` and `application_outbox` keep these three kinds current in the same transaction as every write, so no code path that changes an approval or an outbox status can leave the list wrong, and each transition is recorded when it happens. `kind` is free text and `subject_id` names the item in its own table, so a new kind needs no schema change: the code that owns the item calls `store.OpenNotification` and `store.ResolveNotification` (the SQL functions `notification_open` and `notification_resolve`) inside its own transaction. Reading the feed first opens due quiet-application reminders, once per status period; a dismissed reminder stays resolved until a later status change starts another period. A status change resolves the reminder in the same transaction; the application page can dismiss it without changing status, and dismissal keeps it resolved for that period. Notes edits and saving the same status do not restart the clock. Terminal statuses do not surface. Reminders open only during the 60 days after the configured quiet-day threshold is reached; applications whose match is rejected open no reminder. There is no daily background pass; the API has no daily loop. Pages follow on with `after`, the previous page's `next`. `detail.href` is the web page where an item is resolved; the web app links only to its own paths.
 
+## External application history
+
+An application made elsewhere belongs in a private ledger, not the shared job catalog.
+`POST /api/application-history/import` accepts `{record, mode, preview_token,
+allow_possible_duplicates}`. `mode` defaults to `preview`, which writes nothing. The record needs
+`external_key` (a stable source identifier), `employer`, `status`, `source`, `evidence_ref`, and
+`evidence_kind`; optional fields are `title`, `requisition`, `canonical_url`, `applied_at`,
+`outcome_at`, and `cv_version`. Use only reference identifiers, never email bodies, credentials
+or verification codes. No posting text is required. Dates stay empty when unknown; known dates
+are `YYYY-MM-DD` or RFC3339, preserved exactly. `imported_at` is separate from the original dates.
+An outcome dated before the application is refused only when the two values establish that
+order: a bare date beside a timestamp names a whole day in no zone. `canonical_url` is an
+`http(s)` URL without credentials or a `#` fragment.
+
+Status is `unknown`, `applied`, `interview`, `rejected`, `offer` or `withdrawn`. Evidence kinds are
+`application_receipt`, `rejection`, `interview`, `offer`, `user_confirmation`, `generic_receipt`
+or `alert`. Outcome evidence must agree with status; generic receipts and alerts require
+`unknown` and empty application/outcome dates. A supplied reference is a historical assertion,
+not independent verification. `cv_version` is an opaque historical label/hash, not a live CV
+selection, and conveys no approval.
+
+Review the preview's `action` and `candidates`, then commit the identical record with
+`mode: "commit"` and its `preview_token`. The API recomputes the preview under a tenant lock:
+a changed record or changed candidate set needs a fresh preview. The token is signed with the
+server's secret, so only a preview this server answered can be committed. Same key and identical facts
+returns `unchanged`, including a retry after a successful commit. Different facts for that key,
+an identical canonical URL, or the same normalized employer plus requisition is a conflict:
+nothing is overwritten or merged. Same employer alone is only a possible duplicate; saving a
+distinct role requires a fresh preview token and explicit `allow_possible_duplicates: true`.
+More than 100 candidates requires reconciliation outside this first slice. Conflicting evidence
+also requires reconciliation; there is deliberately no edit/merge endpoint yet. Keys are unique
+per user across sources, so namespace them (for example `archive:receipt:123`). Canonical URLs
+and requisitions must be supplied consistently; this slice does not infer ATS/aggregator aliases
+or compare against live catalog applications (#171).
+
+Read back through `GET /api/application-history`, `list_external_applications` in MCP, or the
+External application history section on `/applications`. MCP imports use
+`import_external_application` with the same body. Historical URLs are text references, with no
+apply action. Closed/excluded employers are valid historical facts; live rejection locks remain
+unchanged. Import never creates a job, live application, outbox item, discovery run or outbound
+click, and never calls an employer or sender. This ledger does not yet gate live submissions.
+Deploy migration `028_external_application_history.sql`, the API, web and rebuilt MCP together
+before using it; a local implementation does not change the running service.
+
 ## Applications and referral attribution
 
 Application statuses are:
@@ -827,6 +871,8 @@ With `ADMIN_EMAILS` set, these and `/api/ai/status` are for admins (signed in or
 
 | Method | Path | Purpose |
 |---|---|---|
+| `GET` | `/api/application-history` | Private external history; `limit` 1–100 (default 50), follow `next` with `after` |
+| `POST` | `/api/application-history/import` | Preview or commit immutable external history; write scope required |
 | `GET`, `POST` | `/api/applications` | List or create applications |
 | `GET` | `/api/applications/{id}` | Application, documents, and follow-up drafts |
 | `POST` | `/api/applications/{id}/follow-up` | Save a follow-up draft, never send; at most two (409 after two) |
@@ -885,7 +931,7 @@ The transport is stdio, so the binary logs to stderr only. Each tool call is log
 
 On startup the server reads `GET /api/health`. An unreachable API is a warning, not an exit, since it may simply not be up yet. An API whose `contract` is older than the one the server was written against is also a warning, and the one tool where the difference would lose data, a status-only `update_application_status`, is refused with instructions to pass the notes explicitly.
 
-The catalog an agent host downloads at the start of every session is about 38 KB for 46 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
+The catalog an agent host downloads at the start of every session is 40,036 bytes for 48 tools. Results are typed and returned as structured content, but per-field output schemas are deliberately not advertised: they were two thirds of a 60 KB catalog, and the semantics that mattered now live in the tool descriptions. `TestCatalogStaysWithinBudget` keeps it that way, with a 40 KB budget (raised from 30 KB in #156 to take the tools of #143).
 
 ### Tools
 
@@ -902,6 +948,8 @@ The catalog an agent host downloads at the start of every session is about 38 KB
 | `list_blacklist` | read | The user's excluded companies and reasons |
 | `add_to_blacklist` | write | Exclude a company and re-score the user's jobs; removal stays in the web app |
 | `set_filters` | write | Create a filter preset or change one by id: only the named rules change, including opt-in `reject_eligibility_requirements` and `reject_unlisted_languages` (both default off); `active` makes it the only active one, and every save re-scores the user's jobs |
+| `import_external_application` | write | Preview external history, then commit with the returned token; no catalog job or sending |
+| `list_external_applications` | read | Private external history with original dates, evidence and CV reference; paginated |
 | `list_applications` | read | Applications with their job, optionally filtered by status |
 | `get_application` | read | One application with its generated documents and blocked state |
 | `get_dashboard` | read | Pipeline metrics, top matches, and next actions |
@@ -1038,6 +1086,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `025_filter_eligibility_language.sql` | Opt-in eligibility and unlisted-language rejection rules, both off for existing presets |
 | `026_quiet_applications.sql` | Per-user quiet-day threshold, status clock and resolve trigger, and follow-up drafts limited to two per application |
 | `027_sent_cv_version.sql` | The CV version read by the sender, so later edits are not reported as sent |
+| `028_external_application_history.sql` | Private immutable external application history, separate from catalog jobs |
 | `029_profile_repairs.sql` | Retained source-bound profile repair proposals and reversible snapshots |
 
 Core entities:
