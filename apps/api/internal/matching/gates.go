@@ -30,6 +30,7 @@ var eligibilityRules = []struct {
 }
 
 var civicCitizenship = regexp.MustCompile(`(?i)\b(?:(?:corporate|digital|global|good|strong|social|responsible|engineering|team) ){1,3}citizen(?:s|ship)?\b`)
+var citizenOfCountry = regexp.MustCompile(`^ of \p{Lu}`)
 var statusObject = regexp.MustCompile(`(?i)^\s+(?:applications|cases|process|services|law|records)\b`)
 var negatedRequirement = regexp.MustCompile(`(?i)(?:\b(?:not|never|no|nor|none|neither|without)|n['’]t)(?:\s+[\pL]+){0,3}\s*$`)
 var optionalRequirement = regexp.MustCompile(`(?i)\b(?:plus|bonus|nice[- ]to[- ]have|preferred|preferably|desired|desirable|advantage|advantageous|asset|beneficial|priority|encouraged|welcome|helpful|ideally|optional)\b`)
@@ -160,7 +161,9 @@ func languageRequirementSpan(pattern *regexp.Regexp, clause string, hit language
 
 func isCivicCitizenship(clause string, start, end int) bool {
 	for _, span := range civicCitizenship.FindAllStringIndex(clause[:end], -1) {
-		if span[1] > start {
+		// "Good Citizens of Canada" names a country; "good citizenship" never does.
+		noun := !strings.HasSuffix(strings.ToLower(clause[span[0]:span[1]]), "ship")
+		if span[1] > start && !(noun && citizenOfCountry.MatchString(clause[span[1]:])) {
 			return true
 		}
 	}

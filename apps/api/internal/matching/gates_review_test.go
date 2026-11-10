@@ -209,6 +209,8 @@ func TestCitizenshipWithADefinitionOrARoleWarns(t *testing.T) {
 		{"You must be a Good Citizen for this role.", false},
 		{"We must be Global Citizens (people who contribute to our community).", false},
 		{"We must be Good Citizens.", false},
+		// A country after the noun is a legal status again.
+		{"Applicants must be Good Citizens of Canada.", true},
 		{"You do not need to be a United States citizen (or a resident) for this role.", false},
 		{"Ideally you would be a United States citizen (defined by law) for this role.", false},
 	} {
