@@ -148,3 +148,13 @@ func TestInterviewFallbackQuestion(t *testing.T) {
 		t.Fatalf("fallback should ask a question without pasting the posting: %+v", pack)
 	}
 }
+
+// A requirement is found as a whole word, and an accented letter is part of its word.
+func TestInterviewMentionsDoNotReadInsideAnAccentedWord(t *testing.T) {
+	if interviewMentions("Le goût du challenge.", "Go") {
+		t.Error("goût does not mention Go")
+	}
+	if !interviewMentions("We write Go every day.", "Go") {
+		t.Error("a posting that names Go mentions it")
+	}
+}

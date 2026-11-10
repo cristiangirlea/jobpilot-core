@@ -837,3 +837,13 @@ func TestLogisticsAnswersAreWordedAndHeldWhereUnclear(t *testing.T) {
 		}
 	}
 }
+
+// A family term is a whole word, and an accented letter is part of its word.
+func TestRoleFamilyDoesNotReadInsideAnAccentedWord(t *testing.T) {
+	if got := RoleFamily("Assistant to Uxía"); got != "general" {
+		t.Errorf("the ux of an accented word is not a design role, got %q", got)
+	}
+	if got := RoleFamily("UX Designer"); got != "design" {
+		t.Errorf("a design title keeps its family, got %q", got)
+	}
+}
