@@ -7,6 +7,8 @@ package technology
 import (
 	"sort"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // terms is the vocabulary, aliases included.
@@ -138,23 +140,24 @@ func notAlphanumeric(r rune) bool { return !(r >= 'a' && r <= 'z' || r >= '0' &&
 
 // Mentions counts how often texts mention each vocabulary technology, as a
 // whole word, keyed by canonical term. Every evaluation of a job runs it, so
-// only terms whose leading word the text contains are counted.
+// only terms whose leading word the text contains are counted. Each text is
+// counted on its own, so no term is read across a title and a description.
 func Mentions(texts ...string) map[string]int {
-	haystack := haystackOf(texts)
-	present := map[string]bool{}
-	for _, word := range strings.FieldsFunc(haystack, notAlphanumeric) {
-		present[word] = true
-	}
 	counts := map[string]int{}
-	for i, term := range terms {
-		if !present[leads[i]] {
-			continue
+	for t := range texts {
+		haystack := haystackOf(texts[t : t+1])
+		present := map[string]bool{}
+		for _, word := range strings.FieldsFunc(haystack, notAlphanumeric) {
+			present[word] = true
 		}
-		n := Count(haystack, term)
-		if n == 0 {
-			continue
+		for i, term := range terms {
+			if !present[leads[i]] {
+				continue
+			}
+			if n := Count(haystack, term); n > 0 {
+				counts[Canonical(term)] += n
+			}
 		}
-		counts[Canonical(term)] += n
 	}
 	return counts
 }
@@ -201,7 +204,7 @@ func Count(haystack, term string) int {
 		}
 		start := offset + index
 		end := start + len(term)
-		if start > 0 && !isWordByte(haystack[start-1]) && (end >= len(haystack) || !isWordByte(haystack[end])) {
+		if start > 0 && !endsInWord(haystack[:start]) && !startsInWord(haystack[end:]) {
 			count++
 		}
 		offset = start + 1
@@ -211,4 +214,36 @@ func Count(haystack, term string) int {
 
 func isWordByte(b byte) bool {
 	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9' || b == '+' || b == '#'
+}
+
+// endsInWord and startsInWord say whether the text on either side of a term
+// continues its word: a word byte, an accented Latin letter, or an accent
+// combining with one. Other scripts end a word, so a name inside text written
+// without spaces is still found.
+func endsInWord(s string) bool {
+	for s != "" {
+		r, size := utf8.DecodeLastRuneInString(s)
+		if r < utf8.RuneSelf {
+			return isWordByte(byte(r))
+		}
+		if !combining(r) {
+			return unicode.Is(unicode.Latin, r)
+		}
+		// The letter the accent sits on decides.
+		s = s[:len(s)-size]
+	}
+	return false
+}
+
+func startsInWord(s string) bool {
+	r, _ := utf8.DecodeRuneInString(s)
+	if r < utf8.RuneSelf {
+		return isWordByte(byte(r))
+	}
+	return unicode.Is(unicode.Latin, r) || combining(r)
+}
+
+// combining reports a combining accent; a variation selector belongs to an emoji.
+func combining(r rune) bool {
+	return unicode.Is(unicode.Mn, r) && !unicode.Is(unicode.Variation_Selector, r)
 }
