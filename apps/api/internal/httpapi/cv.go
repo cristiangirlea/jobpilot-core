@@ -15,6 +15,7 @@ import (
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/cv"
 	"jobpilot/core/api/internal/models"
+	"jobpilot/core/api/internal/store"
 )
 
 // uploadCV accepts a CV file, extracts and parses it, and stores it unapproved.
@@ -129,23 +130,8 @@ func (s *Server) deleteCV(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(204)
 }
 
-type cvImportRequest struct {
-	// Fields names which parsed values to copy. Empty means all of them.
-	Fields []string `json:"fields"`
-	// Importing experience also excludes those employers from job matches,
-	// which is a safety rule, so it is opt-in and reported back explicitly.
-	ImportExperiences bool `json:"import_experiences"`
-	ImportSkills      bool `json:"import_skills"`
-}
-
-type cvImportResponse struct {
-	Profile            models.Profile `json:"profile"`
-	ImportedFields     []string       `json:"imported_fields"`
-	AddedExperiences   int            `json:"added_experiences"`
-	AddedSkills        int            `json:"added_skills"`
-	ExcludedEmployers  []string       `json:"excluded_employers"`
-	SkippedEmptyFields []string       `json:"skipped_empty_fields"`
-}
+type cvImportRequest = store.CVImportRequest
+type cvImportResponse = store.CVImportResponse
 
 // importCV copies reviewed CV data into the profile. Only non-empty values are
 // written, so an unreadable field in the CV can never blank out something the
@@ -158,115 +144,10 @@ func (s *Server) importCV(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	uid := auth.UserID(ctx)
 
-	document, err := s.Store.CV(ctx, uid, r.PathValue("id"))
+	response, err := s.Store.ImportCV(ctx, uid, r.PathValue("id"), body)
 	if err != nil {
-		respond(w, document, err)
+		respondRepair(w, nil, err)
 		return
-	}
-	var parsed cv.Parsed
-	if raw, marshalErr := json.Marshal(document.Parsed); marshalErr == nil {
-		_ = json.Unmarshal(raw, &parsed)
-	}
-
-	profile, err := s.Store.Profile(ctx, uid)
-	if err != nil {
-		internal(w, err)
-		return
-	}
-
-	wanted := map[string]bool{}
-	for _, field := range body.Fields {
-		wanted[strings.ToLower(strings.TrimSpace(field))] = true
-	}
-	include := func(field string) bool { return len(wanted) == 0 || wanted[field] }
-
-	response := cvImportResponse{ImportedFields: []string{}, ExcludedEmployers: []string{}, SkippedEmptyFields: []string{}}
-	assign := func(field string, value string, target *string) {
-		if !include(field) {
-			return
-		}
-		if strings.TrimSpace(value) == "" {
-			response.SkippedEmptyFields = append(response.SkippedEmptyFields, field)
-			return
-		}
-		*target = value
-		response.ImportedFields = append(response.ImportedFields, field)
-	}
-	assign("name", parsed.Name, &profile.Name)
-	assign("email", parsed.Email, &profile.Email)
-	assign("phone", parsed.Phone, &profile.Phone)
-	assign("location", parsed.Location, &profile.Location)
-	assign("linkedin", parsed.LinkedIn, &profile.LinkedIn)
-	assign("github", parsed.GitHub, &profile.GitHub)
-	assign("portfolio", parsed.Portfolio, &profile.Portfolio)
-	assign("current_title", parsed.CurrentTitle, &profile.CurrentTitle)
-	assign("summary", parsed.Summary, &profile.Summary)
-	if include("years_experience") && parsed.YearsExperience > 0 {
-		profile.YearsExperience = parsed.YearsExperience
-		response.ImportedFields = append(response.ImportedFields, "years_experience")
-	}
-	if include("languages") && len(parsed.Languages) > 0 {
-		profile.Languages = parsed.Languages
-		response.ImportedFields = append(response.ImportedFields, "languages")
-	}
-	if include("certifications") && len(parsed.Certifications) > 0 {
-		profile.Certifications = parsed.Certifications
-		response.ImportedFields = append(response.ImportedFields, "certifications")
-	}
-
-	if err = s.Store.SaveProfile(ctx, uid, profile); err != nil {
-		internal(w, err)
-		return
-	}
-
-	if body.ImportExperiences {
-		existing, listErr := s.Store.Experiences(ctx, uid)
-		if listErr != nil {
-			internal(w, listErr)
-			return
-		}
-		seen := map[string]bool{}
-		for _, experience := range existing {
-			seen[experienceKey(experience)] = true
-		}
-		for _, experience := range parsed.Experiences {
-			if experience.Title == "" || seen[experienceKey(experience)] {
-				continue
-			}
-			if _, addErr := s.Store.AddExperience(ctx, uid, experience); addErr != nil {
-				internal(w, addErr)
-				return
-			}
-			seen[experienceKey(experience)] = true
-			response.AddedExperiences++
-			if experience.Company != "" {
-				response.ExcludedEmployers = append(response.ExcludedEmployers, experience.Company)
-			}
-		}
-	}
-
-	if body.ImportSkills {
-		existing, listErr := s.Store.Skills(ctx, uid)
-		if listErr != nil {
-			internal(w, listErr)
-			return
-		}
-		seen := map[string]bool{}
-		for _, skill := range existing {
-			seen[strings.ToLower(skill.Name)] = true
-		}
-		for _, skill := range parsed.Skills {
-			key := strings.ToLower(strings.TrimSpace(skill.Name))
-			if key == "" || seen[key] {
-				continue
-			}
-			if _, addErr := s.Store.AddSkill(ctx, uid, skill); addErr != nil {
-				internal(w, addErr)
-				return
-			}
-			seen[key] = true
-			response.AddedSkills++
-		}
 	}
 
 	// Employers and skills feed matching and exclusion, so existing jobs are
@@ -280,11 +161,6 @@ func (s *Server) importCV(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	write(w, 200, response)
-}
-
-// experienceKey identifies a role well enough to avoid importing it twice.
-func experienceKey(x models.WorkExperience) string {
-	return strings.ToLower(strings.TrimSpace(x.Title) + "|" + strings.TrimSpace(x.Company) + "|" + strings.TrimSpace(x.StartDate))
 }
 
 // toMap round-trips the parse through JSON so the store holds exactly what the

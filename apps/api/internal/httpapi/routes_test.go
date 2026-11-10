@@ -23,13 +23,14 @@ var readOnlyPosts = map[string]bool{
 // revoke itself to cover its tracks, approving an application, which is
 // the user's consent to send it, and invites, which also need an admin.
 var sessionOnly = map[string]string{
-	"GET /api/invites":              "admin",
-	"POST /api/invites":             "admin",
-	"DELETE /api/invites/{id}":      "admin",
-	"GET /api/tokens":               "session",
-	"POST /api/tokens":              "session",
-	"DELETE /api/tokens/{id}":       "session",
-	"POST /api/outbox/{id}/approve": "consent",
+	"GET /api/invites":                        "admin",
+	"POST /api/invites":                       "admin",
+	"DELETE /api/invites/{id}":                "admin",
+	"GET /api/tokens":                         "session",
+	"POST /api/tokens":                        "session",
+	"DELETE /api/tokens/{id}":                 "session",
+	"POST /api/outbox/{id}/approve":           "consent",
+	"POST /api/profile/repairs/{id}/decision": "repair",
 	// Linking a Google identity adds a way into the account.
 	"POST /api/auth/google/link": "session",
 }

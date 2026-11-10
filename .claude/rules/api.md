@@ -6,7 +6,8 @@ paths:
 
 - Every mutating route in `internal/httpapi/server.go` is registered through `w(...)` so it needs
   the write scope, except the ones no agent token may reach: `session(...)` for token management,
-  `consent(...)` for approving an application, and `admin(...)` for invites (`ADMIN_EMAILS` only).
+  `consent(...)` for approving an application, `repair(...)` for deciding a profile repair, and
+  `admin(...)` for invites (`ADMIN_EMAILS` only).
   Discovery and the AI status are for admins (#128) through `ap(...)` (read) and `aw(...)` (write),
   which also accept an admin's agent token; `adminOnly` in `routes_test.go` lists them.
   `routes_test.go` reads the router source and fails otherwise.

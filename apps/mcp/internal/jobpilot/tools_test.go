@@ -77,6 +77,7 @@ const discoveryRun = `{"id":"run-1","status":"completed","jobs_seen":12,"jobs_ad
 
 func (f *fakeAPI) handler() http.Handler {
 	m := http.NewServeMux()
+	f.repairHandlers(m)
 	send := func(w http.ResponseWriter, status int, body string) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
