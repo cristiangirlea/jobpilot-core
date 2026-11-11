@@ -2,6 +2,7 @@
 import {useParams} from "next/navigation";
 import {useEffect,useState} from "react";
 import {OpenApplyButton} from "@/components/OpenApplyButton";
+import {ApplicationHistory} from "@/components/ApplicationHistory";
 import {Shell} from "@/components/Shell";
 import {CopyButton,ErrorMessage,Field,Header} from "@/components/UI";
 import {api} from "@/lib/api";
@@ -22,6 +23,7 @@ export default function ApplicationDetail(){
   const a=data.application,d=data.documents;
   return <Shell>
     <Header eyebrow="Application record" title={a.job?.title||"Application"} description={`${a.job?.company||""} · created ${new Date(a.created_at).toLocaleDateString()}`} action={!data.blocked&&!a.job?.closed_at&&a.job?.apply_url?<OpenApplyButton jobId={a.job_id}/>:undefined}/>
+    <ApplicationHistory history={a.job?.application_history}/>
     {a.job?.closed_at&&<section className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><strong>This posting has closed</strong> ({new Date(a.job.closed_at).toLocaleDateString()}){a.job.closed_reason?`: ${a.job.closed_reason}`:""}. The application stays in your history; other people no longer see the job.</section>}
     <ErrorMessage message={error}/>{saved&&<p className="mb-4 text-sm text-emerald-700">{saved}</p>}
     <section className="card mb-5 space-y-4"><h2 className="text-lg font-semibold">Follow-up drafts</h2><p className="muted text-sm">Drafts for you to review and copy. Nothing is sent. At most two drafts per application.</p>{(data.follow_ups||[]).map((draft,index)=><Doc key={draft.id} title={`Follow-up ${index+1} · ${new Date(draft.created_at).toLocaleDateString()}`} text={draft.body}/>)}{["applied","interview"].includes(a.status)&&<div className="flex flex-wrap gap-3"><button className="btn" onClick={draftFollowUp} disabled={drafting||data.blocked||(data.follow_ups||[]).length>=2}>{drafting?"Drafting…":"Draft follow-up"}</button><button className="btn" onClick={dismissQuiet}>Dismiss quiet reminder</button></div>}</section>

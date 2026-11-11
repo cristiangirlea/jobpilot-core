@@ -223,3 +223,102 @@ func TestApplyFilterChanges(t *testing.T) {
 		t.Fatalf("a free-text remote type that is sent must be refused, got %v", err)
 	}
 }
+
+func TestSetFiltersHistoryFieldsOnlyWhenNamed(t *testing.T) {
+	for _, id := range []string{"", "f-1"} {
+		for _, input := range []string{`{}`, `{"history_mode":"role"}`, `{"history_lookback":"three_months"}`, `{"history_since":""}`, `{"history_mode":"company","history_lookback":"since","history_since":"2026-08-10"}`} {
+			cs, fake := sessionUnchecked(t, false)
+			fake.apiContract = historyPolicyContract
+			args := map[string]any{"name": "History", "id": id}
+			var named map[string]any
+			if err := json.Unmarshal([]byte(input), &named); err != nil {
+				t.Fatal(err)
+			}
+			for key, value := range named {
+				args[key] = value
+			}
+			res, message := call(t, cs, "set_filters", args)
+			if res.IsError {
+				t.Fatal(message)
+			}
+			_, bodies := fake.savedFilters()
+			if len(bodies) != 1 {
+				t.Fatal(bodies)
+			}
+			for _, key := range []string{"history_mode", "history_lookback", "history_since"} {
+				value, sent := bodies[0][key]
+				want, present := named[key]
+				if sent != present || value != want {
+					t.Fatalf("%s: %s=%v present=%t want %v present=%t", input, key, value, sent, want, present)
+				}
+			}
+		}
+	}
+}
+
+func TestApplyHistoryChangesPreservesUnnamedRules(t *testing.T) {
+	base := FilterPreset{Name: "Stored", HistoryMode: "company", HistoryLookback: "since", HistorySince: "2026-08-10"}
+	for _, input := range []string{`{}`, `{"history_mode":"warn"}`, `{"history_lookback":"all"}`, `{"history_since":""}`} {
+		var in setFiltersInput
+		if err := json.Unmarshal([]byte(input), &in); err != nil {
+			t.Fatal(err)
+		}
+		got, err := applyFilterChanges(base, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := base
+		if in.HistoryMode != nil {
+			want.HistoryMode = *in.HistoryMode
+		}
+		if in.HistoryLookback != nil {
+			want.HistoryLookback = *in.HistoryLookback
+		}
+		if in.HistorySince != nil {
+			want.HistorySince = *in.HistorySince
+		}
+		if got.HistoryMode != want.HistoryMode || got.HistoryLookback != want.HistoryLookback || got.HistorySince != want.HistorySince {
+			t.Fatalf("%s: %+v", input, got)
+		}
+	}
+}
+
+func TestJobHistorySurvivesToolOutputs(t *testing.T) {
+	const fixture = `{"job":{"id":"job-1","application_history":{"mode":"role","lookback":"since","cutoff":"2026-08-10","blocked":true,"entries":[{"id":"history-1","job_id":"earlier-job","employer":"Example Ltd","title":"Engineer","requisition":"REQ-1","applied_at":"2026-09-01T12:00:00Z","outcome_at":"2026-10-01","status":"rejected","source":"JobPilot","evidence_kind":"user_confirmation","evidence_ref":"application:1","relation":"same_role","title_changed":true,"in_window":true,"date_unknown":false,"cv":{"document_id":"cv-1","filename":"resume.pdf","version_at":"2026-09-01T00:00:00Z"}},{"id":"history-2","employer":"Example Ltd","title":"","requisition":"","canonical_url":"https://example.test/jobs/old","applied_at":"","outcome_at":"","status":"applied","source":"archive","evidence_kind":"application_receipt","evidence_ref":"archive:1","relation":"uncertain_role","title_changed":false,"in_window":false,"date_unknown":true,"cv_label":"old-v1"}]}}}`
+	var job JobWithMatch
+	if err := json.Unmarshal([]byte(fixture), &job); err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(fixture), &raw); err != nil {
+		t.Fatal(err)
+	}
+	want := raw["job"].(map[string]any)["application_history"]
+	for name, output := range map[string]any{
+		"get_job":           job,
+		"list_jobs":         summarizeMatch(job),
+		"get_application":   Application{Job: &job.Job},
+		"list_applications": summarizeApplication(Application{Job: &job.Job}),
+		"get_outbox_entry":  detailOutbox(OutboxEntry{Job: &job.Job}),
+		"list_outbox":       summarizeOutbox(OutboxEntry{Job: &job.Job}),
+	} {
+		data, err := json.Marshal(output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(data, &got); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(got["job"].(map[string]any)["application_history"], want) {
+			t.Fatalf("%s lost history: %s", name, data)
+		}
+	}
+	data, err := json.Marshal(Job{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "application_history") {
+		t.Fatalf("absent history must be omitted: %s", data)
+	}
+}

@@ -68,7 +68,7 @@ func (s *Store) ClaimOutboxEntry(ctx context.Context, delay time.Duration, onlyU
 	}
 	if refusal == "" {
 		var rejected bool
-		err = tx.QueryRow(ctx, `SELECT rejected FROM job_matches WHERE user_id=$1 AND job_id=$2`, claim.UserID, claim.Entry.JobID).Scan(&rejected)
+		err = tx.QueryRow(ctx, `SELECT rejected FROM effective_job_matches WHERE user_id=$1 AND job_id=$2`, claim.UserID, claim.Entry.JobID).Scan(&rejected)
 		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return OutboxClaim{}, false, err
 		}

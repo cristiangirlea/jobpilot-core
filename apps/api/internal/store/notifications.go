@@ -104,6 +104,7 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
 	}
 	defer tx.Rollback(ctx)
 	// Marked, unlike a dismissal, so the reminder can reopen if a filter change lifts the rejection.
+	// History never excludes an already-applied job, so the table flag is effective here.
 	_, err = tx.Exec(ctx, `UPDATE notifications n SET resolved_at=now(), updated_at=now(),
             detail=n.detail||'{"resolved_by":"rejected"}'
         FROM applications a JOIN job_matches m ON m.user_id=a.user_id AND m.job_id=a.job_id
@@ -112,6 +113,7 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
 	if err != nil {
 		return err
 	}
+	// History never excludes an already-applied job, so the table flag is effective here.
 	rows, err := tx.Query(ctx, `SELECT a.id FROM applications a
         LEFT JOIN discovery_settings d ON d.user_id=a.user_id
         LEFT JOIN job_matches m ON m.job_id=a.job_id AND m.user_id=a.user_id
@@ -141,6 +143,7 @@ func (s *Store) openQuietApplications(ctx context.Context, userID string) error 
 		return err
 	}
 	for _, id := range ids {
+		// History never excludes an already-applied job, so the table flag is effective here.
 		_, err = tx.Exec(ctx, `SELECT notification_open(a.user_id,'quiet_application',a.id::text,
             'Follow up on the application to '||j.title||' at '||j.company,
             jsonb_build_object('application_id',a.id,'status',a.status,'href','/applications/'||a.id),

@@ -4,6 +4,7 @@ import {useParams,useRouter} from "next/navigation";
 import {useEffect,useState} from "react";
 import {JobDescription} from "@/components/JobDescription";
 import {OpenApplyButton} from "@/components/OpenApplyButton";
+import {ApplicationHistory} from "@/components/ApplicationHistory";
 import {Shell} from "@/components/Shell";
 import {CopyButton,ErrorMessage,Header,Notice,Score} from "@/components/UI";
 import {api,jobHref} from "@/lib/api";
@@ -32,6 +33,7 @@ export default function JobDetail(){
   const companyBlocked=match.rejection_reasons.some(reason=>/employer|company blacklist|company domain/i.test(reason));
   return <Shell>
     <Header eyebrow={match.rejected?"Rejected at import":job.discovered_at?"Discovered job":"Job evaluation"} title={job.title} description={`${job.company} · ${job.location||"Location unstated"} · ${job.remote_type||"Arrangement unstated"}`} action={<div className="flex gap-2">{!match.rejected&&!job.closed_at&&job.apply_url&&<OpenApplyButton jobId={job.id} className="btn-secondary"/>}<Link href="/jobs" className="btn-secondary">All jobs</Link></div>}/>
+    <ApplicationHistory history={job.application_history}/>
     {job.closed_at&&<section className="mb-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700"><strong>This posting has closed</strong> ({new Date(job.closed_at).toLocaleDateString()}): {job.closed_reason||"it is no longer available"}. It stays here for your records, but it can no longer be applied to.</section>}
     <Notice message={notice}/>
     {!job.closed_at&&(data.reported

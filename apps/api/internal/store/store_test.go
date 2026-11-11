@@ -40,7 +40,7 @@ func (f *fakeRow) Scan(dest ...any) error {
 	return nil
 }
 
-// jobMatchRow builds the 37 values scanJobMatch reads, in column order.
+// jobMatchRow builds the 38 values scanJobMatch reads, in column order.
 func jobMatchRow(applyURL string, rejected bool) *fakeRow {
 	empty := []byte(`[]`)
 	return &fakeRow{values: []any{
@@ -49,7 +49,7 @@ func jobMatchRow(applyURL string, rejected bool) *fakeRow {
 		"Long description.", applyURL, (*time.Time)(nil), time.Now(),
 		"", "", (*time.Time)(nil), "", "", "Remotive feed", "remotive",
 		"match-1", rejected, 82, empty, empty, empty, empty, empty, empty, []byte(`{}`),
-		"fresh-systems-backend", (*time.Time)(nil), "", "https://job-boards.greenhouse.io/fresh/jobs/1",
+		"fresh-systems-backend", (*time.Time)(nil), "", "https://job-boards.greenhouse.io/fresh/jobs/1", []byte(nil),
 	}}
 }
 
@@ -77,7 +77,7 @@ func TestScanJobMatchWithholdsApplyURLForRejectedMatches(t *testing.T) {
 	}
 }
 
-// applicationRow builds the 26 values scanApplication reads, in column order:
+// applicationRow builds the 27 values scanApplication reads, in column order:
 // the joined rejected flag, the employer URL, then when and why the job closed.
 func applicationRow(applyURL string, rejected bool) *fakeRow {
 	return &fakeRow{values: []any{
@@ -85,7 +85,7 @@ func applicationRow(applyURL string, rejected bool) *fakeRow {
 		"job-1", "Senior Backend Engineer", "Fresh Systems GmbH", "fresh systems", "fresh.example",
 		"Bucharest", "remote", 95000.0, 110000.0, "EUR", "full-time", "Software",
 		"Long description.", applyURL, (*time.Time)(nil), time.Now(), rejected,
-		"https://job-boards.greenhouse.io/fresh/jobs/1", (*time.Time)(nil), "",
+		"https://job-boards.greenhouse.io/fresh/jobs/1", (*time.Time)(nil), "", []byte(nil),
 	}}
 }
 

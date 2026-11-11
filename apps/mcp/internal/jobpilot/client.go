@@ -61,6 +61,8 @@ const scopesContract = 6
 // An older API silently ignores the opt-in filter rules.
 const filterGatesContract = 12
 
+const historyPolicyContract = 15
+
 // contractUnknown means no health check has succeeded yet. Unknown counts as
 // compatible: an API that is unreachable at startup must not disable tools
 // that will work once it is up.
@@ -455,9 +457,17 @@ func (c *Client) Filters(ctx context.Context) ([]FilterPreset, error) {
 	return out, c.get(ctx, "/api/filters", &out)
 }
 
+// Omitted history rules must remain omitted on the wire.
+type filterSave struct {
+	FilterPreset
+	HistoryMode     *string `json:"history_mode,omitempty"`
+	HistoryLookback *string `json:"history_lookback,omitempty"`
+	HistorySince    *string `json:"history_since,omitempty"`
+}
+
 // SaveFilter creates a preset when it has no id and replaces the stored one
 // otherwise. The API re-scores every job before it answers.
-func (c *Client) SaveFilter(ctx context.Context, in FilterPreset) (FilterPreset, error) {
+func (c *Client) SaveFilter(ctx context.Context, in filterSave) (FilterPreset, error) {
 	var out FilterPreset
 	if in.ID == "" {
 		return out, c.do(ctx, http.MethodPost, "/api/filters", in, &out, rescoreTimeout)

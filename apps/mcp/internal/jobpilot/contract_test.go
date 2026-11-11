@@ -109,3 +109,23 @@ func TestFilterGatesContract(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryPolicyContract(t *testing.T) {
+	for _, version := range []int{0, 14, 15} {
+		for field, value := range map[string]string{"history_mode": "warn", "history_lookback": "all", "history_since": ""} {
+			t.Run(fmt.Sprintf("%d/%s", version, field), func(t *testing.T) {
+				cs, fake := sessionUnchecked(t, false)
+				fake.apiContract = version
+				fake.noContract = version == 0
+				res, message := call(t, cs, "set_filters", map[string]any{"name": "History", field: value})
+				if res.IsError != (version < historyPolicyContract) {
+					t.Fatal(message)
+				}
+				paths, _ := fake.savedFilters()
+				if version < historyPolicyContract && (len(paths) > 0 || !strings.Contains(message, "update the API to contract 15") || !strings.Contains(message, field)) {
+					t.Fatal(message, paths)
+				}
+			})
+		}
+	}
+}

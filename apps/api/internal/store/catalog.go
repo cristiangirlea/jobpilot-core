@@ -13,6 +13,7 @@ import (
 // account can neither see another's imports nor plant a posting in their
 // inbox. discovered_at, unlike source_id, survives deleting the source.
 func (s *Store) UnscoredJobs(ctx context.Context, u string, limit int) ([]models.Job, error) {
+	// Only match existence matters here, not effective rejection.
 	rows, err := s.DB.Query(ctx, `SELECT j.id,j.title,j.company,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at
 		FROM jobs j WHERE j.closed_at IS NULL AND j.discovered_at IS NOT NULL
 		AND NOT EXISTS(SELECT 1 FROM job_matches m WHERE m.job_id=j.id AND m.user_id=$1)
@@ -63,7 +64,7 @@ func (s *Store) CatalogSummary(ctx context.Context, u string) (models.CatalogSum
 	if err != nil {
 		return x, err
 	}
-	err = s.DB.QueryRow(ctx, `SELECT count(*) FROM job_matches m JOIN jobs j ON j.id=m.job_id
+	err = s.DB.QueryRow(ctx, `SELECT count(*) FROM effective_job_matches m JOIN jobs j ON j.id=m.job_id
 		WHERE m.user_id=$1 AND m.rejected=false AND j.closed_at IS NULL
 		AND NOT EXISTS(SELECT 1 FROM job_reports r WHERE r.job_id=j.id AND r.user_id=$1)`, u).Scan(&x.OpenMatches)
 	return x, err

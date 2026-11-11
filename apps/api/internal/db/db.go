@@ -9,9 +9,14 @@ import (
 
 func Open(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	var pool *pgxpool.Pool
-	var err error
+	cfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, fmt.Errorf("parse database config: %w", err)
+	}
+	// The planner prices per-job history high enough to start JIT, which costs more than the query.
+	cfg.ConnConfig.RuntimeParams["jit"] = "off"
 	for i := 0; i < 20; i++ {
-		pool, err = pgxpool.New(ctx, url)
+		pool, err = pgxpool.NewWithConfig(ctx, cfg)
 		if err == nil {
 			err = pool.Ping(ctx)
 		}

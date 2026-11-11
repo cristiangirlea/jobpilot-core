@@ -84,6 +84,9 @@ type BlacklistEntry struct {
 }
 
 type FilterPreset struct {
+	HistoryMode          string   `json:"history_mode"`
+	HistoryLookback      string   `json:"history_lookback"`
+	HistorySince         string   `json:"history_since"`
 	ID                   string   `json:"id,omitempty"`
 	Name                 string   `json:"name"`
 	Active               bool     `json:"active"`
@@ -120,8 +123,44 @@ type JobInput struct {
 	PostedAt       *time.Time `json:"posted_at,omitempty"`
 }
 
+type ApplicationHistory struct {
+	Mode     string         `json:"mode"`
+	Lookback string         `json:"lookback"`
+	Cutoff   string         `json:"cutoff,omitempty"`
+	Blocked  bool           `json:"blocked"`
+	Entries  []HistoryEntry `json:"entries"`
+}
+
+type HistoryEntry struct {
+	ID           string     `json:"id"`
+	JobID        string     `json:"job_id,omitempty"`
+	Employer     string     `json:"employer"`
+	Title        string     `json:"title"`
+	Requisition  string     `json:"requisition"`
+	CanonicalURL string     `json:"canonical_url,omitempty"`
+	AppliedAt    string     `json:"applied_at"`
+	OutcomeAt    string     `json:"outcome_at"`
+	Status       string     `json:"status"`
+	Source       string     `json:"source"`
+	EvidenceKind string     `json:"evidence_kind"`
+	EvidenceRef  string     `json:"evidence_ref"`
+	Relation     string     `json:"relation"`
+	TitleChanged bool       `json:"title_changed"`
+	InWindow     bool       `json:"in_window"`
+	DateUnknown  bool       `json:"date_unknown"`
+	CV           *HistoryCV `json:"cv,omitempty"`
+	CVLabel      string     `json:"cv_label,omitempty"`
+}
+
+type HistoryCV struct {
+	DocumentID string `json:"document_id,omitempty"`
+	Filename   string `json:"filename,omitempty"`
+	VersionAt  string `json:"version_at,omitempty"`
+}
+
 type Job struct {
-	ID string `json:"id"`
+	ApplicationHistory *ApplicationHistory `json:"application_history,omitempty"`
+	ID                 string              `json:"id"`
 	JobInput
 	CompanyNormalized  string     `json:"company_normalized"`
 	CreatedAt          time.Time  `json:"created_at"`
