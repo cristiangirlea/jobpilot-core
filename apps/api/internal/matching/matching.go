@@ -58,22 +58,40 @@ func appendWord(out []string, word string) []string {
 }
 
 func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter *models.FilterPreset, job models.JobInput, now time.Time) models.Evaluation {
+	return EvaluateWith(profile, blacklist, filter, job, nil, now)
+}
+
+func EvaluateWith(profile models.Profile, blacklist []models.BlacklistEntry, filter *models.FilterPreset, job models.JobInput, extraction *models.Extraction, now time.Time) models.Evaluation {
 	e := models.Evaluation{Breakdown: map[string]int{}, RejectionReasons: []string{}, Warnings: []string{}, Reasons: []string{}, MatchedSkills: []string{}, MissingSkills: []string{}, RedFlags: []string{}}
 	checkCompany(&e, profile, blacklist, job)
 	if filter != nil {
 		applyHardFilters(&e, *filter, job, now)
 	}
 	checkPostingGates(&e, profile, filter, job)
+	if extraction != nil {
+		addExtractedWarnings(&e, profile, *extraction)
+	}
 
 	title := scoreTitle(profile.DesiredTitles, job.Title)
 	e.Breakdown["title_match"] = title
-	skill, matched, missing := scoreSkills(profile.Skills, requiredSkills(filter), job.Title, job.Description)
+	extractedSkills := extraction != nil && (len(extraction.Required) > 0 || len(extraction.NiceToHave) > 0)
+	var skill int
+	var matched, missing []string
+	if extractedSkills {
+		skill, matched, missing = scoreExtractedSkills(profile.Skills, *extraction)
+	} else {
+		skill, matched, missing = scoreSkills(profile.Skills, requiredSkills(filter), job.Title, job.Description)
+	}
 	e.Breakdown["skill_match"], e.MatchedSkills, e.MissingSkills = skill, matched, missing
 	wantedSeniorities := profile.Seniorities
 	if len(wantedSeniorities) == 0 && profile.Seniority != "" {
 		wantedSeniorities = []string{profile.Seniority}
 	}
-	e.Breakdown["seniority_match"] = scoreSeniority(wantedSeniorities, job.Title+" "+job.Description)
+	if extraction != nil {
+		e.Breakdown["seniority_match"] = scoreExtractedSeniority(wantedSeniorities, extraction.Seniority.Level)
+	} else {
+		e.Breakdown["seniority_match"] = scoreSeniority(wantedSeniorities, job.Title+" "+job.Description)
+	}
 	e.Breakdown["location_remote_match"] = scoreLocation(profile, job)
 	e.Breakdown["salary_match"] = scoreSalary(profile, job)
 	e.Breakdown["domain_industry_match"] = scoreIndustry(profile, job)
@@ -100,9 +118,12 @@ func Evaluate(profile models.Profile, blacklist []models.BlacklistEntry, filter 
 		e.Reasons = append(e.Reasons, "The role has limited explicit overlap with the profile.")
 	}
 	if len(e.MissingSkills) > 0 {
-		// Missing skills are whatever the job mentions that the profile lacks,
-		// which a job may only mention in passing, so this says no more.
-		e.RedFlags = append(e.RedFlags, "The job mentions skills your profile does not list: "+strings.Join(e.MissingSkills, ", "))
+		// The rules can pick up skills mentioned in passing.
+		prefix := "The job mentions skills your profile does not list: "
+		if extractedSkills {
+			prefix = "The job requires skills your profile does not list: "
+		}
+		e.RedFlags = append(e.RedFlags, prefix+strings.Join(e.MissingSkills, ", "))
 	}
 	if job.SalaryMin == 0 && job.SalaryMax == 0 {
 		e.RedFlags = append(e.RedFlags, "No salary or rate was provided.")
@@ -322,6 +343,10 @@ func scoreSeniority(wants []string, text string) int {
 			ok = true
 		}
 	}
+	return seniorityPoints(wants, found, ok)
+}
+
+func seniorityPoints(wants []string, found int, ok bool) int {
 	if !ok || len(wants) == 0 {
 		return 10
 	}
