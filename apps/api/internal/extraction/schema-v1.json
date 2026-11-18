@@ -1,0 +1,160 @@
+{
+  "type": "object",
+  "properties": {
+    "required": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "skills",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "nice_to_have": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "skills",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "stack": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "skills",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "seniority": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "intern",
+            "junior",
+            "mid",
+            "senior",
+            "lead",
+            "staff",
+            "principal",
+            "manager",
+            "director",
+            "unspecified"
+          ]
+        },
+        "quote": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "level",
+        "quote"
+      ],
+      "additionalProperties": false
+    },
+    "min_years": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "constraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "citizenship",
+              "work_authorization",
+              "clearance",
+              "language",
+              "location",
+              "timezone",
+              "travel",
+              "degree",
+              "certification",
+              "contract",
+              "other"
+            ]
+          },
+          "value": {
+            "type": "string"
+          },
+          "hard": {
+            "type": "boolean"
+          },
+          "quote": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "value",
+          "hard",
+          "quote"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "required",
+    "nice_to_have",
+    "stack",
+    "seniority",
+    "min_years",
+    "constraints"
+  ],
+  "additionalProperties": false
+}
