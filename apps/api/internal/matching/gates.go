@@ -332,14 +332,15 @@ func checkPostingGates(e *models.Evaluation, p models.Profile, f *models.FilterP
 	checkPostingGateReading(e, p, nil, j, seen, true)
 }
 
-func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.FilterPreset, j models.JobInput, seen map[postingWarningKey]bool, fallback bool) {
-	type profileLanguage struct {
-		listed bool
-		level  int
-	}
+type profileLanguage struct {
+	listed bool
+	level  int
+}
+
+func profileLanguages(languages []string) (map[*languagePattern]profileLanguage, bool) {
 	listed := map[*languagePattern]profileLanguage{}
 	allRecognised := true
-	for _, entry := range p.Languages {
+	for _, entry := range languages {
 		hits := findLanguages(entry, false)
 		allRecognised = allRecognised && len(hits) > 0
 		for _, hit := range hits {
@@ -347,6 +348,11 @@ func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.F
 			listed[hit.pattern] = profileLanguage{true, max(previous.level, languageLevel(languageContext(entry, hit.start, hit.end)))}
 		}
 	}
+	return listed, allRecognised
+}
+
+func checkPostingGateReading(e *models.Evaluation, p models.Profile, f *models.FilterPreset, j models.JobInput, seen map[postingWarningKey]bool, fallback bool) {
+	listed, allRecognised := profileLanguages(p.Languages)
 	for textIndex, text := range []string{j.Title, j.Description} {
 		warningKey := func(kind string, start, end int) postingWarningKey {
 			// Broad and strict eligibility patterns may span different words,
