@@ -22,8 +22,8 @@ const (
 	MaxValueRunes  = 300
 )
 
-// Error says why an answer was refused. Reason is a stable code and Where the
-// place in the answer; neither ever holds posting or answer text.
+// Error says why an item was dropped or an answer refused. Reason is a stable
+// code and Where the place in the answer; neither ever holds posting or answer text.
 type Error struct{ Reason, Where string }
 
 func (e *Error) Error() string {
@@ -34,51 +34,58 @@ func (e *Error) Error() string {
 	return message
 }
 
-// Verify checks an answer's shape and verifies its evidence against the posting.
+// Verify drops items with invalid evidence and refuses answers with invalid shape.
 func Verify(title, description string, raw []byte) (models.Extraction, error) {
+	result, dropped, err := verify(title, description, raw)
+	result.Dropped = len(dropped)
+	return result, err
+}
+
+func verify(title, description string, raw []byte) (models.Extraction, []*Error, error) {
 	var zero models.Extraction
 	if len(raw) > MaxAnswerBytes {
-		return zero, &Error{"too_large", "answer"}
+		return zero, nil, &Error{"too_large", "answer"}
 	}
 	if !utf8.Valid(raw) {
-		return zero, &Error{"not_json", "answer"}
+		return zero, nil, &Error{"not_json", "answer"}
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	var answer map[string]json.RawMessage
 	if err := decoder.Decode(&answer); err != nil || answer == nil {
-		return zero, &Error{"not_json", "answer"}
+		return zero, nil, &Error{"not_json", "answer"}
 	}
 	if len(bytes.Trim(raw[decoder.InputOffset():], " \t\r\n")) != 0 {
-		return zero, &Error{"trailing_data", "answer"}
+		return zero, nil, &Error{"trailing_data", "answer"}
 	}
 	if err := checkFields(answer, "answer", "required", "nice_to_have", "stack", "seniority", "min_years", "constraints"); err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 
 	posting := Text(title, description)
-	required, err := verifySkills(answer["required"], posting, "required")
+	var dropped []*Error
+	required, err := verifySkills(answer["required"], posting, "required", &dropped)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
-	niceToHave, err := verifySkills(answer["nice_to_have"], posting, "nice_to_have")
+	niceToHave, err := verifySkills(answer["nice_to_have"], posting, "nice_to_have", &dropped)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
-	stack, err := verifySkills(answer["stack"], posting, "stack")
+	stack, err := verifySkills(answer["stack"], posting, "stack", &dropped)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
-	seniority, err := verifySeniority(answer["seniority"], posting)
+	seniority, err := verifySeniority(answer["seniority"], posting, &dropped)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 	minYears, err := verifyYears(answer["min_years"], posting)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
-	constraints, err := verifyConstraints(answer["constraints"], posting)
+	constraints, err := verifyConstraints(answer["constraints"], posting, &dropped)
 	if err != nil {
-		return zero, err
+		return zero, nil, err
 	}
 	return models.Extraction{
 		Required:    required,
@@ -87,7 +94,7 @@ func Verify(title, description string, raw []byte) (models.Extraction, error) {
 		Seniority:   seniority,
 		MinYears:    minYears,
 		Constraints: constraints,
-	}, nil
+	}, dropped, nil
 }
 
 func checkFields(object map[string]json.RawMessage, where string, fields ...string) *Error {
@@ -134,12 +141,12 @@ func readList(raw json.RawMessage, where string, limit int) ([]json.RawMessage, 
 	return items, nil
 }
 
-func verifySkills(raw json.RawMessage, posting, name string) ([]models.ExtractedSkills, *Error) {
+func verifySkills(raw json.RawMessage, posting, name string, dropped *[]*Error) ([]models.ExtractedSkills, *Error) {
 	items, err := readList(raw, name, MaxEntries)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]models.ExtractedSkills, len(items))
+	result := make([]models.ExtractedSkills, 0, len(items))
 	for i, item := range items {
 		where := fmt.Sprintf("%s[%d]", name, i)
 		object, err := readObject(item, where, "skills", "quote")
@@ -147,7 +154,7 @@ func verifySkills(raw json.RawMessage, posting, name string) ([]models.Extracted
 			return nil, err
 		}
 		var skills []json.RawMessage
-		entry := &result[i]
+		var entry models.ExtractedSkills
 		if !decodeNonNull(object["skills"], &skills) || !decodeNonNull(object["quote"], &entry.Quote) {
 			return nil, &Error{"wrong_type", where}
 		}
@@ -157,8 +164,9 @@ func verifySkills(raw json.RawMessage, posting, name string) ([]models.Extracted
 				return nil, &Error{"wrong_type", where}
 			}
 		}
-		if err := verifyQuote(entry.Quote, posting, where); err != nil {
-			return nil, err
+		evidence := verifyQuote(entry.Quote, posting, where)
+		if evidence != nil && evidence.Reason == "too_long" {
+			return nil, evidence
 		}
 		if len(skills) == 0 {
 			return nil, &Error{"no_skills", where}
@@ -168,29 +176,39 @@ func verifySkills(raw json.RawMessage, posting, name string) ([]models.Extracted
 		}
 		quoteLower := strings.ToLower(entry.Quote)
 		for j, skill := range entry.Skills {
+			// Later skills can still invalidate the answer's shape.
+			if utf8.RuneCountInString(skill) > MaxSkillRunes {
+				return nil, &Error{"too_long", fmt.Sprintf("%s.skills[%d]", where, j)}
+			}
+			if evidence != nil {
+				continue
+			}
 			var reason string
 			switch {
 			case strings.TrimSpace(skill) == "":
 				reason = "empty_skill"
-			case utf8.RuneCountInString(skill) > MaxSkillRunes:
-				reason = "too_long"
 			case !strings.Contains(quoteLower, strings.ToLower(skill)):
 				reason = "skill_not_in_quote"
 			}
 			if reason != "" {
-				return nil, &Error{reason, fmt.Sprintf("%s.skills[%d]", where, j)}
+				evidence = &Error{reason, fmt.Sprintf("%s.skills[%d]", where, j)}
 			}
 		}
+		if evidence != nil {
+			*dropped = append(*dropped, evidence)
+			continue
+		}
+		result = append(result, entry)
 	}
 	return result, nil
 }
 
 func verifyQuote(quote, posting, where string) *Error {
 	switch {
-	case strings.TrimSpace(quote) == "":
-		return &Error{"empty_quote", where}
 	case utf8.RuneCountInString(quote) > MaxQuoteRunes:
 		return &Error{"too_long", where}
+	case strings.TrimSpace(quote) == "":
+		return &Error{"empty_quote", where}
 	case strings.ContainsAny(quote, "\n\r"):
 		return &Error{"quote_spans_lines", where}
 	case !strings.Contains(posting, quote):
@@ -199,7 +217,7 @@ func verifyQuote(quote, posting, where string) *Error {
 	return nil
 }
 
-func verifySeniority(raw json.RawMessage, posting string) (models.ExtractedSeniority, *Error) {
+func verifySeniority(raw json.RawMessage, posting string, dropped *[]*Error) (models.ExtractedSeniority, *Error) {
 	const where = "seniority"
 	var result models.ExtractedSeniority
 	object, err := readObject(raw, where, "level", "quote")
@@ -212,11 +230,19 @@ func verifySeniority(raw json.RawMessage, posting string) (models.ExtractedSenio
 	if !slices.Contains(levels, result.Level) {
 		return result, &Error{"unknown_level", where}
 	}
-	if (result.Level == "unspecified") != (result.Quote == nil) {
-		return result, &Error{"seniority_quote", where}
-	}
+	var evidence *Error
 	if result.Quote != nil {
-		return result, verifyQuote(*result.Quote, posting, where)
+		evidence = verifyQuote(*result.Quote, posting, where)
+		if evidence != nil && evidence.Reason == "too_long" {
+			return result, evidence
+		}
+	}
+	if (result.Level == "unspecified") != (result.Quote == nil) {
+		evidence = &Error{"seniority_quote", where}
+	}
+	if evidence != nil {
+		*dropped = append(*dropped, evidence)
+		return models.ExtractedSeniority{Level: "unspecified"}, nil
 	}
 	return result, nil
 }
@@ -259,20 +285,20 @@ func isASCIIDigit(b byte) bool {
 	return b >= '0' && b <= '9'
 }
 
-func verifyConstraints(raw json.RawMessage, posting string) ([]models.ExtractedConstraint, *Error) {
+func verifyConstraints(raw json.RawMessage, posting string, dropped *[]*Error) ([]models.ExtractedConstraint, *Error) {
 	const name = "constraints"
 	items, err := readList(raw, name, MaxConstraints)
 	if err != nil {
 		return nil, err
 	}
-	result := make([]models.ExtractedConstraint, len(items))
+	result := make([]models.ExtractedConstraint, 0, len(items))
 	for i, item := range items {
 		where := fmt.Sprintf("%s[%d]", name, i)
 		object, err := readObject(item, where, "kind", "value", "hard", "quote")
 		if err != nil {
 			return nil, err
 		}
-		entry := &result[i]
+		var entry models.ExtractedConstraint
 		if !decodeNonNull(object["kind"], &entry.Kind) ||
 			!decodeNonNull(object["value"], &entry.Value) ||
 			!decodeNonNull(object["hard"], &entry.Hard) ||
@@ -282,14 +308,21 @@ func verifyConstraints(raw json.RawMessage, posting string) ([]models.ExtractedC
 		switch {
 		case !slices.Contains(kinds, entry.Kind):
 			return nil, &Error{"unknown_kind", where}
-		case strings.TrimSpace(entry.Value) == "":
-			return nil, &Error{"no_value", where}
 		case utf8.RuneCountInString(entry.Value) > MaxValueRunes:
 			return nil, &Error{"too_long", where}
 		}
-		if err := verifyQuote(entry.Quote, posting, where); err != nil {
-			return nil, err
+		evidence := verifyQuote(entry.Quote, posting, where)
+		if evidence != nil && evidence.Reason == "too_long" {
+			return nil, evidence
 		}
+		if strings.TrimSpace(entry.Value) == "" {
+			evidence = &Error{"no_value", where}
+		}
+		if evidence != nil {
+			*dropped = append(*dropped, evidence)
+			continue
+		}
+		result = append(result, entry)
 	}
 	return result, nil
 }
