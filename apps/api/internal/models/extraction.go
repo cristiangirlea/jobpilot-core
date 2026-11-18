@@ -9,6 +9,9 @@ type Extraction struct {
 	Seniority   ExtractedSeniority    `json:"seniority"`
 	MinYears    *int                  `json:"min_years"`
 	Constraints []ExtractedConstraint `json:"constraints"`
+
+	// Dropped counts the items left out because their evidence failed.
+	Dropped int `json:"dropped"`
 }
 
 // ExtractedSkills is one entry: any one of Skills meets it, and Quote is the
