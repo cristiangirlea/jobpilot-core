@@ -53,6 +53,8 @@ var adminOnly = map[string]string{
 	"POST /api/discovery/recommended":    "aw",
 	"GET /api/discovery/suggestions":     "ap",
 	"POST /api/discovery/detect":         "ap",
+	"GET /api/extractions/pending":       "ap",
+	"POST /api/extractions":              "aw",
 }
 
 var routePattern = regexp.MustCompile(`m\.Handle\("([^"]+)",\s*(\w+)\(`)

@@ -58,6 +58,7 @@ services:
       # subscription-billed CLI use, run the API natively instead of in Compose.
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
       LLM_MODEL: ${LLM_MODEL:-}
+      EXTRACTION_MODEL: ${EXTRACTION_MODEL:-}
       LLM_CLI_COMMAND: ${LLM_CLI_COMMAND:-}
       LLM_CLI_ARGS: ${LLM_CLI_ARGS:-}
       LLM_OLLAMA_URL: ${LLM_OLLAMA_URL:-http://host.docker.internal:11434}

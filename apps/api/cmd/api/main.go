@@ -106,7 +106,7 @@ func main() {
 		slog.Error("invalid Google sign-in configuration", "error", err)
 		os.Exit(1)
 	}
-	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, Mailer: mails, UserAgentTokens: cfg.UserAgentTokens}
+	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, Mailer: mails, UserAgentTokens: cfg.UserAgentTokens, ExtractionModel: cfg.ExtractionModel}
 	// Scheduled discovery runs only for admins (#128): it is theirs to automate.
 	discoveryService.MayDiscover = api.IsAdmin
 	go discoveryService.Start(ctx)

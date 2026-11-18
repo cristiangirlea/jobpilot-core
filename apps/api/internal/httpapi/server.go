@@ -98,6 +98,10 @@ type Server struct {
 	Secret      string
 	TokenTTL    time.Duration
 	FrontendURL string
+	// ExtractionModel is empty when posting extraction is off.
+	ExtractionModel string
+	// pendingJobs replaces the store's pending list in tests.
+	pendingJobs func(ctx context.Context, model, promptVersion string, limit int) ([]models.PendingExtraction, error)
 	// Google is nil unless sign-in with Google is configured. GoogleSignup
 	// lets it create an account for someone who has none.
 	Google       *auth.OIDC
@@ -260,6 +264,8 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("POST /api/discovery/recommended", aw(s.requireVerified(s.runRecommendedDiscovery)))
 	m.Handle("GET /api/discovery/suggestions", ap(s.boardSuggestions))
 	m.Handle("POST /api/discovery/detect", ap(s.detectBoard))
+	m.Handle("GET /api/extractions/pending", ap(s.pendingExtractions))
+	m.Handle("POST /api/extractions", aw(s.saveExtraction))
 	m.Handle("POST /api/jobs/{id}/outbound", w(s.outbound))
 	m.Handle("GET /api/tokens", session(s.listTokens))
 	m.Handle("POST /api/tokens", session(s.requireVerified(s.createToken)))
