@@ -2,9 +2,12 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/extraction"
 	"jobpilot/core/api/internal/models"
 )
@@ -43,5 +46,33 @@ func TestPendingExtractionsAsksForTheConfiguredModel(t *testing.T) {
 	s.ExtractionModel = ""
 	if body := get(""); len(calls) != 2 || body != `{"model":"","prompt_version":"`+extraction.PromptVersion+`","jobs":[]}`+"\n" {
 		t.Fatalf("with extraction off the store was asked %d times and the body was %s", len(calls), body)
+	}
+}
+
+func TestExtractionSummaryUsesSignedInAccount(t *testing.T) {
+	const userID = "example-account"
+	const secret = "extraction-summary-test-secret"
+	token, err := auth.Token(userID, "admin@example.test", secret, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ setting, want string }{{"", "off"}, {"shadow", "shadow"}} {
+		t.Run(tc.want, func(t *testing.T) {
+			s := &Server{Secret: secret, ExtractionModel: "example-model", ExtractionScoring: tc.setting}
+			calls := 0
+			s.extractionCounts = func(_ context.Context, user, model, prompt string) (models.ExtractionSummary, error) {
+				calls++
+				if user != userID || model != s.ExtractionModel || prompt != extraction.PromptVersion {
+					t.Fatalf("summary requested for %q, %q, %q", user, model, prompt)
+				}
+				return models.ExtractionSummary{Model: model, PromptVersion: prompt, MinScore: 75}, nil
+			}
+			w := call(t, s.Handler(), "GET", "/api/extractions/summary", token, "")
+			var out models.ExtractionSummary
+			if w.Code != 200 || json.Unmarshal(w.Body.Bytes(), &out) != nil || out.Scoring != tc.want ||
+				out.Model != s.ExtractionModel || out.PromptVersion != extraction.PromptVersion || out.MinScore != 75 || calls != 1 {
+				t.Fatalf("response = %d %s, seam called %d times", w.Code, w.Body, calls)
+			}
+		})
 	}
 }

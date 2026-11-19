@@ -19,7 +19,7 @@ type config struct {
 	apiURL, modelURL, token string
 	concurrency, max        int
 	timeout                 time.Duration
-	dryRun                  bool
+	dryRun, summary         bool
 }
 
 func main() {
@@ -36,7 +36,11 @@ func realMain(ctx context.Context, args []string, getenv func(string) string, st
 		return 0
 	}
 	if err == nil {
-		_, err = run(ctx, cfg, stdout)
+		if cfg.summary {
+			err = runSummary(ctx, cfg, stdout)
+		} else {
+			_, err = run(ctx, cfg, stdout)
+		}
 	}
 	if err != nil {
 		if !errors.Is(err, errStopped) {
@@ -57,6 +61,7 @@ func settings(args []string, getenv func(string) string, help io.Writer) (config
 	flags.DurationVar(&cfg.timeout, "timeout", 2*time.Minute, "Model request timeout (10s to 15m)")
 	flags.IntVar(&cfg.max, "max", 0, "Maximum postings to ask (0 for no limit)")
 	flags.BoolVar(&cfg.dryRun, "dry-run", false, "Ask the model without posting answers")
+	flags.BoolVar(&cfg.summary, "summary", false, "Print extraction and shadow scoring counts")
 	if err := flags.Parse(args); errors.Is(err, flag.ErrHelp) {
 		flags.SetOutput(help)
 		fmt.Fprintln(help, "Usage: extract [flags]")
@@ -64,6 +69,9 @@ func settings(args []string, getenv func(string) string, help io.Writer) (config
 		return cfg, err
 	} else if err != nil || flags.NArg() != 0 {
 		return cfg, errors.New("invalid arguments (see --help)")
+	}
+	if cfg.summary && (cfg.dryRun || cfg.max > 0) {
+		return cfg, errors.New("summary cannot be combined with dry-run or a positive max")
 	}
 	if cfg.concurrency < 1 || cfg.concurrency > 8 {
 		return cfg, errors.New("concurrency must be between 1 and 8")

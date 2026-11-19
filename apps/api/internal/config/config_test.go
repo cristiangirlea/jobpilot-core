@@ -133,6 +133,41 @@ func TestExtractionModel(t *testing.T) {
 	}
 }
 
+func TestExtractionScoring(t *testing.T) {
+	t.Setenv("REGISTRATION", "")
+	t.Setenv("USER_AGENT_TOKENS", "")
+	t.Setenv("EXTRACTION_MODEL", "")
+	for _, tc := range []struct {
+		name, value, want string
+		valid             bool
+	}{
+		{"empty", "", "", true},
+		{"blank", " \t", "", true},
+		{"off", "off", "", true},
+		{"trimmed off", " off ", "", true},
+		{"shadow", "shadow", "shadow", true},
+		{"trimmed shadow", " shadow\t", "shadow", true},
+		{"on", "on", "on", false},
+		{"unknown", "SHADOW", "SHADOW", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("EXTRACTION_SCORING", tc.value)
+			cfg := loadConfig(t)
+			if cfg.ExtractionScoring != tc.want {
+				t.Fatalf("ExtractionScoring = %q, want %q", cfg.ExtractionScoring, tc.want)
+			}
+			err := cfg.Validate()
+			if tc.valid {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || err.Error() != "EXTRACTION_SCORING must be off or shadow" {
+				t.Fatalf("Validate() = %v, want the extraction scoring error", err)
+			}
+		})
+	}
+}
+
 // Sign-up is invite-only unless the environment says otherwise, and a mode
 // the API does not know stops it at startup rather than opening sign-up.
 func TestRegistrationDefaultsToInviteAndRefusesUnknownModes(t *testing.T) {

@@ -25,6 +25,10 @@ type Service struct {
 	Store   *store.Store
 	Fetcher *Fetcher
 	Links   *LinkChecker
+	// ExtractionModel names whose answers count as current; empty means none.
+	ExtractionModel string
+	// ShadowScoring stores an evaluation with the current extraction beside the rules' match.
+	ShadowScoring bool
 	// VerifiedOnly skips scheduled runs for accounts whose email is not
 	// verified; it is set while the API sends email.
 	VerifiedOnly bool
@@ -269,8 +273,8 @@ func (s *Service) RunUser(ctx context.Context, userID string) (models.DiscoveryR
 				job.Description = candidate.Input.Description
 			}
 		}
-		evaluation := matching.Evaluate(profile, blacklist, filter, job.JobInput, time.Now())
-		if _, err = s.Store.SaveJobMatch(ctx, userID, job.ID, evaluation, filterID); err != nil {
+		evaluation, err := s.saveRunMatch(ctx, userID, filterID, profile, blacklist, filter, job, duplicate)
+		if err != nil {
 			return s.finish(ctx, userID, run, err)
 		}
 		if evaluation.Rejected {
@@ -417,9 +421,21 @@ func (s *Service) ScoreCatalog(ctx context.Context, userID string) (int, error) 
 			return scored, err
 		}
 		now := time.Now()
+		ids := make([]string, 0, len(jobs))
+		for _, job := range jobs {
+			ids = append(ids, job.ID)
+		}
+		answers, err := s.CurrentExtractions(ctx, ids...)
+		if err != nil {
+			return scored, err
+		}
 		evaluations := make([]store.JobEvaluation, 0, len(jobs))
 		for _, job := range jobs {
-			evaluations = append(evaluations, store.JobEvaluation{JobID: job.ID, Evaluation: matching.Evaluate(profile, blacklist, filter, job.JobInput, now)})
+			rules := matching.Evaluate(profile, blacklist, filter, job.JobInput, now)
+			evaluations = append(evaluations, store.JobEvaluation{
+				JobID: job.ID, Evaluation: rules,
+				Shadow: matching.Shadow(profile, blacklist, filter, job.JobInput, rules, answers[job.ID], now),
+			})
 		}
 		// Saving gives each job a match, so the next read moves on.
 		if err := s.Store.SaveJobMatches(ctx, userID, filterID, evaluations); err != nil {

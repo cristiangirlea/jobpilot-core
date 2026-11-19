@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -100,8 +101,12 @@ type Server struct {
 	FrontendURL string
 	// ExtractionModel is empty when posting extraction is off.
 	ExtractionModel string
+	// ExtractionScoring is shadow or empty.
+	ExtractionScoring string
 	// pendingJobs replaces the store's pending list in tests.
 	pendingJobs func(ctx context.Context, model, promptVersion string, limit int) ([]models.PendingExtraction, error)
+	// extractionCounts replaces the store's summary in tests.
+	extractionCounts func(ctx context.Context, userID, model, promptVersion string) (models.ExtractionSummary, error)
 	// Google is nil unless sign-in with Google is configured. GoogleSignup
 	// lets it create an account for someone who has none.
 	Google       *auth.OIDC
@@ -125,6 +130,8 @@ type Server struct {
 
 	limits   *authLimits
 	mailJobs chan mailJob
+	// Tests wait on background work that outlives its request.
+	background sync.WaitGroup
 }
 
 func (s *Server) Handler() http.Handler {
@@ -265,6 +272,7 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/discovery/suggestions", ap(s.boardSuggestions))
 	m.Handle("POST /api/discovery/detect", ap(s.detectBoard))
 	m.Handle("GET /api/extractions/pending", ap(s.pendingExtractions))
+	m.Handle("GET /api/extractions/summary", ap(s.extractionSummary))
 	m.Handle("POST /api/extractions", aw(s.saveExtraction))
 	m.Handle("POST /api/jobs/{id}/outbound", w(s.outbound))
 	m.Handle("GET /api/tokens", session(s.listTokens))
@@ -685,9 +693,21 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 		return err
 	}
 	now := time.Now()
+	ids := make([]string, 0, len(jobs))
+	for _, item := range jobs {
+		ids = append(ids, item.Job.ID)
+	}
+	answers, err := s.Discovery.CurrentExtractions(ctx, ids...)
+	if err != nil {
+		return err
+	}
 	evaluations := make([]store.JobEvaluation, 0, len(jobs))
 	for _, item := range jobs {
-		evaluations = append(evaluations, store.JobEvaluation{JobID: item.Job.ID, Evaluation: matching.Evaluate(profile, blacklist, filter, item.Job.JobInput, now)})
+		rules := matching.Evaluate(profile, blacklist, filter, item.Job.JobInput, now)
+		evaluations = append(evaluations, store.JobEvaluation{
+			JobID: item.Job.ID, Evaluation: rules,
+			Shadow: matching.Shadow(profile, blacklist, filter, item.Job.JobInput, rules, answers[item.Job.ID], now),
+		})
 	}
 	return s.Store.SaveJobMatches(ctx, uid, filterID, evaluations)
 }
@@ -729,13 +749,15 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 		internal(w, e)
 		return
 	}
-	evaluation := matching.Evaluate(p, black, filter, x, time.Now())
+	now := time.Now()
+	evaluation := matching.Evaluate(p, black, filter, x, now)
 	fid := ""
 	if filter != nil {
 		fid = filter.ID
 	}
 	fingerprint := discovery.Fingerprint(x)
 	job, getErr := s.Store.CatalogJobByFingerprint(ctx, fingerprint)
+	found := getErr == nil
 	if errors.Is(getErr, pgx.ErrNoRows) {
 		job, getErr = s.Store.CreateDiscoveredJob(ctx, uid, "", "", "", "", fingerprint, x)
 	}
@@ -743,7 +765,20 @@ func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
 		internal(w, getErr)
 		return
 	}
-	if _, getErr = s.Store.SaveJobMatch(ctx, uid, job.ID, evaluation, fid); getErr != nil {
+	item := store.JobEvaluation{JobID: job.ID, Evaluation: evaluation}
+	getErr = func() error {
+		if found && s.ExtractionScoring == "shadow" {
+			defer s.Discovery.LockMatching(uid)()
+			answers, err := s.Discovery.CurrentExtractions(ctx, job.ID)
+			if err != nil {
+				return err
+			}
+			item.Shadow = matching.Shadow(p, black, filter, x, evaluation, answers[job.ID], now)
+		}
+		_, err := s.Store.SaveJobEvaluation(ctx, uid, fid, item)
+		return err
+	}()
+	if getErr != nil {
 		internal(w, getErr)
 		return
 	}

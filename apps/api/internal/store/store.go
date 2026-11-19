@@ -676,9 +676,10 @@ func (s *Store) NameUnnamedJobs(ctx context.Context) (int, error) {
 }
 
 // Scoring writes the base match; history is applied when it is read.
-const upsertJobMatch = `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT(user_id,job_id) DO UPDATE SET filter_id=EXCLUDED.filter_id,rejected=EXCLUDED.rejected,score=EXCLUDED.score,rejection_reasons=EXCLUDED.rejection_reasons,warnings=EXCLUDED.warnings,reasons=EXCLUDED.reasons,matched_skills=EXCLUDED.matched_skills,missing_skills=EXCLUDED.missing_skills,red_flags=EXCLUDED.red_flags,breakdown=EXCLUDED.breakdown,created_at=now() RETURNING id`
+const upsertJobMatch = `INSERT INTO job_matches(user_id,job_id,filter_id,rejected,score,rejection_reasons,warnings,reasons,matched_skills,missing_skills,red_flags,breakdown,shadow_evaluation) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(user_id,job_id) DO UPDATE SET filter_id=EXCLUDED.filter_id,rejected=EXCLUDED.rejected,score=EXCLUDED.score,rejection_reasons=EXCLUDED.rejection_reasons,warnings=EXCLUDED.warnings,reasons=EXCLUDED.reasons,matched_skills=EXCLUDED.matched_skills,missing_skills=EXCLUDED.missing_skills,red_flags=EXCLUDED.red_flags,breakdown=EXCLUDED.breakdown,shadow_evaluation=EXCLUDED.shadow_evaluation,created_at=now() RETURNING id`
 
-func jobMatchArgs(u, jobID string, e models.Evaluation, filterID string) []any {
+func jobMatchArgs(u, filterID string, item JobEvaluation) []any {
+	e := item.Evaluation
 	rej, _ := json.Marshal(e.RejectionReasons)
 	warn, _ := json.Marshal(e.Warnings)
 	reasons, _ := json.Marshal(e.Reasons)
@@ -690,12 +691,21 @@ func jobMatchArgs(u, jobID string, e models.Evaluation, filterID string) []any {
 	if filterID != "" {
 		fid = filterID
 	}
-	return []any{u, jobID, fid, e.Rejected, e.Score, rej, warn, reasons, matched, missing, red, breakdown}
+	return []any{u, item.JobID, fid, e.Rejected, e.Score, rej, warn, reasons, matched, missing, red, breakdown, shadowValue(item.Shadow)}
 }
 
 func (s *Store) SaveJobMatch(ctx context.Context, u, jobID string, e models.Evaluation, filterID string) (string, error) {
+	return s.SaveJobEvaluation(ctx, u, filterID, JobEvaluation{JobID: jobID, Evaluation: e})
+}
+
+// SaveJobEvaluation stores one match with what its extraction would have scored, or without.
+func (s *Store) SaveJobEvaluation(ctx context.Context, u, filterID string, item JobEvaluation) (string, error) {
+	return saveJobEvaluation(ctx, s.DB, u, filterID, item)
+}
+
+func saveJobEvaluation(ctx context.Context, db extractionDB, u, filterID string, item JobEvaluation) (string, error) {
 	var id string
-	err := s.DB.QueryRow(ctx, upsertJobMatch, jobMatchArgs(u, jobID, e, filterID)...).Scan(&id)
+	err := db.QueryRow(ctx, upsertJobMatch, jobMatchArgs(u, filterID, item)...).Scan(&id)
 	return id, err
 }
 
@@ -703,6 +713,7 @@ func (s *Store) SaveJobMatch(ctx context.Context, u, jobID string, e models.Eval
 type JobEvaluation struct {
 	JobID      string
 	Evaluation models.Evaluation
+	Shadow     *models.ShadowEvaluation
 }
 
 // SaveJobMatches stores many evaluations in one round trip. Re-scoring after a
@@ -716,7 +727,7 @@ func (s *Store) SaveJobMatches(ctx context.Context, u, filterID string, evaluati
 	sort.Slice(evaluations, func(i, j int) bool { return evaluations[i].JobID < evaluations[j].JobID })
 	batch := &pgx.Batch{}
 	for _, item := range evaluations {
-		batch.Queue(upsertJobMatch, jobMatchArgs(u, item.JobID, item.Evaluation, filterID)...)
+		batch.Queue(upsertJobMatch, jobMatchArgs(u, filterID, item)...)
 	}
 	return s.DB.SendBatch(ctx, batch).Close()
 }
@@ -820,7 +831,11 @@ func jobRefColumn(ref string) string {
 
 // Job finds one of the user's jobs by id or by slug.
 func (s *Store) Job(ctx context.Context, u, ref string) (models.JobWithMatch, error) {
-	row := s.DB.QueryRow(ctx, `SELECT j.id,j.title,j.company,j.company_normalized,j.company_domain,j.location,j.remote_type,j.salary_min,j.salary_max,j.currency,j.employment_type,j.industry,j.description,j.apply_url,j.posted_at,j.created_at,COALESCE(j.source_id::text,''),j.external_id,j.discovered_at,j.referral_partner,j.referral_disclosure,j.source_name,j.source_provider,m.id,m.rejected,m.score,m.rejection_reasons,m.warnings,m.reasons,m.matched_skills,m.missing_skills,m.red_flags,m.breakdown,j.slug,j.closed_at,j.closed_reason,j.employer_url,m.application_history FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
+	return jobByRef(ctx, s.DB, u, ref)
+}
+
+func jobByRef(ctx context.Context, db extractionDB, u, ref string) (models.JobWithMatch, error) {
+	row := db.QueryRow(ctx, `SELECT `+jobMatchColumns+` FROM jobs j JOIN effective_job_matches m ON m.job_id=j.id WHERE m.user_id=$1 AND `+jobRefColumn(ref)+`=$2`, u, ref)
 	return scanJobMatch(row)
 }
 
@@ -1025,8 +1040,12 @@ func (s *Store) RecordOutbound(ctx context.Context, u, jobID string) (string, st
 }
 
 func (s *Store) DiscoverySettings(ctx context.Context, u string) (models.DiscoverySettings, error) {
+	return discoverySettings(ctx, s.DB, u)
+}
+
+func discoverySettings(ctx context.Context, db extractionDB, u string) (models.DiscoverySettings, error) {
 	var x models.DiscoverySettings
-	err := s.DB.QueryRow(ctx, `SELECT enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at FROM discovery_settings WHERE user_id=$1`, u).Scan(&x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
+	err := db.QueryRow(ctx, `SELECT enabled,interval_minutes,auto_prepare,min_score,max_jobs_per_run,last_run_at,next_run_at FROM discovery_settings WHERE user_id=$1`, u).Scan(&x.Enabled, &x.IntervalMinutes, &x.AutoPrepare, &x.MinScore, &x.MaxJobsPerRun, &x.LastRunAt, &x.NextRunAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		x = models.DiscoverySettings{Enabled: false, IntervalMinutes: 360, AutoPrepare: true, MinScore: 75, MaxJobsPerRun: 100}
 		err = nil

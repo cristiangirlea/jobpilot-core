@@ -468,6 +468,18 @@ Rejected jobs retain their calculated score for diagnosis and audit, but a high 
 
 The main matching implementation is `apps/api/internal/matching/matching.go`. Company normalization is isolated in `apps/api/internal/company/normalize.go`.
 
+### Shadow scoring
+
+In `shadow` mode, a match stores the extraction's evaluation, the extraction's ID, its text hash and when its answer was stored,
+and the rules' score calculated at the same time because freshness points depend on the day.
+An extraction is used only for the exact text being scored. After the extraction route responds,
+the API refreshes each account's shadow evaluation in the background under its matching lock.
+A failure is logged and the stored answer stands. Discovery runs and manual imports take the same
+lock when scoring a job already in the catalog. A match created while an answer is being stored
+can lack a comparison until the next scoring pass, and the summary counts only shadows made
+from the job's current answer. The background write changes only the shadow column and prepares
+nothing. No trigger reads `job_matches`, so it opens, resolves and changes no notification.
+
 ## Application generation
 
 Generation is deterministic and requires no API key. It produces:
@@ -876,6 +888,7 @@ The routes are restricted to admins when `ADMIN_EMAILS` is set. An admin can run
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/extractions/pending` | List open discovered postings that need an answer for the configured model and prompt version. `limit` defaults to 50 and accepts 1 through 200. |
+| `GET` | `/api/extractions/summary` | Admin only. Counts open jobs with a current extraction, rejected answers by reason, answers whose seniority was dropped, and open jobs by single-line or other descriptions. For the signed-in account, it counts matches by score difference (extraction minus rules) and how many would reach or fall below its minimum score. It returns no posting text or data from another account. |
 | `POST` | `/api/extractions` | Verify and store an answer using `job_id`, `text_hash`, and the model's raw `answer` as a JSON string. Requires write scope and returns 409 if the posting changed. |
 
 #### Run the extraction batch
@@ -899,6 +912,7 @@ go run ./cmd/extract --dry-run
 - `--concurrency` defaults to 4 and accepts 1 through 8. `--timeout` defaults to `2m` and accepts `10s` through `15m` per model request.
 - `--max` caps how many postings the command asks the model about. The default `0` means no cap.
 - `--dry-run` asks the model without posting answers. Postings asked about in a dry run and postings that keep failing can be asked about again on the next run.
+- `--summary` prints only the extraction summary counts. It cannot be combined with `--dry-run` or a positive `--max`.
 - A run reads the newest 200 pending postings at a time, asks each posting once, and ends when a page holds nothing it has not asked yet. It prints counts and timings only, never posting text.
 
 ### AI, answer bank, and CV endpoints
@@ -1150,6 +1164,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `029_profile_repairs.sql` | Retained source-bound profile repair proposals and reversible snapshots |
 | `030_application_history_policy.sql` | The application-history rule on filter presets, the names an imported employer was stated under, and the views that apply the rule when a match is read |
 | `031_job_extractions.sql` | Stores extraction results for discovered postings by model and prompt version. |
+| `032_match_shadow_evaluation.sql` | Adds nullable `job_matches.shadow_evaluation` to store what the job's extraction would have scored. The API never returns the stored evaluation itself. |
 
 Core entities:
 
@@ -1208,6 +1223,7 @@ Set either the value or its file path, never both; files must be non-empty and a
 | `GOOGLE_ALLOW_SIGNUP` | `true` lets a Google account create a JobPilot account when no account has its email and `REGISTRATION=open`; unset, Google signs in only accounts it was linked to under Settings |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
 | `EXTRACTION_MODEL` | Model name for posting extraction. Empty by default, which turns extraction off. |
+| `EXTRACTION_SCORING` | Empty or `off` (the default) stores extractions without reading them for scoring. In `shadow`, each scoring pass also scores the job with its current extraction and stores that evaluation beside the match. Users still see the rules' score, warnings and rejections. The API refuses any other value at startup. |
 | `OUTBOX_SENDER_ENABLED` | `true` sends approved outbox entries through the employer's form ("Sending approved applications"); anything else, the default, leaves them queued. `GET /api/health` reports it as `sending` |
 | `OUTBOX_SEND_DELAY_SECONDS` | How long an approval waits before it is sent, so it can still be removed; defaults to `120` |
 
