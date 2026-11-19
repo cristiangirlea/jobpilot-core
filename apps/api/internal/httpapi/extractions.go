@@ -56,7 +56,7 @@ func (s *Server) pendingExtractions(w http.ResponseWriter, r *http.Request) {
 // saveExtraction verifies a model's answer against the stored posting, never against text the client sends.
 func (s *Server) saveExtraction(w http.ResponseWriter, r *http.Request) {
 	if s.ExtractionModel == "" {
-		problem(w, 409, "Extraction is not configured on this server.")
+		problem(w, 409, extraction.NotConfigured)
 		return
 	}
 	var in struct {
