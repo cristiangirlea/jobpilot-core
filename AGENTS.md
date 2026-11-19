@@ -13,7 +13,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 
 | Path | Holds |
 |---|---|
-| `apps/api` | Go module `jobpilot/core/api`. `cmd/api` (server), `cmd/seed`; `internal/httpapi/server.go` (every route), `store` (SQL, user isolation), `matching`, `discovery`, `generator`, `ats` (employer form readers), `cv`, `answers`, `llm`, `auth` (JWT, `jpat_` agent tokens). |
+| `apps/api` | Go module `jobpilot/core/api`. `cmd/api` (server), `cmd/seed`, `cmd/extract` (the extraction batch for the admin's PC); `internal/httpapi/server.go` (every route), `store` (SQL, user isolation), `matching`, `discovery`, `generator`, `ats` (employer form readers), `cv`, `answers`, `llm`, `auth` (JWT, `jpat_` agent tokens). |
 | `apps/mcp` | Separate Go module `jobpilot/core/mcp`: stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |

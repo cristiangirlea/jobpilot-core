@@ -171,6 +171,7 @@ apps/
   api/
     cmd/api/main.go                    API startup and graceful shutdown
     cmd/seed/main.go                   sample-data seed command
+    cmd/extract/                       extraction batch for the admin's PC
     internal/auth/                     bcrypt and JWT
     internal/company/normalize.go      company names, aliases, and domains
     internal/answers/                  question classification and answer reuse
@@ -876,6 +877,29 @@ The routes are restricted to admins when `ADMIN_EMAILS` is set. An admin can run
 |---|---|---|
 | `GET` | `/api/extractions/pending` | List open discovered postings that need an answer for the configured model and prompt version. `limit` defaults to 50 and accepts 1 through 200. |
 | `POST` | `/api/extractions` | Verify and store an answer using `job_id`, `text_hash`, and the model's raw `answer` as a JSON string. Requires write scope and returns 409 if the posting changed. |
+
+#### Run the extraction batch
+
+Run `cmd/extract` on the admin's PC. It fetches pending postings and sends posting text only to
+the model server on this computer. The command returns the raw answers to the API for verification
+and storage. Create an admin's agent token with the write scope in the web app.
+
+Set `JOBPILOT_API_URL` to the API's HTTPS origin. HTTP is allowed for `localhost` and loopback IP
+literals. Set either `JOBPILOT_TOKEN` or `JOBPILOT_TOKEN_FILE`, which names a file containing the
+token. In PowerShell, for example:
+
+```powershell
+$env:JOBPILOT_API_URL = 'https://<api-host>'
+$env:JOBPILOT_TOKEN = '<admin-agent-token>'
+cd apps/api
+go run ./cmd/extract --dry-run
+```
+
+- `--model-url` defaults to `http://127.0.0.1:8081` and accepts HTTP with `localhost` or a loopback IP literal. Both origins allow an optional port and trailing slash. Use origins without credentials, paths, queries, or fragments.
+- `--concurrency` defaults to 4 and accepts 1 through 8. `--timeout` defaults to `2m` and accepts `10s` through `15m` per model request.
+- `--max` caps how many postings the command asks the model about. The default `0` means no cap.
+- `--dry-run` asks the model without posting answers. Postings asked about in a dry run and postings that keep failing can be asked about again on the next run.
+- A run reads the newest 200 pending postings at a time, asks each posting once, and ends when a page holds nothing it has not asked yet. It prints counts and timings only, never posting text.
 
 ### AI, answer bank, and CV endpoints
 

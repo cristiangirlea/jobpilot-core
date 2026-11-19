@@ -12,6 +12,9 @@ import (
 // PromptVersion identifies the prompt and schema together.
 const PromptVersion = "prompt-v1"
 
+// NotConfigured is how the API refuses an answer while extraction is off; the batch stops on it.
+const NotConfigured = "Extraction is not configured on this server."
+
 //go:embed prompt-v1.txt
 var prompt string
 
