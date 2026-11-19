@@ -1,8 +1,8 @@
 #!/bin/sh
 # Moves the lab cluster to a jobpilot commit through the rolling bump PR in the infra repository:
 # branch bump/jobpilot, rebuilt from infra's main each time, pins clusters/local/jobpilot.yaml to the
-# commit (deploy/base is read from it) and its three images by digest. CI's `infra bump PR` job runs
-# `open`; the other commands are its parts. Merging the PR is the release, and it is the owner's.
+# commit (deploy/base is read from it) and its three images by digest. In the private repository, CI's
+# `infra bump PR` job runs `open`; the other commands are its parts. Merging the PR is the release, and it is the owner's.
 #
 #   infra-bump.sh pinned FILE                          print the commit FILE pins
 #   infra-bump.sh rewrite FILE COMMIT API WEB MIGRATE  pin COMMIT and the three image digests in FILE

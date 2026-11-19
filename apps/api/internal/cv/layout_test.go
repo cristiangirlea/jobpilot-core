@@ -8,7 +8,7 @@ import (
 // pipeLayoutCV reproduces a common single-column export: a headline and a
 // contact line split by pipes, skills as "Category: a, b, c" lines that wrap,
 // and role headers "Company | Title | Location | Dates" that wrap across lines
-// at either end. Content is invented; the layout is what is under test.
+// at either end. Names and employers are invented; the layout is what is under test.
 const pipeLayoutCV = `JANE DOE
 Lead Full - Stack & AI Engineer | Python (FastAPI) | Go | TypeScript / React / Next.js | AWS | Kubernetes | LLM,
 RAG & Agentic AI

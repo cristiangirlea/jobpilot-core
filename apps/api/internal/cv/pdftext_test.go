@@ -11,7 +11,7 @@ import (
 
 // The fixtures below are small PDFs written by hand, each copying the operators
 // a real generator emits (checked against an invented document exported by
-// Microsoft Word and by ReportLab). People and companies are invented.
+// Microsoft Word and by ReportLab). Names and companies are invented.
 
 // fixtureWidth is the advance of a glyph in FixtureSans, in thousandths of an
 // em. Any table works, as long as the content streams are laid out with it.

@@ -3,10 +3,7 @@ name: ci
 # Mirrors `make test` (split into parallel jobs) plus image builds and an
 # integration pass against a real API. Keep this file and the Makefile in step.
 #
-# Jobs run only on the lab cluster's self-hosted runners, whose scale set the
-# repository variable CI_RUNNER names (set by the infra repo's tofu); unset,
-# they are skipped, never sent to GitHub's runners. The cluster's runner image is
-# GitHub's runner plus build tools, so the steps install what else they need.
+# Jobs run on GitHub's runners. The images are built and checked, never pushed.
 
 on:
   push:
@@ -25,8 +22,7 @@ concurrency:
 jobs:
   go:
     name: ${{ matrix.module }} (Go)
-    if: ${{ vars.CI_RUNNER != '' }}
-    runs-on: ${{ vars.CI_RUNNER }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
       fail-fast: false
@@ -56,8 +52,7 @@ jobs:
 
   web:
     name: web (typecheck and tests)
-    if: ${{ vars.CI_RUNNER != '' }}
-    runs-on: ${{ vars.CI_RUNNER }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
       run:
@@ -78,8 +73,7 @@ jobs:
 
   images:
     name: docker images
-    if: ${{ vars.CI_RUNNER != '' }}
-    runs-on: ${{ vars.CI_RUNNER }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
@@ -98,8 +92,7 @@ jobs:
 
   manifests:
     name: deploy manifests
-    if: ${{ vars.CI_RUNNER != '' }}
-    runs-on: ${{ vars.CI_RUNNER }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
@@ -117,7 +110,7 @@ jobs:
           tar -xzf "$RUNNER_TEMP/kubeconform.tar.gz" -C "$bin" kubeconform
           "$bin/kustomize" build deploy/base > "$RUNNER_TEMP/base.yaml"
           "$bin/kubeconform" -strict -summary -kubernetes-version 1.35.0 "$RUNNER_TEMP/base.yaml"
-      # What the infra-bump job runs on master, end to end against a local repository and a stub API.
+      # The script that opens a deploy pull request, end to end against a local repository and a stub API.
       - name: infra-bump.sh
         run: |
           command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
@@ -125,8 +118,7 @@ jobs:
 
   integration:
     name: integration (API, smoke scripts, MCP end-to-end)
-    if: ${{ vars.CI_RUNNER != '' }}
-    runs-on: ${{ vars.CI_RUNNER }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [go]
     services:
@@ -220,9 +212,8 @@ jobs:
             sleep 1
           done
           curl -fsS http://localhost:8080/api/health
-      # The cluster's runner image has no PowerShell, so a pinned release is
-      # installed when it is missing, checked against the
-      # SHA-256 that release publishes.
+      # Where the runner has no PowerShell, a pinned release is installed,
+      # checked against the SHA-256 that release publishes.
       - name: PowerShell
         run: |
           command -v pwsh >/dev/null && exit 0
@@ -251,112 +242,3 @@ jobs:
           name: api-log
           path: ${{ runner.temp }}/api.log
           retention-days: 7
-
-  # On master, on the lab runners only, once every check has passed: the images the infra overlay
-  # deploys, pushed to the cluster's registry (plain HTTP; the nodes and runner pods use it as
-  # registry.localhost:5000) under the commit SHA. The summary carries the overlay's `images:`
-  # block, pinned by digest. A newer master run can cancel an older one still waiting to start (the
-  # concurrency group); the newer commit's images supersede it. A manual run on master publishes
-  # too, which is also how to republish a commit (Run workflow, branch master). The digests are
-  # also the job's outputs, for infra-bump.
-  publish:
-    name: publish images (lab registry)
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && vars.CI_RUNNER != ''
-    needs: [go, web, images, manifests, integration]
-    runs-on: ${{ vars.CI_RUNNER }}
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-    env:
-      REGISTRY: registry.localhost:5000
-    outputs:
-      api: ${{ steps.push.outputs.api }}
-      web: ${{ steps.push.outputs.web }}
-      migrate: ${{ steps.push.outputs.migrate }}
-    steps:
-      - uses: actions/checkout@v7
-      - name: Build and push
-        id: push
-        run: |
-          # curl answers any *.localhost name with loopback itself, while Docker asks DNS: give curl
-          # the address the cluster's resolver returns.
-          ip=$(getent ahostsv4 registry.localhost | awk 'NR==1 {print $1}')
-          test -n "$ip" || { echo "registry.localhost does not resolve on this runner"; exit 1; }
-          accept='application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json'
-          out="$RUNNER_TEMP/images.yaml"
-          printf '# jobpilot %s\nimages:\n' "$GITHUB_SHA" > "$out"
-          publish() { # name, build context, extra docker build arguments
-            name=$1 ctx=$2
-            shift 2
-            ref="$REGISTRY/$name:$GITHUB_SHA"
-            docker build --pull "$@" -t "$ref" "$ctx"
-            docker push "$ref"
-            digest=$(curl -fsSI --resolve "registry.localhost:5000:$ip" -H "Accept: $accept" "http://$REGISTRY/v2/$name/manifests/$GITHUB_SHA" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p') \
-              || { echo "the registry did not answer for $ref"; exit 1; }
-            test -n "$digest" || { echo "the registry answered for $ref without a digest"; exit 1; }
-            printf '  - name: %s\n    newName: %s/%s\n    digest: %s\n' "$name" "$REGISTRY" "$name" "$digest" >> "$out"
-            echo "${name#jobpilot-}=$digest" >> "$GITHUB_OUTPUT"
-          }
-          publish jobpilot-api apps/api
-          # One origin behind the Ingress: the browser calls /api on the page's own host.
-          publish jobpilot-web apps/web --build-arg NEXT_PUBLIC_API_URL=/api
-          publish jobpilot-migrate migrations
-          { echo '### Images for the infra overlay'; echo; echo '```yaml'; cat "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v7
-        continue-on-error: true
-        with:
-          name: images
-          path: ${{ runner.temp }}/images.yaml
-          retention-days: 7
-
-  # After publish: the rolling bump PR in infra (branch bump/jobpilot), which pins this commit and
-  # its three images in clusters/local/jobpilot.yaml. It skips commits that change nothing deployed,
-  # never moves the PR back to an older commit, keeps its description true to the branch, and
-  # closes it once infra runs that far; merging the PR is the release, the owner's act.
-  # scripts/infra-bump.sh does the work (tested in the manifests job). It authenticates as the
-  # owner's bump GitHub App (README, "Kubernetes"), and without the INFRA_BUMP_CLIENT_ID variable
-  # the job is skipped.
-  infra-bump:
-    name: infra bump PR
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request' && vars.CI_RUNNER != '' && vars.INFRA_BUMP_CLIENT_ID != ''
-    needs: [publish]
-    runs-on: ${{ vars.CI_RUNNER }}
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          # The change list and the bump decision compare this commit with the one the lab runs.
-          fetch-depth: 0
-          persist-credentials: false
-      # A token for infra alone, with only what a branch push and a PR need; it is revoked when the
-      # job ends. Pinned by commit, since this step holds the App's private key.
-      - id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.INFRA_BUMP_CLIENT_ID }}
-          private-key: ${{ secrets.INFRA_BUMP_APP_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: infra
-          permission-contents: write
-          permission-pull-requests: write
-      - uses: actions/checkout@v7
-        with:
-          repository: ${{ github.repository_owner }}/infra
-          ref: main
-          path: infra
-          token: ${{ steps.app.outputs.token }}
-      - name: Open or move the bump PR
-        env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
-          APP_SLUG: ${{ steps.app.outputs.app-slug }}
-          SHA: ${{ github.sha }}
-          API_DIGEST: ${{ needs.publish.outputs.api }}
-          WEB_DIGEST: ${{ needs.publish.outputs.web }}
-          MIGRATE_DIGEST: ${{ needs.publish.outputs.migrate }}
-          INFRA_REPO: ${{ github.repository_owner }}/infra
-          JOBPILOT_REPO: ${{ github.repository }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: |
-          command -v jq >/dev/null || { sudo apt-get update && sudo apt-get install -y jq; }
-          sh scripts/infra-bump.sh open infra

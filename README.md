@@ -2,6 +2,8 @@
 
 JobPilot Core is a self-hosted job discovery, matching, application-writing, and application-tracking MVP. It discovers jobs from supported public APIs, stores each vacancy once in a shared catalog, evaluates that vacancy independently for every user, blocks applications to excluded employers, generates factual application materials without an LLM, and tracks the application lifecycle.
 
+This repository is a public copy of the project. It carries the project's commit history, with personal details replaced by invented ones; its issues and pull requests stayed in the private repository it is exported from, and numbers such as `#128` in the text and in commit messages refer to those. Names, employers and contact details in the test fixtures are invented, and the CV fixtures follow the layout of a real CV; the question labels and posting addresses in the form-reader tests were read from public job boards.
+
 This README is the canonical continuation document for the project. A future developer or Codex session should be able to read this file, inspect only the files named here, and resume work without rediscovering the architecture.
 
 Last verified: **2026-09-22**, by CI on every merge (see Verification).
@@ -1264,6 +1266,8 @@ Both run as non-root numeric users with read-only root filesystems. An overlay s
 - an Ingress sending `/api` to `jobpilot-api` without stripping the prefix, and the rest to `jobpilot-web`;
 - the images, pinned by digest.
 
+This copy's workflow stops at building the images. The rest of this section describes how the private repository deploys: its workflow has two more jobs, `publish` and `infra bump PR`, and `scripts/infra-bump.sh` is the second one's script, tested here.
+
 The lab cluster's overlay lives in the infra repository (`apps/jobpilot`). For that single origin, the web image is built with `NEXT_PUBLIC_API_URL=/api`. CI renders `deploy/base` and validates it with kubeconform.
 
 What the lab runs is pinned in infra's `clusters/local/jobpilot.yaml`: the commit `deploy/base` is read from, and the three images by digest. On `master`, after `publish` pushes the images, CI's `infra bump PR` job (`scripts/infra-bump.sh`) moves one rolling PR in infra, branch `bump/jobpilot`, to that commit and its digests. It skips commits that change nothing deployed (`apps/api`, `apps/web`, `migrations`, `deploy`), never moves the PR back to an older commit, and lists the jobpilot PRs the bump carries. Each run also makes the PR's description match what its branch proposes, whatever an earlier run left half done or someone pushed there, and closes the PR once infra's `main` runs that commit or a newer one. A run whose PR fails to open after its branch was pushed fails; rerunning it, or the next commit that deploys something, opens the PR. Merging that PR is the deploy: Flux applies infra's `main` within a minute. Nothing merges it automatically.
@@ -1362,7 +1366,7 @@ make smoke-mcp
 
 ### Continuous integration
 
-GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck and tests, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI. Jobs run on the self-hosted runners of the lab Kubernetes cluster (the `infra` repo) only: the repository variable `CI_RUNNER` names its scale set, `lab-jobpilot`, and without it the jobs are skipped rather than sent to GitHub's runners; the workflow installs PowerShell itself where the runner image lacks it. On `master` (pushes, and manual runs, which is how to republish a commit), once every job has passed and only on the lab runners, a `publish` job builds the API, web (with `NEXT_PUBLIC_API_URL=/api`) and migrate images, pushes them to the cluster's registry as `registry.localhost:5000/jobpilot-<name>:<commit>`, and writes the infra overlay's `images:` block, pinned by digest, to the job summary and, best effort, to an `images` artifact kept seven days (a failed upload does not fail the job, since the bump PR reads the digests from the job's outputs).
+GitHub Actions (`.github/workflows/ci.yml`) runs on every pull request and on pushes to `master`: `gofmt`, `go vet`, and `go test` for `apps/api` and `apps/mcp`, the web typecheck and tests, and an integration job that starts PostgreSQL, applies the migrations, runs the Postgres-backed Go tests (named `...Postgres`, skipped unless `JOBPILOT_TEST_DATABASE_URL` names a migrated database), runs the API, and executes `scripts/smoke.ps1`, `scripts/seniority-filter-smoke.ps1`, and the MCP stdio end-to-end test. The live Remotive smoke (`make smoke-live`) is deliberately not run in CI. Jobs run on GitHub's runners; the workflow installs PowerShell itself where a runner lacks it. The images are built and checked, never pushed.
 
 The test suites cover:
 
@@ -1380,7 +1384,7 @@ The test suites cover:
 - Application action lockout for rejected companies/jobs.
 - MCP tool catalog, summaries, filters, blocked-action errors, and notes preservation against a fake API, plus a stdio end-to-end flow against a live API.
 
-CI runs all of the above on every pull request and every merge to master, plus both Docker image builds and the MCP stdio end-to-end test; a green `master` is the verification point.
+CI runs all of the above on every pull request and every merge to master, plus the Docker image builds and the MCP stdio end-to-end test; a green `master` is the verification point.
 
 ## Security and reliability notes
 

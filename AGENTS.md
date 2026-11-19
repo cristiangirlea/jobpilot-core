@@ -1,13 +1,16 @@
-# JobPilot Core (private)
+# JobPilot Core
 
 Self-hosted job search assistant: discovers jobs from public APIs and employer boards, scores each
 one against the user's profile and filters, drafts factual application material, and tracks
-applications. A Go API on PostgreSQL, a Next.js web app, and an MCP server the owner uses daily.
-The Bounty Farm is not here.
+applications. A Go API on PostgreSQL, a Next.js web app, and an MCP server.
+
+This repository is a public copy of a private one: the same commit history with personal details
+replaced by invented ones, without its issues and pull requests. Numbers such as `#128` in the
+text and in commit messages refer to that repository.
 
 `README.md` is the canonical design document: read its "Resume work" reading order, the section
 for the area you touch, and "Contributor invariants" before changing behaviour. It is long; read
-the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
+the part you need.
 
 ## Layout
 
@@ -17,7 +20,7 @@ the part you need. `docs/mcp-dogfood.md` logs the MCP findings and their fixes.
 | `apps/mcp` | Separate Go module `jobpilot/core/mcp`: stdio MCP server. A client of the REST API only; tools in `internal/jobpilot/tools*.go`. |
 | `apps/web` | Next.js App Router, React, Tailwind. `lib/api.ts` is the client, `lib/types.ts` mirrors `apps/api/internal/models`. |
 | `migrations/` | Numbered SQL files, `migrate.sh` (each file once, advisory lock) and its image. |
-| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, CI's bump PR into infra (README, "Kubernetes"), tested by `infra-bump-test.sh`; `check-integration.sh`, `/check`'s integration step on a stack of its own; `staging.sh` (`make staging-up REF=...`, `staging-down`), staging on demand, tested by `staging-test.sh`. |
+| `scripts/` | PowerShell smoke tests (`smoke.ps1`, `seniority-filter-smoke.ps1`, `discovery-live.ps1`) and `agent-token.ps1`; `infra-bump.sh`, which opens a deploy pull request in a private infra repository (README, "Kubernetes"), tested by `infra-bump-test.sh`; `check-integration.sh`, `/check`'s integration step on a stack of its own; `staging.sh` (`make staging-up REF=...`, `staging-down`), staging on demand, tested by `staging-test.sh`. |
 | `deploy/base/` | Kustomize base for the API and web. The lab overlay lives in the private `infra` repo (`apps/jobpilot`). |
 | `Makefile`, `docker-compose.yml` | Local stack and dev commands (`make dev`, `make test`, `make mcp`, smoke targets). |
 
@@ -50,10 +53,10 @@ and an integration job: fresh Postgres, `migrations/migrate.sh` (twice, and conc
   and `ATS_RECRUITEE_URL` pointing at it.
 - `make smoke-live` hits real job APIs and is deliberately not in CI.
 
-## The owner's data
+## Real data
 
-The owner's own stacks (production on a home server and Compose on
-this PC's 5432 and 8080 when running) hold the owner's real profile, CV, applications and tokens.
+A stack someone uses (a production server, or Compose on 5432 and 8080 when running) holds that
+person's real profile, CV, applications and tokens.
 Staging (`make staging-up`, 127.0.0.1:13000 and 18081) holds only the seed's invented profile. There
 is one per clone, shared by every worktree: check `make staging-status` before `staging-up` or
 `staging-down`, since another session may be using it.
@@ -63,10 +66,13 @@ is one per clone, shared by every worktree: check `make staging-status` before `
   (`scripts/check-integration.sh`) use a uniquely named container and free random ports, never
   5432/8080 and never fixed ports: other sessions run them at the same time.
 - The smoke scripts, `make seed`, `make migrate` and the MCP end-to-end test write to whatever API
-  or database they point at, and their defaults are the owner's (`localhost:8080`, and the API's
+  or database they point at, and their defaults are a used stack's (`localhost:8080`, and the API's
   `DATABASE_URL` defaults to `localhost:5432`): always set the target to a throwaway stack.
 - Never commit `.env`, `.mcp.json` (git-ignored; it may hold a token), CV files, exports or
-  anything copied from the owner's database. `.env.example` and `.mcp.json.example` hold placeholders only.
+  anything copied from a real database. `.env.example` and `.mcp.json.example` hold placeholders only.
+- Names, employers, phone numbers and addresses in test fixtures are invented; the CV fixtures
+  follow the layout of a real CV. The question labels and posting addresses in the form-reader
+  tests were read from public job boards.
 
 ## Product rules the code enforces (keep them true)
 
@@ -88,21 +94,19 @@ is one per clone, shared by every worktree: check `make staging-status` before `
 ## Working rules
 
 - One branch per change, one PR against `master`. **Everything is tested before a merge**: the
-  full local checks (`/check`), tests for every behaviour the change adds or alters, and CI green
-  on the owner's runner. Only then may an agent merge its PR, and only through the PR (`gh pr
+  full local checks (`/check`), tests for every behaviour the change adds or alters, and CI
+  green. Only then may an agent merge its PR, and only through the PR (`gh pr
   merge <n> --merge --delete-branch --match-head-commit <sha>`), when an independent review ran
   and its findings are fixed, a security read of the diff has nothing open, and the head being
   merged is the commit all of that ran on. What could not be tested is said in the PR and waits
-  for the owner. Never auto-merge (`--auto`) or `--admin`, never push to `master`, never tag or
-  deploy. A merge, push or manual workflow run on `master` publishes images to the lab registry
-  and moves infra's bump PR (merging that one is the deploy), so each merge also needs the
-  owner's yes in chat first, and a manual run stays the owner's step.
+  for a maintainer. Never auto-merge (`--auto`) or `--admin`, never push to `master`, never tag or
+  deploy. Each merge needs a maintainer's yes first.
 - Commit messages and PR text: plain sentences, optionally an area first (`Migrations: ...`,
-  `CI: ...`). No conventional-commit prefixes, no emoji, no AI attribution lines. Commit as
-  `maintainer@example.com` (check `git config user.email`).
-- CI runs only on the owner's runner (`vars.CI_RUNNER`, the lab cluster); `publish` runs only
-  there; without `CI_RUNNER` every job is skipped (jobpilot#71 removed the `ubuntu-latest`
-  fallbacks). Never add a GitHub-hosted runner or a fallback to one.
+  `CI: ...`). No conventional-commit prefixes, no emoji, no AI attribution lines. Commit under
+  a GitHub no-reply address (check `git config user.email`).
+- CI runs on GitHub's runners (`ubuntu-latest`). It builds the images but publishes nothing: the
+  jobs that push images to a registry and move a deploy pull request (README, "Kubernetes")
+  belong to the private repository this copy is exported from.
 - Keep the Makefile and `ci.yml` in step (the workflow's header says so).
 - Other sessions merge concurrently: migration and PR numbers can be taken between branch and merge.
   Check `ls migrations` and merge `master` into the branch before the checks that precede a merge.

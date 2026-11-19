@@ -27,8 +27,7 @@ step's result in one line; on a failure, show the error text and fix it before r
    `docker build apps/api`, `docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web`,
    `docker build migrations`.
 4. Manifests, only when `deploy/` changed: `kustomize build deploy/base | kubeconform -strict -summary -kubernetes-version 1.35.0`
-   if both tools are installed; otherwise say it was left to CI. When `scripts/infra-bump*` or the
-   workflow's publish or infra-bump job changed: `sh scripts/infra-bump-test.sh` (needs git and jq;
+   if both tools are installed; otherwise say it was left to CI. When `scripts/infra-bump*` changed: `sh scripts/infra-bump-test.sh` (needs git and jq;
    without jq, as on Windows, run it as CI does, under dash:
    `MSYS_NO_PATHCONV=1 docker run --rm -v "$PWD":/src:ro ubuntu:22.04 sh -c 'apt-get update -qq && apt-get install -y -qq git jq >/dev/null && sh /src/scripts/infra-bump-test.sh'`).
    When `scripts/staging*` or `deploy/staging/` changed (CI runs it in the images job):
