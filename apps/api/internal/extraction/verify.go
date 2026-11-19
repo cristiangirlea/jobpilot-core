@@ -75,7 +75,7 @@ func verify(title, description string, raw []byte) (models.Extraction, []*Error,
 	if err != nil {
 		return zero, nil, err
 	}
-	seniority, err := verifySeniority(answer["seniority"], posting, &dropped)
+	seniority, seniorityDropped, err := verifySeniority(answer["seniority"], posting, &dropped)
 	if err != nil {
 		return zero, nil, err
 	}
@@ -88,12 +88,13 @@ func verify(title, description string, raw []byte) (models.Extraction, []*Error,
 		return zero, nil, err
 	}
 	return models.Extraction{
-		Required:    required,
-		NiceToHave:  niceToHave,
-		Stack:       stack,
-		Seniority:   seniority,
-		MinYears:    minYears,
-		Constraints: constraints,
+		Required:         required,
+		NiceToHave:       niceToHave,
+		Stack:            stack,
+		Seniority:        seniority,
+		SeniorityDropped: seniorityDropped,
+		MinYears:         minYears,
+		Constraints:      constraints,
 	}, dropped, nil
 }
 
@@ -217,24 +218,25 @@ func verifyQuote(quote, posting, where string) *Error {
 	return nil
 }
 
-func verifySeniority(raw json.RawMessage, posting string, dropped *[]*Error) (models.ExtractedSeniority, *Error) {
+// verifySeniority also says whether a named level was lost: its evidence failed, so it is kept as unspecified.
+func verifySeniority(raw json.RawMessage, posting string, dropped *[]*Error) (models.ExtractedSeniority, bool, *Error) {
 	const where = "seniority"
 	var result models.ExtractedSeniority
 	object, err := readObject(raw, where, "level", "quote")
 	if err != nil {
-		return result, err
+		return result, false, err
 	}
 	if !decodeNonNull(object["level"], &result.Level) || json.Unmarshal(object["quote"], &result.Quote) != nil {
-		return result, &Error{"wrong_type", where}
+		return result, false, &Error{"wrong_type", where}
 	}
 	if !slices.Contains(levels, result.Level) {
-		return result, &Error{"unknown_level", where}
+		return result, false, &Error{"unknown_level", where}
 	}
 	var evidence *Error
 	if result.Quote != nil {
 		evidence = verifyQuote(*result.Quote, posting, where)
 		if evidence != nil && evidence.Reason == "too_long" {
-			return result, evidence
+			return result, false, evidence
 		}
 	}
 	if (result.Level == "unspecified") != (result.Quote == nil) {
@@ -242,9 +244,9 @@ func verifySeniority(raw json.RawMessage, posting string, dropped *[]*Error) (mo
 	}
 	if evidence != nil {
 		*dropped = append(*dropped, evidence)
-		return models.ExtractedSeniority{Level: "unspecified"}, nil
+		return models.ExtractedSeniority{Level: "unspecified"}, result.Level != "unspecified", nil
 	}
-	return result, nil
+	return result, false, nil
 }
 
 func verifyYears(raw json.RawMessage, posting string) (*int, *Error) {

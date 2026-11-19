@@ -1,9 +1,11 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"slices"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/extraction"
 	"jobpilot/core/api/internal/models"
 )
@@ -49,6 +52,25 @@ func (s *Server) pendingExtractions(w http.ResponseWriter, r *http.Request) {
 			internal(w, err)
 			return
 		}
+	}
+	write(w, 200, out)
+}
+
+// extractionSummary answers counts only, of matches only the signed-in account's.
+func (s *Server) extractionSummary(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	summarize := s.extractionCounts
+	if summarize == nil {
+		summarize = s.Store.ExtractionSummary
+	}
+	out, err := summarize(ctx, auth.UserID(ctx), s.ExtractionModel, extraction.PromptVersion)
+	if err != nil {
+		internal(w, err)
+		return
+	}
+	out.Scoring = "off"
+	if s.ExtractionScoring == "shadow" {
+		out.Scoring = "shadow"
 	}
 	write(w, 200, out)
 }
@@ -123,6 +145,7 @@ func (s *Server) saveExtraction(w http.ResponseWriter, r *http.Request) {
 		problem(w, 409, extractionPostingChanged)
 		return
 	}
+	defer s.rescoreShadow(in.JobID)
 	if x.Status == "rejected" {
 		write(w, 200, map[string]string{"status": x.Status, "reason": x.Reason})
 		return
@@ -131,4 +154,18 @@ func (s *Server) saveExtraction(w http.ResponseWriter, r *http.Request) {
 		Status  string `json:"status"`
 		Dropped int    `json:"dropped"`
 	}{Status: x.Status, Dropped: result.Dropped})
+}
+
+// rescoreShadow runs after the answer is stored and never fails or delays the request: an account's matching lock can be held for minutes.
+func (s *Server) rescoreShadow(jobID string) {
+	if s.ExtractionScoring != "shadow" || s.Discovery == nil {
+		return
+	}
+	s.background.Add(1)
+	go func() {
+		defer s.background.Done()
+		if err := s.Discovery.RescoreShadow(context.Background(), jobID); err != nil {
+			slog.Error("write shadow evaluations after an extraction", "job_id", jobID, "error", err)
+		}
+	}()
 }

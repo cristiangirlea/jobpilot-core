@@ -24,11 +24,12 @@ type Config struct {
 	// ATSRecruiteeURL stands in for every Recruitee careers site; empty keeps
 	// each site's own host. They exist so the end-to-end test can serve those
 	// forms too.
-	ATSAshbyURL     string
-	ATSRecruiteeURL string
-	TokenTTL        time.Duration
-	LLM             LLMConfig
-	ExtractionModel string
+	ATSAshbyURL       string
+	ATSRecruiteeURL   string
+	TokenTTL          time.Duration
+	LLM               LLMConfig
+	ExtractionModel   string
+	ExtractionScoring string
 	// Registration is who may create an account: invite (the default), open
 	// or closed. AdminEmails are the accounts that may create invites.
 	Registration string
@@ -77,6 +78,11 @@ const (
 func (c Config) Validate() error {
 	if utf8.RuneCountInString(c.ExtractionModel) > 200 || strings.ContainsFunc(c.ExtractionModel, unicode.IsControl) {
 		return fmt.Errorf("EXTRACTION_MODEL must be at most 200 characters and contain no control characters")
+	}
+	switch c.ExtractionScoring {
+	case "", "off", "shadow":
+	default:
+		return fmt.Errorf("EXTRACTION_SCORING must be off or shadow")
 	}
 	switch c.UserAgentTokens {
 	case "off", "read", "write":
@@ -136,22 +142,27 @@ func Load() (Config, error) {
 	if err != nil || delay < 0 {
 		delay = 120
 	}
+	extractionScoring := strings.TrimSpace(os.Getenv("EXTRACTION_SCORING"))
+	if extractionScoring == "off" {
+		extractionScoring = ""
+	}
 	return Config{
-		Addr:             env("API_ADDR", ":8080"),
-		DatabaseURL:      databaseURL,
-		JWTSecret:        jwtSecret,
-		FrontendURL:      env("FRONTEND_URL", "http://localhost:3000"),
-		ATSGreenhouseURL: env("ATS_GREENHOUSE_URL", "https://boards-api.greenhouse.io"),
-		ATSAshbyURL:      env("ATS_ASHBY_URL", "https://jobs.ashbyhq.com"),
-		ATSRecruiteeURL:  env("ATS_RECRUITEE_URL", ""),
-		TokenTTL:         time.Duration(hours) * time.Hour,
-		LLM:              loadLLM(),
-		ExtractionModel:  strings.TrimSpace(os.Getenv("EXTRACTION_MODEL")),
-		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
-		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
-		UserAgentTokens:  strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
-		ClientIPHeader:   strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
-		Mail:             loadMail(smtpPassword),
+		Addr:              env("API_ADDR", ":8080"),
+		DatabaseURL:       databaseURL,
+		JWTSecret:         jwtSecret,
+		FrontendURL:       env("FRONTEND_URL", "http://localhost:3000"),
+		ATSGreenhouseURL:  env("ATS_GREENHOUSE_URL", "https://boards-api.greenhouse.io"),
+		ATSAshbyURL:       env("ATS_ASHBY_URL", "https://jobs.ashbyhq.com"),
+		ATSRecruiteeURL:   env("ATS_RECRUITEE_URL", ""),
+		TokenTTL:          time.Duration(hours) * time.Hour,
+		LLM:               loadLLM(),
+		ExtractionModel:   strings.TrimSpace(os.Getenv("EXTRACTION_MODEL")),
+		ExtractionScoring: extractionScoring,
+		Registration:      strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
+		AdminEmails:       emails(os.Getenv("ADMIN_EMAILS")),
+		UserAgentTokens:   strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
+		ClientIPHeader:    strings.TrimSpace(os.Getenv("CLIENT_IP_HEADER")),
+		Mail:              loadMail(smtpPassword),
 		Google: GoogleConfig{
 			ClientID:     env("GOOGLE_CLIENT_ID", ""),
 			ClientSecret: googleSecret,

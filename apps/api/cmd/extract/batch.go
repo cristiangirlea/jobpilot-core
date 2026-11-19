@@ -82,11 +82,11 @@ func run(ctx context.Context, cfg config, out io.Writer) (summary, error) {
 	defer cancel(nil)
 	modelTransport := newModelTransport()
 	defer modelTransport.CloseIdleConnections()
-	apiTransport := newAPITransport(cfg.apiURL)
-	defer apiTransport.CloseIdleConnections()
+	api := newAPIClient(cfg.apiURL)
+	defer api.CloseIdleConnections()
 	b := batch{
 		cfg:    cfg,
-		api:    &http.Client{Transport: directTransport{apiTransport}, CheckRedirect: refuseRedirect, Timeout: 2 * time.Minute},
+		api:    api,
 		model:  &http.Client{Transport: directTransport{modelTransport}, CheckRedirect: refuseRedirect, Timeout: cfg.timeout},
 		cancel: cancel,
 		out:    out,
@@ -366,6 +366,10 @@ func refuseRedirect(*http.Request, []*http.Request) error {
 func newModelTransport() *http.Transport {
 	dialer := &net.Dialer{Control: loopbackControl}
 	return &http.Transport{Proxy: nil, DialContext: dialer.DialContext}
+}
+
+func newAPIClient(apiURL string) *http.Client {
+	return &http.Client{Transport: directTransport{newAPITransport(apiURL)}, CheckRedirect: refuseRedirect, Timeout: 2 * time.Minute}
 }
 
 func newAPITransport(apiURL string) *http.Transport {

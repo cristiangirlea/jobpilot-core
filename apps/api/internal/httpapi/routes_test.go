@@ -54,6 +54,7 @@ var adminOnly = map[string]string{
 	"GET /api/discovery/suggestions":     "ap",
 	"POST /api/discovery/detect":         "ap",
 	"GET /api/extractions/pending":       "ap",
+	"GET /api/extractions/summary":       "ap",
 	"POST /api/extractions":              "aw",
 }
 
