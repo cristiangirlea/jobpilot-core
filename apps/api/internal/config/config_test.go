@@ -104,6 +104,35 @@ func TestATSOriginsAreReadFromTheEnvironment(t *testing.T) {
 	}
 }
 
+func TestExtractionModel(t *testing.T) {
+	t.Setenv("REGISTRATION", "")
+	t.Setenv("USER_AGENT_TOKENS", "")
+	for _, tc := range []struct {
+		name, value, want string
+		valid             bool
+	}{
+		{"default", "", "", true},
+		{"trimmed", " example-model ", "example-model", true},
+		{"blank", "   ", "", true},
+		{"at limit", strings.Repeat("ä", 200), strings.Repeat("ä", 200), true},
+		{"over limit", strings.Repeat("a", 201), strings.Repeat("a", 201), false},
+		{"control", "example\tmodel", "example\tmodel", false},
+		{"unicode control", "example\u0085model", "example\u0085model", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("EXTRACTION_MODEL", tc.value)
+			cfg := loadConfig(t)
+			if cfg.ExtractionModel != tc.want {
+				t.Fatalf("ExtractionModel = %q, want %q", cfg.ExtractionModel, tc.want)
+			}
+			err := cfg.Validate()
+			if (err == nil) != tc.valid || (err != nil && !strings.Contains(err.Error(), "EXTRACTION_MODEL")) {
+				t.Fatalf("Validate() = %v, want valid=%v", err, tc.valid)
+			}
+		})
+	}
+}
+
 // Sign-up is invite-only unless the environment says otherwise, and a mode
 // the API does not know stops it at startup rather than opening sign-up.
 func TestRegistrationDefaultsToInviteAndRefusesUnknownModes(t *testing.T) {

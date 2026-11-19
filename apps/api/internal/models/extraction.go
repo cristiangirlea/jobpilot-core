@@ -35,3 +35,17 @@ type ExtractedConstraint struct {
 	Hard  bool   `json:"hard"`
 	Quote string `json:"quote"`
 }
+
+// PendingExtraction is a posting waiting for the model: its text and nothing else.
+type PendingExtraction struct {
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	TextHash    string `json:"text_hash"`
+}
+
+// JobExtraction is one stored answer; Extraction is nil when the answer was rejected.
+type JobExtraction struct {
+	JobID, Model, PromptVersion, TextHash, Status, Reason string
+	Extraction                                            *Extraction
+}

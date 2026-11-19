@@ -3,7 +3,9 @@
 package extraction
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"encoding/json"
 )
 
@@ -33,4 +35,10 @@ func Schema() json.RawMessage {
 // Text is the exact posting text sent to the model and used to verify quotes.
 func Text(title, description string) string {
 	return title + "\n" + description
+}
+
+// Hash identifies the exact posting text used for extraction.
+func Hash(title, description string) string {
+	sum := sha256.Sum256([]byte(Text(title, description)))
+	return hex.EncodeToString(sum[:])
 }

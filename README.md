@@ -215,6 +215,7 @@ Jobs are deliberately **not** owned by one user. Two users may match and apply t
 
 - `companies`
 - `jobs`
+- `job_extractions` stores verified readings of discovered postings and records rejected answers.
 
 A SHA-256 fingerprint deduplicates a job using normalized company, normalized title, location, and the apply URL host/path. Boards repost an opening under a new link, which changes the fingerprint, so a discovered posting with an unknown fingerprint is first compared with the same provider's jobs at that company: the same title and location with a description at least 80% alike, by shared words, is the same opening. Its fingerprint is recorded against the stored job (`job_fingerprint_aliases`), and when the repost is dated later its link, external id and date replace the stored ones. Openings stored once per posting before this existed are tidied once at startup: of each opening's open copies, all but the newest posting are closed with the reason "a later posting of the same opening replaces it", except a copy someone has an application or outbox entry for. `jobs.user_id` is nullable and retained only as a legacy creator/import field.
 
@@ -867,6 +868,15 @@ With `ADMIN_EMAILS` set, these and `/api/ai/status` are for admins (signed in or
 | `POST` | `/api/discovery/run` | Run all active sources now |
 | `POST` | `/api/discovery/recommended` | Derive a profile-focused search and run active sources |
 
+### Extraction endpoints
+
+The routes are restricted to admins when `ADMIN_EMAILS` is set. An admin can run a batch on their PC and send the model's answers back for verification against the stored postings. With `EXTRACTION_MODEL` unset, the pending list is empty and submissions return 409.
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/api/extractions/pending` | List open discovered postings that need an answer for the configured model and prompt version. `limit` defaults to 50 and accepts 1 through 200. |
+| `POST` | `/api/extractions` | Verify and store an answer using `job_id`, `text_hash`, and the model's raw `answer` as a JSON string. Requires write scope and returns 409 if the posting changed. |
+
 ### AI, answer bank, and CV endpoints
 
 | Method | Path | Purpose |
@@ -1115,6 +1125,7 @@ PostgreSQL 16 is used in Compose. Migrations are plain, idempotent SQL. `migrati
 | `028_external_application_history.sql` | Private immutable external application history, separate from catalog jobs |
 | `029_profile_repairs.sql` | Retained source-bound profile repair proposals and reversible snapshots |
 | `030_application_history_policy.sql` | The application-history rule on filter presets, the names an imported employer was stated under, and the views that apply the rule when a match is read |
+| `031_job_extractions.sql` | Stores extraction results for discovered postings by model and prompt version. |
 
 Core entities:
 
@@ -1172,6 +1183,7 @@ Set either the value or its file path, never both; files must be non-empty and a
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URL` | Sign-in with Google; off while `GOOGLE_CLIENT_ID` is unset; with it set, the API refuses to start without the other two. The redirect URL is the API's `/api/auth/google/callback`, registered in the Google OAuth client. The web app and the API must be on the same site (the same host, or subdomains of one domain; `localhost` ports count as one site), because the handoff's binding cookie is `SameSite=Lax` |
 | `GOOGLE_ALLOW_SIGNUP` | `true` lets a Google account create a JobPilot account when no account has its email and `REGISTRATION=open`; unset, Google signs in only accounts it was linked to under Settings |
 | `ATS_RECRUITEE_URL` | One origin for every Recruitee careers site's offer API; unset, each site's own host is used. Point it at a fake as above |
+| `EXTRACTION_MODEL` | Model name for posting extraction. Empty by default, which turns extraction off. |
 | `OUTBOX_SENDER_ENABLED` | `true` sends approved outbox entries through the employer's form ("Sending approved applications"); anything else, the default, leaves them queued. `GET /api/health` reports it as `sending` |
 | `OUTBOX_SEND_DELAY_SECONDS` | How long an approval waits before it is sent, so it can still be removed; defaults to `120` |
 

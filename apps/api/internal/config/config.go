@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Config struct {
@@ -26,6 +28,7 @@ type Config struct {
 	ATSRecruiteeURL string
 	TokenTTL        time.Duration
 	LLM             LLMConfig
+	ExtractionModel string
 	// Registration is who may create an account: invite (the default), open
 	// or closed. AdminEmails are the accounts that may create invites.
 	Registration string
@@ -72,6 +75,9 @@ const (
 // Validate refuses settings the API cannot run with, so a typo fails at
 // startup instead of opening sign-up.
 func (c Config) Validate() error {
+	if utf8.RuneCountInString(c.ExtractionModel) > 200 || strings.ContainsFunc(c.ExtractionModel, unicode.IsControl) {
+		return fmt.Errorf("EXTRACTION_MODEL must be at most 200 characters and contain no control characters")
+	}
 	switch c.UserAgentTokens {
 	case "off", "read", "write":
 	default:
@@ -140,6 +146,7 @@ func Load() (Config, error) {
 		ATSRecruiteeURL:  env("ATS_RECRUITEE_URL", ""),
 		TokenTTL:         time.Duration(hours) * time.Hour,
 		LLM:              loadLLM(),
+		ExtractionModel:  strings.TrimSpace(os.Getenv("EXTRACTION_MODEL")),
 		Registration:     strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
 		AdminEmails:      emails(os.Getenv("ADMIN_EMAILS")),
 		UserAgentTokens:  strings.ToLower(strings.TrimSpace(env("USER_AGENT_TOKENS", "off"))),
