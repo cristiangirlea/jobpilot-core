@@ -1,6 +1,7 @@
 package generator
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"sort"
@@ -50,8 +51,18 @@ func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, s
 	parts = append(parts, request, closing)
 	fallback := strings.Join(parts, "\n\n")
 	if client.Enabled() {
-		facts, _ := json.Marshal(sent)
-		result, err := client.Complete(ctx, llm.Request{Task: "follow_up", System: "Write a short follow-up draft, never a sent message. Use only the supplied profile and sent materials. Return the supplied paragraphs verbatim, separated by blank lines; you may omit the quotation paragraph. Do not add facts, attachments, dates, or interview claims.", Prompt: "PROFILE\n" + letterFacts(profile) + "\nSENT MATERIALS\n" + string(facts) + "\nALLOWED PARAGRAPHS\n" + fallback, MaxTokens: 400, Temperature: 0.2})
+		var facts bytes.Buffer
+		encoder := json.NewEncoder(&facts)
+		// Keep angle brackets literal so Fence can neutralise embedded tags.
+		encoder.SetEscapeHTML(false)
+		_ = encoder.Encode(sent)
+		result, err := client.Complete(ctx, llm.Request{
+			Task:        "follow_up",
+			System:      "Write a short follow-up draft, never a sent message. Use only the supplied profile and sent materials. Return the supplied paragraphs verbatim, separated by blank lines; you may omit the quotation paragraph. Do not add facts, attachments, dates, or interview claims. " + llm.FenceRule,
+			Prompt:      "PROFILE\n" + letterFacts(profile) + "\nSENT MATERIALS\n" + llm.Fence(strings.TrimSuffix(facts.String(), "\n")) + "\nALLOWED PARAGRAPHS\n" + fallback,
+			MaxTokens:   400,
+			Temperature: 0.2,
+		})
 		if err == nil {
 			text := strings.TrimSpace(result.Text)
 			// Restrict provider output to verified wording rather than trusting factual claims.

@@ -23,7 +23,7 @@ Hard rules:
 - Do not flatter the company or speculate about its mission, products, or culture beyond what the posting states.
 - Three or four short paragraphs. First person. Plain prose, no markdown, no bullet points.
 - Open with the role being applied for. Close with a plain sign-off using the candidate's name.
-- Return only the letter text.`
+- Return only the letter text.` + "\n- " + llm.FenceRule
 
 // CoverLetter writes the letter that accompanies an application.
 //
@@ -32,16 +32,17 @@ Hard rules:
 // same either way: only stored candidate facts may appear.
 func CoverLetter(ctx context.Context, client *llm.Client, profile models.Profile, job models.Job, match models.Evaluation) (string, string) {
 	if client.Enabled() {
+		roleAndPosting := fmt.Sprintf("Title: %s\nCompany: %s\nLocation: %s\nRemote policy: %s\n\n%s",
+			clean(job.Title, "the role"),
+			clean(job.Company, "your company"),
+			clean(job.Location, "unspecified"),
+			clean(job.RemoteType, "unspecified"),
+			trimTo(stripMarkup(job.Description), 2500),
+		)
 		prompt := fmt.Sprintf(`CANDIDATE FACTS
 %s
 
-ROLE
-Title: %s
-Company: %s
-Location: %s
-Remote policy: %s
-
-POSTING
+ROLE AND POSTING
 %s
 
 THE CANDIDATE'S OWN SKILLS THAT THIS ROLE ASKS FOR
@@ -49,11 +50,7 @@ THE CANDIDATE'S OWN SKILLS THAT THIS ROLE ASKS FOR
 
 Write the cover letter.`,
 			letterFacts(profile),
-			clean(job.Title, "the role"),
-			clean(job.Company, "your company"),
-			clean(job.Location, "unspecified"),
-			clean(job.RemoteType, "unspecified"),
-			trimTo(stripMarkup(job.Description), 2500),
+			llm.Fence(roleAndPosting),
 			joinOrNone(match.MatchedSkills),
 		)
 		result, err := client.Complete(ctx, llm.Request{
@@ -139,18 +136,28 @@ func trimTo(v string, limit int) string {
 func stripMarkup(v string) string {
 	var b strings.Builder
 	depth := 0
-	for _, r := range v {
-		switch {
-		case r == '<':
-			depth++
-		case r == '>':
-			if depth > 0 {
-				depth--
-				b.WriteByte(' ')
+	tagStart := 0
+	for i, r := range v {
+		if r == '<' && i+1 < len(v) {
+			next := v[i+1]
+			if 'a' <= next && next <= 'z' || 'A' <= next && next <= 'Z' || next == '/' || next == '!' || next == '?' {
+				if depth == 0 {
+					tagStart = i
+				}
+				depth++
+				continue
 			}
+		}
+		switch {
+		case r == '>' && depth > 0:
+			depth--
+			b.WriteByte(' ')
 		case depth == 0:
 			b.WriteRune(r)
 		}
+	}
+	if depth > 0 {
+		b.WriteString(v[tagStart:])
 	}
 	return strings.Join(strings.Fields(b.String()), " ")
 }

@@ -73,6 +73,10 @@ func TestPrepareInterview(t *testing.T) {
 		}
 		if !tc.bad {
 			out := structured[map[string]any](t, res)
+			posting := out["posting"].(map[string]any)
+			if got := posting["employer_text"]; got != employerTextNotice {
+				t.Errorf("interview posting employer text notice = %v, want %q", got, employerTextNotice)
+			}
 			docs := out["sent_documents"].(map[string]any)
 			if docs["cv_text"] != " CV\n" || docs["cover_letter"] != " Letter\n" {
 				t.Fatal("documents changed in transit")

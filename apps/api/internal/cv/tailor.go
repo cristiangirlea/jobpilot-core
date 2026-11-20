@@ -426,24 +426,24 @@ Hard rules:
 - Use ONLY the candidate facts supplied. Never invent or imply employers, titles, dates, metrics, achievements, or skills.
 - Never claim experience with a technology that is not in the candidate's skills or history.
 - Two or three sentences, first person, plain prose. No markdown, no headings, no preamble.
-- Return only the summary text.`
+- Return only the summary text.` + "\n- " + llm.FenceRule
 
 // summarise writes the one part of a tailored CV that is newly worded. With no
 // provider configured it falls back to a deterministic sentence, which is why
 // the product still works with AI switched off.
 func summarise(ctx context.Context, client *llm.Client, profile models.Profile, job models.Job, match models.Evaluation, highlighted []string) (string, string) {
 	if client.Enabled() {
+		role := fmt.Sprintf("Title: %s\nCompany: %s", fallbackText(job.Title, "unspecified"), fallbackText(job.Company, "unspecified"))
 		prompt := fmt.Sprintf(`CANDIDATE FACTS
 %s
 
 TARGET ROLE
-Title: %s
-Company: %s
+%s
 
 THE CANDIDATE'S OWN SKILLS THAT THIS ROLE ASKS FOR
 %s
 
-Write the CV summary.`, factSheetFor(profile), fallbackText(job.Title, "unspecified"), fallbackText(job.Company, "unspecified"), listOrNoneText(highlighted))
+Write the CV summary.`, factSheetFor(profile), llm.Fence(role), listOrNoneText(highlighted))
 
 		result, err := client.Complete(ctx, llm.Request{
 			Task: "tailor_cv_summary", System: summarySystemPrompt, Prompt: prompt,

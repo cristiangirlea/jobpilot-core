@@ -103,9 +103,10 @@ func (e *Evaluation) normalize() {
 }
 
 type JobWithMatch struct {
-	Job     Job        `json:"job"`
-	Match   Evaluation `json:"match"`
-	MatchID string     `json:"match_id,omitempty"`
+	Job          Job        `json:"job"`
+	Match        Evaluation `json:"match"`
+	MatchID      string     `json:"match_id,omitempty"`
+	EmployerText string     `json:"employer_text,omitempty"`
 }
 
 type JobSummary struct {

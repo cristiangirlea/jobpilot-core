@@ -286,7 +286,7 @@ Hard rules:
 - If the facts do not support an answer, reply with exactly: INSUFFICIENT_FACTS
 - Write in the first person, as the candidate.
 - Plain prose. No markdown, no headings, no bullet points, no preamble, no sign-off.
-- Return only the answer text itself.`
+- Return only the answer text itself.` + "\n- " + llm.FenceRule
 
 // generate asks a provider for one answer under a strict factual contract. An
 // INSUFFICIENT_FACTS reply is treated as no answer, which sends the caller to
@@ -296,14 +296,17 @@ func (s *Service) generate(ctx context.Context, question Question, subject Subje
 	if limit <= 0 {
 		limit = 900
 	}
+	role := fmt.Sprintf("Title: %s\nCompany: %s\nLocation: %s\nRemote policy: %s",
+		fallback(subject.Job.Title, "unspecified"),
+		fallback(subject.Job.Company, "unspecified"),
+		fallback(subject.Job.Location, "unspecified"),
+		fallback(subject.Job.RemoteType, "unspecified"),
+	)
 	prompt := fmt.Sprintf(`CANDIDATE FACTS
 %s
 
 ROLE APPLIED FOR
-Title: %s
-Company: %s
-Location: %s
-Remote policy: %s
+%s
 
 RELEVANT MATCHED SKILLS
 %s
@@ -313,16 +316,17 @@ QUESTION
 
 Answer in at most %d characters.`,
 		factSheet(subject.Profile),
-		fallback(subject.Job.Title, "unspecified"),
-		fallback(subject.Job.Company, "unspecified"),
-		fallback(subject.Job.Location, "unspecified"),
-		fallback(subject.Job.RemoteType, "unspecified"),
+		llm.Fence(role),
 		listOrNone(subject.Match.MatchedSkills),
-		strings.TrimSpace(question.Text),
+		llm.Fence(strings.TrimSpace(question.Text)),
 		limit,
 	)
 	if len(question.Options) > 0 {
-		prompt += "\n\nChoose exactly one of these options and reply with it verbatim:\n- " + strings.Join(question.Options, "\n- ")
+		instruction := "Choose exactly one of the options inside the fence below and reply with it verbatim:"
+		if question.Kind == "multiselect" {
+			instruction = "Choose one or more of the options inside the fence below and reply with the chosen options verbatim, separated by commas:"
+		}
+		prompt += "\n\n" + instruction + "\n" + llm.Fence("- "+strings.Join(question.Options, "\n- "))
 	}
 	result, err := s.LLM.Complete(ctx, llm.Request{
 		Task:        "answer_question:" + fallback(key, "unclassified"),
