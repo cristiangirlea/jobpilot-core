@@ -111,9 +111,11 @@ export default function SkillsPage(){
     {rows.length?<div className="flex flex-wrap gap-2">{rows.map(x=>{
       // Only a saved skill has an id; until then it is on its way.
       const saving=!x.id;
+      // The API leaves an empty level out, so each part is shown only when set.
+      const detail=saving?"saving…":[x.level,x.years?`${x.years}y`:""].filter(Boolean).join(" · ");
       return <div key={x.id??`new:${key(x.name)}`} aria-busy={saving||undefined} className={`rounded-full border border-black/5 bg-white px-4 py-2 text-sm shadow-sm transition-opacity ${saving?"opacity-60":""}`}>
         <span className="font-semibold">{x.name}</span>
-        <span className="ml-2 text-ink/40">{saving?"saving…":`${x.level}${x.years?` · ${x.years}y`:""}`}</span>
+        {detail&&<span className="ml-2 text-ink/40">{detail}</span>}
         {!saving&&<button type="button" className="ml-3 text-red-500" aria-label={`Remove ${x.name}`} onClick={()=>remove(x)}>×</button>}
       </div>;
     })}</div>:<p className="rounded-xl bg-paper px-4 py-3 text-sm text-ink/50">No skills yet. Start typing above: suggestions come from your CV and from the jobs you match.</p>}
