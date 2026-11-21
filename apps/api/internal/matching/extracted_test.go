@@ -137,6 +137,53 @@ func TestScoreExtractedSkills(t *testing.T) {
 			missing: []string{"Kotlin"},
 		},
 		{
+			name:    "requirement that is not a technology is listed but does not lower the score",
+			profile: []models.Skill{{Name: "Go"}},
+			x: models.Extraction{Required: []models.ExtractedSkills{
+				{Skills: []string{"Go"}, Quote: "Go required"},
+				{Skills: []string{"technical pre-sales experience"}, Quote: "5+ years of technical pre-sales experience"},
+			}},
+			score:   30,
+			matched: []string{"Go"},
+			missing: []string{"technical pre-sales experience"},
+		},
+		{
+			name:    "requirement that is not a technology counts when the profile holds it",
+			profile: []models.Skill{{Name: "Go"}, {Name: "stakeholder management"}},
+			x: models.Extraction{
+				Required: []models.ExtractedSkills{
+					{Skills: []string{"Go"}, Quote: "Go required"},
+					{Skills: []string{"stakeholder management"}, Quote: "Strong stakeholder management"},
+				},
+				NiceToHave: []models.ExtractedSkills{{Skills: []string{"Kotlin"}, Quote: "Kotlin is a plus"}},
+			},
+			score:   24,
+			matched: []string{"Go", "stakeholder management"},
+			missing: []string{},
+		},
+		{
+			name:    "one technology alternative makes the entry count",
+			profile: []models.Skill{{Name: "Python"}},
+			x: models.Extraction{Required: []models.ExtractedSkills{
+				{Skills: []string{"Python"}, Quote: "Python required"},
+				{Skills: []string{"stakeholder management", "Kotlin"}, Quote: "stakeholder management or Kotlin"},
+			}},
+			score:   15,
+			matched: []string{"Python"},
+			missing: []string{"stakeholder management or Kotlin"},
+		},
+		{
+			name:    "only requirements that are not technologies",
+			profile: []models.Skill{{Name: "Go"}},
+			x: models.Extraction{
+				Required:   []models.ExtractedSkills{{Skills: []string{"written and oral communication skills"}, Quote: "first class written and oral communication skills"}},
+				NiceToHave: []models.ExtractedSkills{{Skills: []string{"pre-sales experience"}, Quote: "pre-sales experience is a plus"}},
+			},
+			score:   15,
+			matched: []string{},
+			missing: []string{"written and oral communication skills"},
+		},
+		{
 			name:    "profile practice cannot meet a mixed entry",
 			profile: []models.Skill{{Name: "Agile"}},
 			x: models.Extraction{Required: []models.ExtractedSkills{
@@ -190,6 +237,22 @@ func TestEvaluateWithExtractedSkills(t *testing.T) {
 		t.Fatalf("stack-only red flags = %v, rules = %v", got.RedFlags, rules.RedFlags)
 	}
 	assertExtractionRejections(t, got, rules)
+}
+
+func TestEvaluateWithExtractedRequirementOutsideTechnologies(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Go"}}}
+	job := models.JobInput{Title: "Solutions Engineer", Company: "Brambleglass Labs", Description: "Go required. 5+ years of technical pre-sales experience."}
+	x := models.Extraction{Required: []models.ExtractedSkills{
+		{Skills: []string{"Go"}, Quote: "Go required."},
+		{Skills: []string{"technical pre-sales experience"}, Quote: "5+ years of technical pre-sales experience."},
+	}}
+	got := EvaluateWith(profile, nil, nil, job, &x, time.Time{})
+	if got.Breakdown["skill_match"] != 30 || !reflect.DeepEqual(got.MissingSkills, []string{"technical pre-sales experience"}) {
+		t.Fatalf("unexpected extracted skills: %+v", got)
+	}
+	if !slices.Contains(got.RedFlags, "The job requires skills your profile does not list: technical pre-sales experience") {
+		t.Fatalf("unexpected red flags: %v", got.RedFlags)
+	}
 }
 
 func TestEvaluateWithExtractedSkillsStillAppliesTechnologyFilters(t *testing.T) {

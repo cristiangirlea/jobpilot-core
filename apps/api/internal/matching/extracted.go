@@ -32,7 +32,6 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 			if onlyPractices(options) {
 				continue
 			}
-			totalWeight += group.weight
 			held := false
 			for _, skill := range profile {
 				name := strings.TrimSpace(skill.Name)
@@ -43,6 +42,11 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 						break
 					}
 				}
+			}
+			// Like the rules, the share counts technologies and the profile's own
+			// skills; any other requirement is listed but cannot lower the score.
+			if held || namesTechnology(options) {
+				totalWeight += group.weight
 			}
 			if held {
 				heldWeight += group.weight
@@ -66,6 +70,22 @@ func onlyPractices(skills []string) bool {
 		}
 	}
 	return true
+}
+
+// namesTechnology reports whether a skill names a vocabulary technology that
+// is not a way of working.
+func namesTechnology(skills []string) bool {
+	for _, skill := range skills {
+		if key := technology.Canonical(skill); technology.Name(key) != "" && !technology.IsPractice(key) {
+			return true
+		}
+		for term := range technology.Mentions(skill) {
+			if !technology.IsPractice(term) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func sameSkill(profileName, postingSkill string) bool {

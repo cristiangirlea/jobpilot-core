@@ -482,6 +482,16 @@ can lack a comparison until the next scoring pass, and the summary counts only s
 from the job's current answer. The background write changes only the shadow column and prepares
 nothing. No trigger reads `job_matches`, so it opens, resolves and changes no notification.
 
+With an extraction, the skill match is the share of the posting's required entries (weight 2) and
+nice-to-have entries (weight 1) that the profile holds, where an entry is met by any of its
+alternatives. As with the rules, the share counts entries that name a technology from the
+vocabulary and entries the profile holds; ways of working are left out. Any other requirement,
+such as years of pre-sales work or communication skills, is listed among the missing skills when
+it is required, but it does not lower the score. A posting with nothing left to count scores the
+neutral 15. A stored comparison keeps the formula it was made with: after an upgrade that changes
+how the extraction scores, saving the profile, an exclusion or the active filter re-scores every
+match of that account before its summary is read.
+
 ## Application generation
 
 Generation is deterministic and requires no API key. It produces:
