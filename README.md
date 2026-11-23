@@ -323,6 +323,10 @@ Rejected jobs remain visible in `/jobs` so the user can understand the decision,
 Already-applied historical records and existing documents are retained for audit history. The backend is authoritative and returns HTTP `409 Conflict` for a blocked application action; hiding a UI button is not considered sufficient enforcement.
 
 Saving the profile or adding/removing a blacklist entry re-evaluates existing jobs immediately.
+The re-evaluation scores the jobs on every core and has one minute. Its matches are written
+together, all or none. If it fails, the change stays saved and the request answers `500` with
+the code `not_rescored`, saying the matches may not be re-scored; saving the profile again
+re-scores them.
 
 ## Filters
 

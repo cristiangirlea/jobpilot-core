@@ -3,9 +3,11 @@ package matching
 import (
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"jobpilot/core/api/internal/extraction"
 	"jobpilot/core/api/internal/models"
 )
 
@@ -509,4 +511,60 @@ func assertExtractionRejections(t *testing.T, got, rules models.Evaluation) {
 	if got.Rejected != rules.Rejected || !reflect.DeepEqual(got.RejectionReasons, rules.RejectionReasons) {
 		t.Fatalf("got rejected=%v, reasons=%v, want rejected=%v, reasons=%v", got.Rejected, got.RejectionReasons, rules.Rejected, rules.RejectionReasons)
 	}
+}
+
+// Every profile skill is compared with every alternative of every entry, so
+// what is read from an alternative must not be read again per skill.
+func BenchmarkScoreExtractedSkills(b *testing.B) {
+	names := []string{"Go", "Python", "PostgreSQL", "Docker", "Kubernetes", "AWS", "TypeScript", "React", "Terraform", "Kafka",
+		"Rust", "Java", "Spring Boot", "Node.js", "Redis", "GraphQL", "gRPC", "MongoDB", "Elasticsearch", "Ansible",
+		"software architecture", "team leadership", "mentoring", "distributed systems", "event-driven architecture",
+		"domain-driven design", "performance tuning", "technical writing", "system design", "data modelling"}
+	profile := make([]models.Skill, len(names))
+	for i, name := range names {
+		profile[i] = models.Skill{Name: name}
+	}
+	entry := func(quote string, skills ...string) models.ExtractedSkills {
+		return models.ExtractedSkills{Skills: skills, Quote: quote}
+	}
+	x := models.Extraction{
+		Required: []models.ExtractedSkills{
+			entry("Strong C++ or Rust development skills", "C++", "Rust"),
+			entry("Experience with AWS (EC2, S3) or Azure", "AWS (EC2, S3)", "Azure"),
+			entry("Proven track record of designing testable software architecture", "software architecture"),
+			entry("5+ years of technical pre-sales experience", "technical pre-sales experience"),
+			entry("Hands-on Kubernetes and Helm", "Kubernetes", "Helm"),
+			entry("First class written and oral communication skills", "written and oral communication skills"),
+			entry("Own the go-to-market strategy", "go-to-market strategy"),
+		},
+		NiceToHave: []models.ExtractedSkills{
+			entry("Kafka or RabbitMQ is a plus", "Kafka", "RabbitMQ"),
+			entry("Familiarity with machine learning (ML)", "machine learning (ML)"),
+			entry("Terraform or Pulumi", "Terraform", "Pulumi"),
+		},
+	}
+	b.Run("skills", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			scoreExtractedSkills(profile, x)
+		}
+	})
+	// The whole shadow pass for one job, as a re-score runs it.
+	b.Run("shadow", func(b *testing.B) {
+		quotes := ""
+		for _, entry := range append(append([]models.ExtractedSkills{}, x.Required...), x.NiceToHave...) {
+			quotes += entry.Quote + ". "
+		}
+		job := models.JobInput{Title: "Senior Backend Engineer", Company: "Brambleglass Labs", Description: strings.Repeat("Build reliable services for our customers across Europe. ", 40) + quotes}
+		p := models.Profile{Skills: profile, DesiredTitles: []string{"Backend Engineer"}, Seniorities: []string{"senior"}}
+		now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		rules := Evaluate(p, nil, nil, job, now)
+		answer := models.JobExtraction{Status: "ok", TextHash: extraction.Hash(job.Title, job.Description), Extraction: &x}
+		b.ReportAllocs()
+		for b.Loop() {
+			if Shadow(p, nil, nil, job, rules, answer, now) == nil {
+				b.Fatal("no shadow")
+			}
+		}
+	})
 }

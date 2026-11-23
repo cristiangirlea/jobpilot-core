@@ -23,10 +23,10 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 		{x.NiceToHave, 1, false},
 	} {
 		for _, entry := range group.entries {
-			options := make([]string, 0, len(entry.Skills))
+			options := make([]postingOption, 0, len(entry.Skills))
 			for _, option := range entry.Skills {
 				if containsPhrase(entry.Quote, option) && mentionsTechnology(option, entry.Quote) {
-					options = append(options, option)
+					options = append(options, readOption(option))
 				}
 			}
 			if onlyPractices(options) {
@@ -36,7 +36,7 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 			for _, skill := range profile {
 				name := strings.TrimSpace(skill.Name)
 				for _, option := range options {
-					if sameSkill(name, option) {
+					if option.sameSkill(name) {
 						matched = appendUnique(matched, name)
 						held = true
 						break
@@ -51,7 +51,11 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 			if held {
 				heldWeight += group.weight
 			} else if group.required {
-				missing = appendUnique(missing, strings.Join(options, " or "))
+				names := make([]string, len(options))
+				for i, option := range options {
+					names[i] = option.skill
+				}
+				missing = appendUnique(missing, strings.Join(names, " or "))
 			}
 		}
 	}
@@ -63,23 +67,38 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 	return int(math.Round(30 * float64(heldWeight) / float64(totalWeight))), matched, missing
 }
 
-func onlyPractices(skills []string) bool {
-	for _, skill := range skills {
-		if !technology.IsPractice(technology.Canonical(skill)) {
+// postingOption is one alternative of an extracted entry with what matching
+// reads from it. Every profile skill is compared with it, so its technologies
+// are read once here, not once per profile skill.
+type postingOption struct {
+	skill    string
+	key      string
+	mentions map[string]int
+	words    map[string]bool
+	text     string
+}
+
+func readOption(skill string) postingOption {
+	return postingOption{skill, technology.Canonical(skill), technology.Mentions(skill), words(skill), phraseText(skill)}
+}
+
+func onlyPractices(options []postingOption) bool {
+	for _, option := range options {
+		if !technology.IsPractice(option.key) {
 			return false
 		}
 	}
 	return true
 }
 
-// namesTechnology reports whether a skill names a vocabulary technology that
-// is not a way of working.
-func namesTechnology(skills []string) bool {
-	for _, skill := range skills {
-		if key := technology.Canonical(skill); technology.Name(key) != "" && !technology.IsPractice(key) {
+// namesTechnology reports whether an option names a vocabulary technology
+// that is not a way of working.
+func namesTechnology(options []postingOption) bool {
+	for _, option := range options {
+		if technology.Name(option.key) != "" && !technology.IsPractice(option.key) {
 			return true
 		}
-		for term := range technology.Mentions(skill) {
+		for term := range option.mentions {
 			if !technology.IsPractice(term) {
 				return true
 			}
@@ -100,7 +119,7 @@ func mentionsTechnology(skill string, texts ...string) bool {
 	return ok
 }
 
-func sameSkill(profileName, postingSkill string) bool {
+func (o postingOption) sameSkill(profileName string) bool {
 	if strings.TrimSpace(profileName) == "" {
 		return false
 	}
@@ -108,16 +127,16 @@ func sameSkill(profileName, postingSkill string) bool {
 	if technology.IsPractice(key) {
 		return false
 	}
-	if key == technology.Canonical(postingSkill) {
+	if key == o.key {
 		return true
 	}
-	if _, ok := technology.Mentions(postingSkill)[key]; ok {
+	if _, ok := o.mentions[key]; ok {
 		return true
 	}
 	if technology.HasEverydayUses(key) {
 		return false
 	}
-	return namesPhrase(profileName, words(postingSkill), phraseText(postingSkill))
+	return namesPhrase(profileName, o.words, o.text)
 }
 
 func scoreExtractedSeniority(wants []string, level string) int {

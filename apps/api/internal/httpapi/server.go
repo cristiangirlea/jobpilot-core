@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/mail"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -85,6 +87,17 @@ import (
 // These routes and fields do not raise Contract.
 const Contract = 15
 
+// NotRescored is the answer when a profile, exclusion or filter change was
+// saved but scoring the matches again failed or could not be confirmed, and
+// NotRescoredCode is its code in the answer, for a client that words it itself.
+const (
+	NotRescored     = "The change was saved, but your matches may not be re-scored. Save your profile again to re-score them."
+	NotRescoredCode = "not_rescored"
+)
+
+// errNotRescored marks that failure, so every route answers it the same way.
+var errNotRescored = errors.New("matches not re-scored")
+
 // ApprovalNeedsSession is the refusal an agent token gets from the approve route.
 const ApprovalNeedsSession = "Approve applications in the web app: approving one is your consent to send it, which an agent token cannot give."
 
@@ -103,6 +116,8 @@ type Server struct {
 	ExtractionModel string
 	// ExtractionScoring is shadow or empty.
 	ExtractionScoring string
+	// rescoreTimeout replaces the one minute a re-score may take, in tests.
+	rescoreTimeout time.Duration
 	// pendingJobs replaces the store's pending list in tests.
 	pendingJobs func(ctx context.Context, model, promptVersion string, limit int) ([]models.PendingExtraction, error)
 	// extractionCounts replaces the store's summary in tests.
@@ -669,9 +684,20 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 	// deadline starts once the lock is held, so waiting for a long pass
 	// cannot leave this repair without time to run.
 	defer s.Discovery.LockMatching(auth.UserID(r.Context()))()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), time.Minute)
+	timeout := s.rescoreTimeout
+	if timeout == 0 {
+		timeout = time.Minute
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
 	defer cancel()
-	uid := auth.UserID(ctx)
+	if err := s.rescore(ctx, auth.UserID(ctx)); err != nil {
+		// The change is saved either way, and the caller must say so.
+		return fmt.Errorf("%w: %v", errNotRescored, err)
+	}
+	return nil
+}
+
+func (s *Server) rescore(ctx context.Context, uid string) error {
 	profile, err := s.Store.Profile(ctx, uid)
 	if err != nil {
 		return err
@@ -701,15 +727,48 @@ func (s *Server) reevaluateJobs(r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	evaluations := make([]store.JobEvaluation, 0, len(jobs))
-	for _, item := range jobs {
-		rules := matching.Evaluate(profile, blacklist, filter, item.Job.JobInput, now)
-		evaluations = append(evaluations, store.JobEvaluation{
-			JobID: item.Job.ID, Evaluation: rules,
-			Shadow: matching.Shadow(profile, blacklist, filter, item.Job.JobInput, rules, answers[item.Job.ID], now),
-		})
+	// Scoring reads its inputs and writes one slot each, and is most of what a
+	// re-score costs.
+	evaluations := make([]store.JobEvaluation, len(jobs))
+	err = onEveryCore(ctx, len(jobs), func(i int) {
+		job := jobs[i].Job
+		rules := matching.Evaluate(profile, blacklist, filter, job.JobInput, now)
+		evaluations[i] = store.JobEvaluation{
+			JobID: job.ID, Evaluation: rules,
+			Shadow: matching.Shadow(profile, blacklist, filter, job.JobInput, rules, answers[job.ID], now),
+		}
+	})
+	if err != nil {
+		return err
 	}
 	return s.Store.SaveJobMatches(ctx, uid, filterID, evaluations)
+}
+
+// onEveryCore calls do(i) for every i below n, spread over the cores. It
+// returns ctx's error when ctx ended first, and an error when do panicked: a
+// panic in a goroutine of its own would end the process, not the request.
+func onEveryCore(ctx context.Context, n int, do func(i int)) error {
+	workers := min(runtime.GOMAXPROCS(0), n)
+	var wg sync.WaitGroup
+	var panicked atomic.Pointer[string]
+	for w := range workers {
+		wg.Go(func() {
+			defer func() {
+				if p := recover(); p != nil {
+					message := fmt.Sprint(p)
+					panicked.CompareAndSwap(nil, &message)
+				}
+			}()
+			for i := w; i < n && ctx.Err() == nil && panicked.Load() == nil; i += workers {
+				do(i)
+			}
+		})
+	}
+	wg.Wait()
+	if message := panicked.Load(); message != nil {
+		return fmt.Errorf("scoring panicked: %s", *message)
+	}
+	return ctx.Err()
 }
 
 func (s *Server) importJob(w http.ResponseWriter, r *http.Request) {
@@ -1153,6 +1212,10 @@ func problem(w http.ResponseWriter, status int, message string) {
 }
 func internal(w http.ResponseWriter, err error) {
 	slog.Error("request failed", "error", err)
+	if errors.Is(err, errNotRescored) {
+		write(w, 500, map[string]string{"error": NotRescored, "code": NotRescoredCode})
+		return
+	}
 	problem(w, 500, "An internal error occurred.")
 }
 func respond(w http.ResponseWriter, v any, err error) {

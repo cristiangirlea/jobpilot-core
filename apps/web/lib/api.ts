@@ -5,8 +5,11 @@ async function send(path:string,options:RequestInit={}){
   const response=await fetch(`${API}${path}`,{...options,headers,cache:"no-store"});
   if(response.status===401&&typeof window!=="undefined"&&!path.startsWith("/auth/")){localStorage.removeItem("jobpilot_token");window.location.href="/login";throw new Error("Session expired")}
   const data=response.status===204?null:await response.json().catch(()=>({error:"Unexpected server response"}));
-  if(!response.ok)throw new Error(data?.error||`Request failed (${response.status})`);return {data,response};
+  if(!response.ok)throw Object.assign(new Error(data?.error||`Request failed (${response.status})`),{code:data?.code});return {data,response};
 }
+// notRescored is true for the API's answer when a change was saved but the
+// matches could not be re-scored: its message then says all there is to say.
+export const notRescored=(e:unknown)=>e instanceof Error&&(e as Error&{code?:string}).code==="not_rescored";
 export async function api<T>(path:string,options:RequestInit={}):Promise<T>{return (await send(path,options)).data as T}
 // apiPage reads one page of a list and the count the API reports for the
 // whole list in X-Total-Count; without the header, the page is the list.

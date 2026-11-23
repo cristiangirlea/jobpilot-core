@@ -5,7 +5,7 @@ import {Shell} from "@/components/Shell";
 import {ProfileNav} from "@/components/ProfileNav";
 import {SkillCombobox} from "@/components/SkillCombobox";
 import {ErrorMessage,Field,Header} from "@/components/UI";
-import {api} from "@/lib/api";
+import {api,notRescored} from "@/lib/api";
 import {Skill,SkillSuggestion} from "@/lib/types";
 
 const blank=():Skill=>({name:"",level:"",years:0});
@@ -71,9 +71,10 @@ export default function SkillsPage(){
         setItems(list=>[...list.filter(x=>x.id!==saved.id),saved]);
       }catch(err){
         // The skill is saved before matches are re-scored, so a failure may
-        // come after it was stored. Ask the server rather than guess.
+        // come after it was stored. Where the API says so, its words stand;
+        // otherwise ask the server rather than guess.
         const stored=await loadSkills().then(list=>list.some(x=>x.name===skill.name)).catch(()=>false);
-        setError(stored?`${skill.name} was saved, but your matches were not re-scored: ${reason(err)}`:`${skill.name} was not saved: ${reason(err)}`);
+        setError(notRescored(err)?`${skill.name}: ${reason(err)}`:stored?`${skill.name} was saved, but your matches were not re-scored: ${reason(err)}`:`${skill.name} was not saved: ${reason(err)}`);
       }
       // A later edit of the same skill may be queued behind this one; leave it.
       setAdding(a=>{if(a[k]!==skill)return a;const next={...a};delete next[k];return next});
@@ -92,7 +93,7 @@ export default function SkillsPage(){
         loadSuggestions();
       }catch(err){
         const kept=await loadSkills().then(list=>list.some(x=>x.id===id)).catch(()=>true);
-        setError(kept?`${skill.name} was not removed: ${reason(err)}`:`${skill.name} was removed, but your matches were not re-scored: ${reason(err)}`);
+        setError(notRescored(err)?`${skill.name}: ${reason(err)}`:kept?`${skill.name} was not removed: ${reason(err)}`:`${skill.name} was removed, but your matches were not re-scored: ${reason(err)}`);
       }
       setRemoving(r=>r.filter(x=>x!==id));
     });
