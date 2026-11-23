@@ -65,6 +65,137 @@ var practices = map[string]bool{
 	"serverless": true, "ci/cd": true, "tdd": true, "agile": true, "scrum": true,
 }
 
+// everyday lists phrases in which a term is an ordinary word, not the
+// technology: a sales posting's "go live" asks for no Go. A phrase is ordinary
+// only where what follows agrees (see blankPhrase). A "go-to" compound is
+// ordinary too ("go-to-market", "the go-to engineer") unless it joins two
+// technologies ("Go-to-Python").
+var everyday = map[string][]string{
+	"go": {
+		"go to market", "go live", "go-live", "go getter", "go-getter", "on the go", "on-the-go",
+		"a go to", "the go to", "our go to", "your go to", "my go to", "their go to",
+	},
+}
+
+// HasEverydayUses reports whether term is also an ordinary word in some
+// phrases, so only Mentions can say whether a text names it.
+func HasEverydayUses(term string) bool { return everyday[term] != nil }
+
+// hyphens writes a non-breaking hyphen or an en dash as a hyphen.
+var hyphens = strings.NewReplacer("\u2010", "-", "\u2011", "-", "\u2013", "-")
+
+// withoutEveryday blanks term where it is an ordinary word in haystack, so
+// Count no longer finds it there.
+func withoutEveryday(haystack, term string) string {
+	text := haystack
+	if strings.ContainsAny(text, "\u2010\u2011\u2013") {
+		text = hyphens.Replace(text)
+	}
+	text = blankToCompounds(text, term)
+	for _, phrase := range everyday[term] {
+		text = blankPhrase(text, phrase, term)
+	}
+	return text
+}
+
+// blankPhrase blanks each whole-word occurrence of an everyday phrase unless
+// what follows says the term is the technology after all: after a phrase
+// ending in "to", a technology ("a Go to Python transpiler"); after "go live",
+// a hyphen joining on ("Go live-streaming"); after a phrase ending in the
+// term, more words ("on the Go runtime" against "on the go.").
+func blankPhrase(haystack, phrase, term string) string {
+	var out []byte
+	endsInTo := strings.HasSuffix(phrase, " to")
+	endsInLive := strings.HasSuffix(phrase, " live")
+	endsInTerm := strings.HasSuffix(phrase, " "+term)
+	for offset := 0; offset < len(haystack); {
+		index := strings.Index(haystack[offset:], phrase)
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		end := start + len(phrase)
+		offset = start + 1
+		if start == 0 || endsInWord(haystack[:start]) || startsInWord(haystack[end:]) {
+			continue
+		}
+		rest := haystack[end:]
+		next := strings.TrimLeft(rest, " ")
+		if endsInLive && strings.HasPrefix(rest, "-") || endsInTo && startsWithTerm(next) || endsInTerm && (strings.HasPrefix(rest, "-") || next != "" && isWordByte(next[0])) {
+			continue
+		}
+		if out == nil {
+			out = []byte(haystack)
+		}
+		for i := start; i < end; i++ {
+			out[i] = ' '
+		}
+	}
+	if out == nil {
+		return haystack
+	}
+	return string(out)
+}
+
+// blankToCompounds blanks term in each "term-to" compound whose next part,
+// if hyphenated on, is not a technology.
+func blankToCompounds(haystack, term string) string {
+	var out []byte
+	for offset := 0; offset < len(haystack); {
+		index := strings.Index(haystack[offset:], term)
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		end := start + len(term)
+		offset = start + 1
+		if start == 0 || endsInWord(haystack[:start]) {
+			continue
+		}
+		rest, ok := afterHyphen(haystack[end:])
+		if !ok || !strings.HasPrefix(rest, "to") || startsInWord(rest[2:]) {
+			continue
+		}
+		if next, ok := afterHyphen(rest[2:]); ok && startsWithTerm(next) {
+			continue
+		}
+		if out == nil {
+			out = []byte(haystack)
+		}
+		for i := start; i < end; i++ {
+			out[i] = ' '
+		}
+	}
+	if out == nil {
+		return haystack
+	}
+	return string(out)
+}
+
+func afterHyphen(s string) (string, bool) {
+	r, size := utf8.DecodeRuneInString(s)
+	switch r {
+	case '-', '\u2010', '\u2011', '\u2013':
+		return s[size:], true
+	}
+	return s, false
+}
+
+// startsWithTerm reports whether s starts with a whole vocabulary term,
+// reading hyphens as spaces ("sql-server").
+func startsWithTerm(s string) bool {
+	if len(s) > 32 {
+		s = s[:32]
+	}
+	s = strings.ReplaceAll(s, "-", " ")
+	for _, term := range terms {
+		if strings.HasPrefix(s, term) && !startsInWord(s[len(term):]) {
+			return true
+		}
+	}
+	return false
+}
+
 // Terms returns the vocabulary, aliases included, in its fixed order.
 func Terms() []string { return append([]string(nil), terms...) }
 
@@ -154,7 +285,11 @@ func Mentions(texts ...string) map[string]int {
 			if !present[leads[i]] {
 				continue
 			}
-			if n := Count(haystack, term); n > 0 {
+			text := haystack
+			if HasEverydayUses(term) {
+				text = withoutEveryday(haystack, term)
+			}
+			if n := Count(text, term); n > 0 {
 				counts[Canonical(term)] += n
 			}
 		}

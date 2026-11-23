@@ -318,3 +318,70 @@ func TestAccentedLettersStayInsideTheirWord(t *testing.T) {
 		t.Error("an excluded technology the posting names still rejects")
 	}
 }
+
+// A hyphen ends a word, so "go-to-market" asked a sales posting for Go: a
+// profile without Go lost points and one with Go matched it.
+func TestGoToMarketIsNotGo(t *testing.T) {
+	job := models.JobInput{Title: "Account Executive", Company: "Brambleglass Labs", Description: "Own the go-to-market strategy and go live with new regions."}
+	for _, skills := range [][]models.Skill{{{Name: "Python"}}, {{Name: "Go"}, {Name: "golang"}}} {
+		e := Evaluate(models.Profile{Skills: skills}, nil, nil, job, time.Now())
+		if e.Breakdown["skill_match"] != 15 || len(e.MatchedSkills) != 0 || len(e.MissingSkills) != 0 {
+			t.Errorf("skills %v: got skill_match %d, matched %v, missing %v; want the neutral 15 and no skills", skills, e.Breakdown["skill_match"], e.MatchedSkills, e.MissingSkills)
+		}
+	}
+	job.Description = "Own the go-to-market of our Go SDK."
+	e := Evaluate(models.Profile{Skills: []models.Skill{{Name: "Go"}}}, nil, nil, job, time.Now())
+	if e.Breakdown["skill_match"] != 30 || !reflect.DeepEqual(e.MatchedSkills, []string{"Go"}) {
+		t.Errorf("a real Go mention beside go-to-market: got skill_match %d, matched %v", e.Breakdown["skill_match"], e.MatchedSkills)
+	}
+}
+
+// A profile skill of several words still matches a hyphenated spelling.
+func TestHyphenatedSkillStillMatches(t *testing.T) {
+	job := models.JobInput{Title: "Backend Engineer", Company: "Brambleglass Labs", Description: "Services in Spring-Boot."}
+	profile := models.Profile{Skills: []models.Skill{{Name: "Spring Boot"}}}
+	if e := Evaluate(profile, nil, nil, job, time.Now()); !reflect.DeepEqual(e.MatchedSkills, []string{"Spring Boot"}) {
+		t.Errorf("rules matched %v, want [Spring Boot]", e.MatchedSkills)
+	}
+	x := models.Extraction{Required: []models.ExtractedSkills{{Skills: []string{"Spring-Boot"}, Quote: "Services in Spring-Boot."}}}
+	if e := EvaluateWith(profile, nil, nil, job, &x, time.Now()); e.Breakdown["skill_match"] != 30 || !reflect.DeepEqual(e.MatchedSkills, []string{"Spring Boot"}) {
+		t.Errorf("extraction scored %d and matched %v, want 30 and [Spring Boot]", e.Breakdown["skill_match"], e.MatchedSkills)
+	}
+}
+
+// Technology filters read go-to-market as no mention of Go, and a filter's
+// required skill Go is not found in it either.
+func TestTechnologyFiltersSkipGoInEverydayPhrases(t *testing.T) {
+	sales := models.JobInput{Title: "Account Executive", Company: "Brambleglass Labs", Description: "Own the go-to-market strategy."}
+	engineering := models.JobInput{Title: "Engineer", Company: "Brambleglass Labs", Description: "Own the go-to-market of our Go SDK."}
+	include := &models.FilterPreset{IncludedTechnologies: []string{"Go"}}
+	exclude := &models.FilterPreset{ExcludedTechnologies: []string{"Go"}}
+	if e := Evaluate(models.Profile{}, nil, include, sales, time.Now()); !e.Rejected {
+		t.Error("an include-Go filter accepts a posting that only says go-to-market")
+	}
+	if e := Evaluate(models.Profile{}, nil, exclude, sales, time.Now()); e.Rejected {
+		t.Errorf("an exclude-Go filter rejects a posting that only says go-to-market: %v", e.RejectionReasons)
+	}
+	if e := Evaluate(models.Profile{}, nil, include, engineering, time.Now()); e.Rejected {
+		t.Errorf("an include-Go filter rejects a posting that names Go: %v", e.RejectionReasons)
+	}
+	if e := Evaluate(models.Profile{}, nil, exclude, engineering, time.Now()); !e.Rejected {
+		t.Error("an exclude-Go filter accepts a posting that names Go")
+	}
+	required := &models.FilterPreset{RequiredSkills: []string{"Go"}}
+	if e := Evaluate(models.Profile{}, nil, required, sales, time.Now()); e.Breakdown["skill_match"] != 15 || len(e.MissingSkills) != 0 {
+		t.Errorf("a required filter skill Go was read in go-to-market: skill_match %d, missing %v", e.Breakdown["skill_match"], e.MissingSkills)
+	}
+}
+
+// The filters read the title and the description apart, so a title ending in
+// Go and a description starting with "Live" do not make "go live".
+func TestTechnologyFiltersReadTitleAndDescriptionApart(t *testing.T) {
+	job := models.JobInput{Title: "Backend Engineer Go", Company: "Brambleglass Labs", Description: "Live services at scale."}
+	if e := Evaluate(models.Profile{}, nil, &models.FilterPreset{IncludedTechnologies: []string{"Go"}}, job, time.Now()); e.Rejected {
+		t.Errorf("an include-Go filter rejects a posting whose title names Go: %v", e.RejectionReasons)
+	}
+	if e := Evaluate(models.Profile{}, nil, &models.FilterPreset{ExcludedTechnologies: []string{"Go"}}, job, time.Now()); !e.Rejected {
+		t.Error("an exclude-Go filter accepts a posting whose title names Go")
+	}
+}

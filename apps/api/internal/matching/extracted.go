@@ -25,7 +25,7 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 		for _, entry := range group.entries {
 			options := make([]string, 0, len(entry.Skills))
 			for _, option := range entry.Skills {
-				if containsPhrase(entry.Quote, option) {
+				if containsPhrase(entry.Quote, option) && mentionsTechnology(option, entry.Quote) {
 					options = append(options, option)
 				}
 			}
@@ -88,6 +88,18 @@ func namesTechnology(skills []string) bool {
 	return false
 }
 
+// mentionsTechnology reports whether texts can name skill: a technology that
+// is also an everyday word only where the vocabulary finds it, any other
+// skill always. Each text is read on its own.
+func mentionsTechnology(skill string, texts ...string) bool {
+	key := technology.Canonical(skill)
+	if !technology.HasEverydayUses(key) {
+		return true
+	}
+	_, ok := technology.Mentions(texts...)[key]
+	return ok
+}
+
 func sameSkill(profileName, postingSkill string) bool {
 	if strings.TrimSpace(profileName) == "" {
 		return false
@@ -101,6 +113,9 @@ func sameSkill(profileName, postingSkill string) bool {
 	}
 	if _, ok := technology.Mentions(postingSkill)[key]; ok {
 		return true
+	}
+	if technology.HasEverydayUses(key) {
+		return false
 	}
 	return namesPhrase(profileName, words(postingSkill), phraseText(postingSkill))
 }

@@ -173,6 +173,28 @@ func TestScoreExtractedSkills(t *testing.T) {
 			missing: []string{"stakeholder management or Kotlin"},
 		},
 		{
+			name:    "go-to-market is not Go",
+			profile: []models.Skill{{Name: "Python"}, {Name: "Go"}},
+			x: models.Extraction{Required: []models.ExtractedSkills{
+				{Skills: []string{"Python"}, Quote: "Python required"},
+				{Skills: []string{"go-to-market strategy"}, Quote: "Experience with go-to-market strategy"},
+			}},
+			score:   30,
+			matched: []string{"Python"},
+			missing: []string{"go-to-market strategy"},
+		},
+		{
+			name:    "a Go option quoting go-to-market carries no weight",
+			profile: []models.Skill{{Name: "Python"}, {Name: "Go"}},
+			x: models.Extraction{Required: []models.ExtractedSkills{
+				{Skills: []string{"Python"}, Quote: "Python required"},
+				{Skills: []string{"Go"}, Quote: "Experience with go-to-market strategy"},
+			}},
+			score:   30,
+			matched: []string{"Python"},
+			missing: []string{},
+		},
+		{
 			name:    "only requirements that are not technologies",
 			profile: []models.Skill{{Name: "Go"}},
 			x: models.Extraction{

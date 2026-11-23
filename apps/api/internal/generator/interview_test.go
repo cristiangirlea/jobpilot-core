@@ -158,3 +158,13 @@ func TestInterviewMentionsDoNotReadInsideAnAccentedWord(t *testing.T) {
 		t.Error("a posting that names Go mentions it")
 	}
 }
+
+// A project about a go-to-market rollout is no evidence for a Go requirement.
+func TestInterviewMentionsSkipGoInEverydayPhrases(t *testing.T) {
+	if interviewMentions("Led the go-to-market rollout", "Go") {
+		t.Error("go-to-market does not mention Go")
+	}
+	if !interviewMentions("Led the go-to-market rollout of our Go SDK", "golang") {
+		t.Error("a project that also names Go mentions it")
+	}
+}

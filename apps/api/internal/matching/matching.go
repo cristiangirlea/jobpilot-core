@@ -226,11 +226,11 @@ func applyHardFilters(e *models.Evaluation, f models.FilterPreset, j models.JobI
 		e.RejectionReasons = appendUnique(e.RejectionReasons, "Industry is excluded")
 	}
 	jobText := j.Title + " " + j.Description
-	if len(f.IncludedTechnologies) > 0 && !anyContains(jobText, f.IncludedTechnologies) {
+	if len(f.IncludedTechnologies) > 0 && !anyTechnology(j, f.IncludedTechnologies) {
 		e.RejectionReasons = appendUnique(e.RejectionReasons, "Job does not mention any required technology: "+strings.Join(f.IncludedTechnologies, ", "))
 	}
 	for _, technology := range f.ExcludedTechnologies {
-		if containsPhrase(jobText, technology) {
+		if containsPhrase(jobText, technology) && mentionsTechnology(technology, j.Title, j.Description) {
 			e.RejectionReasons = appendUnique(e.RejectionReasons, "Job mentions an excluded technology: "+technology)
 		}
 	}
@@ -296,6 +296,8 @@ func scoreSkills(profile []models.Skill, required []string, title, description s
 	}
 	// Skills outside the vocabulary count where the job names them: the
 	// filter's, which say what matters to the user, and the profile's own.
+	// A technology that is also an everyday word is asked for only where
+	// the vocabulary finds it.
 	named := append([]string(nil), required...)
 	for _, name := range held {
 		named = append(named, name)
@@ -303,7 +305,7 @@ func scoreSkills(profile []models.Skill, required []string, title, description s
 	for _, name := range named {
 		name = strings.TrimSpace(name)
 		key := technology.Canonical(name)
-		if _, ok := asked[key]; ok || name == "" || technology.IsPractice(key) || !namesPhrase(name, jobWords, jobText) {
+		if _, ok := asked[key]; ok || name == "" || technology.IsPractice(key) || technology.HasEverydayUses(key) || !namesPhrase(name, jobWords, jobText) {
 			continue
 		}
 		asked[key] = ask{name, 1}
@@ -481,6 +483,15 @@ func phraseText(text string) string {
 func containsPhrase(text, phrase string) bool {
 	phrase = strings.Join(splitWords(strings.ToLower(phrase)), " ")
 	return phrase != "" && strings.Contains(phraseText(text), " "+phrase+" ")
+}
+func anyTechnology(j models.JobInput, list []string) bool {
+	text := j.Title + " " + j.Description
+	for _, x := range list {
+		if anyContains(text, []string{x}) && mentionsTechnology(x, j.Title, j.Description) {
+			return true
+		}
+	}
+	return false
 }
 func anyContains(text string, list []string) bool {
 	for _, x := range list {

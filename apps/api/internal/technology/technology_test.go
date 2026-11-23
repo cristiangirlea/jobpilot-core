@@ -1,6 +1,7 @@
 package technology
 
 import (
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -61,6 +62,73 @@ func TestMentionsDoNotReadInsideAnAccentedWord(t *testing.T) {
 		if got := Mentions(text); got["go"] != 1 || got["rust"] != 1 {
 			t.Errorf("Mentions(%q) = %v, want go and rust once each", text, got)
 		}
+	}
+}
+
+// A hyphen ends a word, so a sales posting's "go-to-market" asked for Go.
+func TestMentionsSkipGoInEverydayPhrases(t *testing.T) {
+	for _, text := range []string{
+		"Own the go-to-market strategy.",
+		"Shape our Go-To-Market plan and go to market fast.",
+		"You are the go-to person for releases before go-live.",
+		"We go live in May; a go-getter who works on the go.",
+		"Own the go\u2011to\u2011market strategy.", // non-breaking hyphens
+		"Own the go\u2010to\u2013market strategy.",
+		"Our go-to market motion, on-the-go.",
+		"Be the go-to engineer for escalations.",
+		"You will be our go to person for escalations.",
+		"Our go-to tools, go-to-guide.",
+		"Be the go\u2013to person.",
+		"Be the go-to.",
+		"Work on the go.",
+		"Work on the go",
+		"On-the-go access for field teams.",
+		"Looking for a real go getter.",
+		"We go live spring 2027.",
+		"We go to market spring 2027.",
+		"We go to market-entry next quarter.",
+	} {
+		if got := Mentions(text); got["go"] != 0 {
+			t.Errorf("Mentions(%q) = %v, want no go", text, got)
+		}
+	}
+	for text, want := range map[string]int{
+		"Go":                                                             1,
+		"Experience with Go and Rust.":                                   1,
+		"Go in an agile team":                                            1,
+		"Golang services, go-to-market too":                              1,
+		"We build go-toolchain plugins in Go":                            2,
+		"Own the go-to-market of our Go SDK.":                            1,
+		"Maintain a Go-to-Python transpiler.":                            1,
+		"Port Go-to-Node.js bridges.":                                    1,
+		"Maintain a Go-to-SQL Server connector.":                         1,
+		"Transpile Go to source code in the target language.":            1,
+		"Go to production twice a day.":                                  1,
+		"A Go-to-Python transpiler for our go\u2011to\u2011market team.": 1,
+		"Maintain a Go to Python transpiler.":                            1,
+		"Lead the Go to Rust migration.":                                 1,
+		"Services built on the Go runtime.":                              1,
+		"Build Go live-streaming services.":                              1,
+		"Maintain a Go-to-SQL-Server connector.":                         1,
+		"We write Go.":                                                   1,
+		"Work on the go and stay connected.":                             1, // more words follow: read as Go, as before
+		"Services built on the Go-based platform.":                       1,
+	} {
+		if got := Mentions(text)["go"]; got != want {
+			t.Errorf("Mentions(%q)[go] = %d, want %d", text, got, want)
+		}
+	}
+	if got := Signature(0, "Account Executive", "Own the go-to-market strategy in Salesforce."); len(got) != 0 {
+		t.Errorf("signature of a posting with only go-to-market = %v, want none", got)
+	}
+	if got := Signature(0, "Engineer", "Kafka for our go-to-market team."); !reflect.DeepEqual(got, []string{"kafka"}) {
+		t.Errorf("signature = %v, want [kafka]", got)
+	}
+	if got := Signature(0, "Engineer", "Go and Kafka for our go-to-market team."); !reflect.DeepEqual(got, []string{"go", "kafka"}) {
+		t.Errorf("signature = %v, want [go kafka]", got)
+	}
+	if !HasEverydayUses("go") || HasEverydayUses("rust") {
+		t.Error("only go has everyday uses")
 	}
 }
 

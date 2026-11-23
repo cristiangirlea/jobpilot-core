@@ -146,6 +146,10 @@ func interviewRequirements(posting models.JobWithMatch) []string {
 }
 
 func interviewMentions(text, requirement string) bool {
+	if key := technology.Canonical(requirement); technology.HasEverydayUses(key) {
+		_, ok := technology.Mentions(text)[key]
+		return ok
+	}
 	if technology.Count(strings.ToLower(text), strings.ToLower(requirement)) > 0 {
 		return true
 	}
