@@ -198,3 +198,39 @@ func TestParseKeepsBulletsAfterASidebarHeading(t *testing.T) {
 		t.Fatalf("the bullet after a sidebar heading was lost: %+v", p.Experiences)
 	}
 }
+
+func TestParseKeepsWrappedBulletEndingsAndStopsAtOtherSections(t *testing.T) {
+	p := Parse("EXPERIENCE\nExample | Platform Engineer | 2020 - 2022\n" +
+		"- Moved the test suite onto parallel\nrunners.\n" +
+		"- Added monitoring for services running on\nAWS EKS.\n2\n" +
+		"TECHNICAL SKILLS\nCloud: AWS and two other cloud providers\n" +
+		"INDEPENDENT ENGINEERING & OPEN SOURCE\n- Built a private project unrelated to this job.")
+	want := "- Moved the test suite onto parallel runners.\n- Added monitoring for services running on AWS EKS."
+	if len(p.Experiences) != 1 || p.Experiences[0].Description != want {
+		t.Fatalf("roles = %+v, want only the two complete employment bullets", p.Experiences)
+	}
+}
+
+func TestSidebarListStaysOutOfEmployment(t *testing.T) {
+	p := Parse("EXPERIENCE\nExample | Platform Engineer | 2021 - 2022\n" +
+		"TECHNICAL SKILLS\n- Python\nSQL\nRust\n- Docker, Redis, Kafka, Go, Python and SQL.\n" +
+		"LANGUAGES\n- English: fluent\n- Owned the invoice export and its\nretries.\n" +
+		"CONTACT\n- Led the database migration.\n- Reduced downtime for the team in 2019 - 2020.")
+	want := "- Owned the invoice export and its retries.\n- Led the database migration.\n- Reduced downtime for the team in 2019 - 2020."
+	if len(p.Experiences) != 1 || p.Experiences[0].Description != want {
+		t.Fatalf("unexpected employment history: %+v", p.Experiences)
+	}
+}
+
+func TestDatedProjectsStayOutOfEmployment(t *testing.T) {
+	p := Parse("EXPERIENCE\nAcme | Platform Engineer | 2021 - 2022\n" +
+		"- Built the billing service.\nINDEPENDENT ENGINEERING & OPEN SOURCE\n" +
+		"Home Dashboard\n2020 - 2021\n- Built a weather dashboard.\n" +
+		"Community App | Lead Developer | 2018 - 2020\n- Built a local event calendar.\n" +
+		"PROFESSIONAL EXPERIENCE - CONTINUED\nGlobex | Backend Engineer | 2015 - 2017\n" +
+		"- Maintained the partner API.")
+	if len(p.Experiences) != 2 || p.Experiences[0].Description != "- Built the billing service." ||
+		p.Experiences[1].Company != "Globex" || p.Experiences[1].Description != "- Maintained the partner API." {
+		t.Fatalf("unexpected employment history: %+v", p.Experiences)
+	}
+}

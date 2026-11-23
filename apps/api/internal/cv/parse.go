@@ -72,7 +72,8 @@ var sectionHeadings = map[string]string{
 	"languages": "languages", "certifications": "certifications", "certificates": "certifications",
 	"contact": "contact", "contact details": "contact",
 	"projects": "projects", "personal projects": "projects",
-	"selected projects": "projects", "key projects": "projects", "open source": "projects", "publications": "projects",
+	"independent engineering & open source": "projects",
+	"selected projects":                     "projects", "key projects": "projects", "open source": "projects", "publications": "projects",
 }
 
 // Parse turns extracted CV text into candidate facts. It is deterministic and
@@ -156,10 +157,8 @@ func groupSections(lines []string) map[string][]string {
 // so a long line that merely contains the word "experience" is not one.
 func headingFor(line string) (string, bool) {
 	candidate := strings.ToLower(strings.Trim(line, " :-—–"))
-	if len(candidate) <= 32 {
-		if section, ok := sectionHeadings[candidate]; ok {
-			return section, true
-		}
+	if section, ok := sectionHeadings[candidate]; ok {
+		return section, true
 	}
 	// "SELECTED PROJECTS & OPEN SOURCE (github.com/someone)": a heading set in
 	// capitals may run on past its keyword, so its start is matched instead.

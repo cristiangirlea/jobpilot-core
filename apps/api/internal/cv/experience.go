@@ -22,7 +22,7 @@ import (
 func (p *Parsed) parseExperience(lines []string) {
 	type block struct {
 		title, company, start, end string
-		body                       []string
+		body                       [][]string
 	}
 	var blocks []block
 	previous := ""
@@ -31,21 +31,36 @@ func (p *Parsed) parseExperience(lines []string) {
 	// role is not read as its bullets. Sidebar headings (SKILLS, LANGUAGES,
 	// CONTACT) do not: a two-column PDF can put them between a role and its
 	// bullets.
-	inOtherSection := false
-	for _, line := range unwrapRoleHeaders(lines) {
-		if title, company, start, end, ok := roleHeading(line); ok {
-			blocks = append(blocks, block{title: title, company: company, start: start, end: end})
-			previous, inOtherSection = line, false
-			continue
-		}
+	inOtherSection, inProjects := false, false
+	sidebar, inBullet := false, false
+	headers := unwrapRoleHeaders(lines)
+	for i, line := range headers {
 		if section, ok := headingFor(line); ok {
+			sidebar, inBullet = false, false
 			switch section {
 			case "experience":
-				inOtherSection = false
-			case "education", "projects", "certifications":
+				inOtherSection, inProjects = false, false
+			case "projects":
+				inProjects = true
+			case "education", "certifications":
 				inOtherSection = true
+			case "skills", "languages", "contact":
+				sidebar = true
 			}
 			previous = line
+			continue
+		}
+		if inProjects {
+			continue
+		}
+		marker := bulletMarker(line)
+		if sidebar && marker != "" && !resumesExperience(strings.TrimSpace(strings.TrimPrefix(line, marker))) {
+			continue
+		}
+		if title, company, start, end, ok := roleHeading(line); ok && marker == "" {
+			blocks = append(blocks, block{title: title, company: company, start: start, end: end})
+			previous, inOtherSection = line, false
+			sidebar, inBullet = false, false
 			continue
 		}
 		// Plenty of layouts put the dates on their own line under the job title.
@@ -55,27 +70,52 @@ func (p *Parsed) parseExperience(lines []string) {
 		// exclude a university as though it were an employer.
 		if start, end, ok := bareDateRange(line); ok && isRoleTitleLine(previous) {
 			blocks = append(blocks, block{title: strings.TrimSpace(previous), start: start, end: end})
+			inOtherSection, sidebar, inBullet = false, false, false
 			previous = line
 			continue
 		}
-		if len(blocks) > 0 && !inOtherSection && isRoleContent(line) {
+		if i+1 < len(headers) && isRoleTitleLine(line) {
+			if _, _, dated := bareDateRange(headers[i+1]); dated {
+				previous = line
+				continue
+			}
+		}
+		if len(blocks) > 0 && !inOtherSection && strings.Trim(line, "0123456789") != "" {
 			current := &blocks[len(blocks)-1]
-			current.body = append(current.body, line)
+			switch {
+			case marker != "":
+				sidebar, inBullet = false, true
+				current.body = append(current.body, []string{line})
+			case sidebar:
+				// A skill or language list is not part of the preceding job.
+			case inBullet && !strings.Contains(line, "|") && !skillsPrefix.MatchString(line):
+				// Keep even one-word endings. Limit the number of logical
+				// bullets below, rather than cutting a sentence at a PDF wrap.
+				last := len(current.body) - 1
+				current.body[last] = append(current.body[last], line)
+			case isRoleContent(line):
+				inBullet = false
+				current.body = append(current.body, []string{line})
+			}
 		}
 		previous = line
 	}
 	for index, b := range blocks {
+		body := make([]string, len(b.body))
+		for i, fragments := range b.body {
+			body[i] = strings.Join(fragments, " ")
+		}
 		experience := models.WorkExperience{
 			Title:       b.title,
 			Company:     b.company,
 			StartDate:   b.start,
 			EndDate:     normalizeEnd(b.end),
 			Current:     isPresent(b.end),
-			Description: strings.Join(compact(b.body, 40), "\n"),
+			Description: strings.Join(compact(body, 40), "\n"),
 		}
 		// A "Project | Client | Employer" line names the employer last, and the
 		// employer is what must be excluded from future job matches.
-		for _, line := range b.body {
+		for _, line := range body {
 			if experience.Company != "" {
 				break
 			}
@@ -126,6 +166,19 @@ func roleHeading(line string) (title, company, start, end string, ok bool) {
 
 // roleWords mark the part of a piped header that is the job title.
 var roleWords = regexp.MustCompile(`(?i)\b(engineer|developer|architect|lead|manager|consultant|analyst|designer|scientist|intern|head|director|officer|cto|founder|specialist|administrator|programmer|devops|sre|tester|owner|researcher)\b`)
+
+// A two-column export may resume an employer's bullets immediately after a
+// sidebar. Require evidence of an accomplishment before leaving the sidebar.
+var experienceAction = regexp.MustCompile(`(?i)^(?:I\s+)?(?:architected|automated|built|created|cut|delivered|deployed|designed|developed|drove|fixed|implemented|improved|increased|integrated|introduced|launched|led|maintained|mentored|migrated|operated|optimized|optimised|owned|rebuilt|reduced|replaced|scaled|shipped|supported|tested|wrote)\s`)
+
+func resumesExperience(text string) bool {
+	if experienceAction.MatchString(text) {
+		return true
+	}
+	// An unfamiliar verb or language can still introduce a full sentence.
+	// Keep comma-separated technologies and labeled proficiencies in the sidebar.
+	return looksLikeSentence(text) && !strings.ContainsAny(text, ",:;|@")
+}
 
 // pipedRole picks the title and employer out of "Company | Title | Location".
 // The title is the part that names a role; the employer is the first other
