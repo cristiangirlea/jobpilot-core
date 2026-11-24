@@ -99,12 +99,16 @@ func TestAccountQuietSettingsPostgres(t *testing.T) {
 	}
 }
 
-type followUpAI struct{ calls atomic.Int32 }
+type followUpAI struct {
+	calls    atomic.Int32
+	deadline time.Time
+}
 
 func (p *followUpAI) Name() string  { return "fake" }
 func (p *followUpAI) Model() string { return "test" }
-func (p *followUpAI) Complete(context.Context, llm.Request) (string, error) {
+func (p *followUpAI) Complete(ctx context.Context, _ llm.Request) (string, error) {
 	p.calls.Add(1)
+	p.deadline, _ = ctx.Deadline()
 	return "Invented claim about Kubernetes.", nil
 }
 
@@ -141,7 +145,8 @@ func TestFollowUpRoutesAgainstPostgres(t *testing.T) {
 	}
 	a, m := app(admin.ID), app(member.ID)
 	provider := &followUpAI{}
-	h := (&Server{Store: st, Secret: "followup-test", AdminEmails: []string{admin.Email}, UserAgentTokens: TokensWrite, LLM: llm.New(provider, nil, 0, 0)}).Handler()
+	const modelBudget = 30 * time.Second
+	h := (&Server{Store: st, Secret: "followup-test", AdminEmails: []string{admin.Email}, UserAgentTokens: TokensWrite, LLM: llm.New(provider, nil, 0, 0), ModelBudget: modelBudget}).Handler()
 	path := func(id string) string { return "/api/applications/" + id + "/follow-up" }
 	if w := call(t, h, "POST", path(a.ID), adminToken, `{}`); w.Code != 409 {
 		t.Fatal(w.Code, w.Body)
@@ -163,7 +168,7 @@ func TestFollowUpRoutesAgainstPostgres(t *testing.T) {
 	}
 	for range 2 {
 		w := call(t, h, "POST", path(m.ID), memberToken, `{}`)
-		if w.Code != 201 || strings.Contains(w.Body.String(), "Kubernetes") {
+		if w.Code != 201 || strings.Contains(w.Body.String(), "Kubernetes") || !strings.Contains(w.Body.String(), `"source":"template"`) {
 			t.Fatal(w.Code, w.Body)
 		}
 	}
@@ -180,11 +185,15 @@ func TestFollowUpRoutesAgainstPostgres(t *testing.T) {
 	if e = json.Unmarshal(w.Body.Bytes(), &detail); e != nil || w.Code != 200 || len(detail.FollowUps) != 2 {
 		t.Fatal(w.Code, w.Body, e)
 	}
+	start := time.Now()
 	if w := call(t, h, "POST", path(a.ID), adminToken, `{}`); w.Code != 201 || strings.Contains(w.Body.String(), "Kubernetes") {
 		t.Fatal(w.Code, w.Body)
 	}
 	if provider.calls.Load() != 1 {
 		t.Fatal("admin provider not used")
+	}
+	if provider.deadline.Before(start.Add(modelBudget)) || provider.deadline.After(time.Now().Add(modelBudget)) {
+		t.Fatalf("provider deadline %v outside the request's model budget", provider.deadline)
 	}
 	if _, e = st.SaveJobMatch(ctx, admin.ID, a.JobID, models.Evaluation{Rejected: true, RejectionReasons: []string{"Excluded company"}}, ""); e != nil {
 		t.Fatal(e)

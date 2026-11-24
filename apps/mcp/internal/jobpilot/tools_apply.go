@@ -99,7 +99,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:        "get_ai_status",
 		Title:       "Get AI adapter status",
-		Description: "Report whether an AI provider is configured. When it is not, every answer and cover letter is deterministic, so no text is model-written and nothing carries the ai source.",
+		Description: "Report whether an AI provider is configured and which backup provider and model are available. With AI disabled, every answer and cover letter is deterministic.",
 		Annotations: readOnly("Get AI adapter status"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, AIStatus, error) {
 		out, err := c.AIStatus(ctx)
@@ -135,7 +135,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 		Name:  "resolve_screening_answers",
 		Title: "Answer screening questions",
 		Description: "Answer a job's screening questions from the profile and the answer bank, falling back to the AI adapter and then to templates. " +
-			"Every resolution says where it came from (source: profile, bank, bank_similar, ai, template, or unanswered) and whether it still needs review. Anything marked needs_review is a draft: show the user its exact wording before it is used anywhere, and approve it with approve_answer only once they confirm. " +
+			"Every resolution says where it came from (source: profile, bank, bank_similar, ai, ai_backup, template, or unanswered) and whether it still needs review. ai_backup: written by the backup model; the user must read and approve it. Anything marked needs_review is a draft: show the user its exact wording before it is used anywhere, and approve it with approve_answer only once they confirm. " +
 			"Questions about protected characteristics are never answered, and declarations the user must make personally are left blank on purpose.",
 		// Drafts are persisted unapproved, which is a write.
 		Annotations: writeTool("Answer screening questions", false),
@@ -287,8 +287,8 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:  "tailor_cv_for_job",
 		Title: "Choose or write a CV for a job",
-		Description: "Decide which CV suits a job: keep the base one, reuse an earlier tailored one, or write a new one (decision: base, reused, or generated, with alignment from 0 to 1). Every role, employer, date and bullet is carried over unchanged; only the summary and emphasis differ. " +
-			"A newly written CV is unapproved until the user reads it. Refused for rejected jobs.",
+		Description: "Choose a CV for a job (decision: base, reused, or generated, with alignment from 0 to 1). Every role, employer, date and bullet is carried over unchanged; only the summary and emphasis differ. " +
+			"Check summary_source for ai_backup: written by the backup model; the user must read and approve it. A newly written CV is unapproved until the user reads it. Refused for rejected jobs.",
 		Annotations: writeTool("Choose or write a CV for a job", true),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in jobInput) (*mcp.CallToolResult, TailoredCV, error) {
 		if strings.TrimSpace(in.JobID) == "" {
@@ -336,7 +336,7 @@ func addApplyTools(s *mcp.Server, c *Client) {
 	addTool(s, &mcp.Tool{
 		Name:  "get_outbox_entry",
 		Title: "Get a composed application",
-		Description: "Return one composed application in full: the cover letter (cover_letter_source: ai or template), every form answer with where it came from (source: profile, bank, bank_similar, ai, template, cv, cover_letter, declaration, or unanswered), and any blockers or notices. " +
+		Description: "Return one composed application in full: the cover letter (cover_letter_source: ai, ai_backup or template), every form answer with where it came from (source: profile, bank, bank_similar, ai, ai_backup, template, cv, cover_letter, declaration, or unanswered), and any blockers or notices. ai_backup: written by the backup model; the user must read and approve it. " +
 			"Anything marked needs_review is a draft the user must read. Never describe an entry as approved or sent.",
 		Annotations: readOnly("Get a composed application"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in outboxInput) (*mcp.CallToolResult, OutboxDetail, error) {

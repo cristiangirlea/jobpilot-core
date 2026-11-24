@@ -163,6 +163,16 @@ func TestOutboxApprovalAgainstPostgres(t *testing.T) {
 
 	// Required drafts someone has to have read.
 	draft := newDraft("Why do you want this role?", false)
+	backupDraft := draft
+	backupDraft.ID = ""
+	backupDraft.QuestionNormalized += " backup"
+	backupDraft.Source = "ai_backup"
+	backupDraft, err = st.SaveAnswer(ctx, ana.ID, backupDraft)
+	if err != nil || backupDraft.Source != "ai_backup" || backupDraft.Approved {
+		t.Fatalf("saving an unapproved backup draft: %+v, %v", backupDraft, err)
+	}
+	withBackup := compose(job, cv.ID, []models.OutboxAnswer{required("Why this role?", backupDraft.Source, backupDraft.Answer, backupDraft.ID)})
+	refuses("a required backup AI draft not approved", withBackup, "not approved")
 	withDraft := compose(job, cv.ID, []models.OutboxAnswer{required("Why this role?", "ai", draft.Answer, draft.ID)})
 	refuses("a required AI draft not approved", withDraft, "not approved")
 	if _, err := st.UpdateAnswer(ctx, ana.ID, draft.ID, "", true, "", ""); err != nil {

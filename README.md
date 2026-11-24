@@ -528,7 +528,9 @@ Providers:
 | `cli` | Runs an installed agent CLI (`claude`, `codex`) as a subprocess. Billed against a subscription rather than per token. |
 | `ollama` | A local Ollama server. Private, but output quality depends on local hardware. |
 
-Every completion is cached in `llm_cache`, keyed on provider, model, task, system prompt, and prompt, so an identical request is never paid for twice. Changing the model changes the key, so a switch cannot serve another model's answer. A rolling per-hour call budget bounds runaway usage; cache hits do not consume it.
+Every completion is cached in `llm_cache`, keyed on provider, model, task, system prompt, and prompt. A rolling per-hour call budget charges one unit per primary cache miss.
+
+With `LLM_PROVIDER=cli`, set `LLM_BACKUP_PROVIDER=ollama` and choose a model with `LLM_BACKUP_MODEL` to enable the backup. It uses `LLM_OLLAMA_URL` and its own `LLM_BACKUP_TIMEOUT_SECONDS` (default 180). Only a failed or empty primary response on an active request triggers the backup, which checks its own cache first. Its drafts carry the source `ai_backup` and always need the user's review and approval.
 
 `GET /api/ai/status` reports what is actually wired up.
 
@@ -1245,7 +1247,7 @@ Set either the value or its file path, never both; files must be non-empty and a
 
 ### AI environment
 
-All optional. `LLM_PROVIDER=none` is the default and keeps the API fully deterministic.
+All optional. `LLM_PROVIDER=none` is the default and keeps the API fully deterministic. A request spends at most `LLM_TIMEOUT_SECONDS` plus `LLM_BACKUP_TIMEOUT_SECONDS` (when the Ollama backup is enabled) on the model in total. Once that time runs out, the remaining drafts use templates. Keep the sum under about five minutes for MCP's six-minute calls.
 
 | Variable | Purpose |
 |---|---|

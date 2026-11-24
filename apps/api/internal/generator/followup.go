@@ -68,7 +68,7 @@ func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, s
 			// Restrict provider output to verified wording rather than trusting factual claims.
 			withoutQuote := strings.Join([]string{opening, subject, request, closing}, "\n\n")
 			if text == fallback || text == withoutQuote {
-				return text, LetterSourceAI
+				return text, letterSource(result)
 			}
 		}
 	}
@@ -77,7 +77,7 @@ func FollowUp(ctx context.Context, client *llm.Client, profile models.Profile, s
 
 func quotableFollowUpAnswer(label, text, source string) bool {
 	switch source {
-	case "bank", "bank_similar", "ai", "template":
+	case "bank", "bank_similar", LetterSourceAI, LetterSourceAIBackup, LetterSourceTemplate:
 	default:
 		return false
 	}

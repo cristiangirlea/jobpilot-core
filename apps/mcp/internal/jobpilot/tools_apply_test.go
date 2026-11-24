@@ -15,7 +15,7 @@ import (
 // applyRoutes adds the apply-engine endpoints to the fake API.
 func (f *fakeAPI) applyRoutes(m *http.ServeMux, send func(http.ResponseWriter, int, string)) {
 	m.HandleFunc("GET /api/ai/status", func(w http.ResponseWriter, r *http.Request) {
-		send(w, 200, `{"enabled":false,"provider":"none"}`)
+		send(w, 200, `{"enabled":true,"provider":"cli/primary","backup":"ollama/local-model"}`)
 	})
 	m.HandleFunc("GET /api/answers", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("status") == "pending" {
@@ -506,7 +506,7 @@ func TestBoardTools(t *testing.T) {
 	}
 
 	res, text = call(t, cs, "get_ai_status", nil)
-	if got := structured[AIStatus](t, res); got.Enabled || got.Provider != "none" {
+	if got := structured[AIStatus](t, res); !got.Enabled || got.Provider != "cli/primary" || got.Backup != "ollama/local-model" {
 		t.Fatalf("unexpected AI status: %s", text)
 	}
 }

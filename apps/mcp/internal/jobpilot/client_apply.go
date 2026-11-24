@@ -12,9 +12,8 @@ import (
 	"time"
 )
 
-// composeTimeout is generous because composing reads the employer's form,
-// decides on a CV, may render one, and may call a model for the letter.
-const composeTimeout = 2 * time.Minute
+// aiTimeout allows a primary call to time out before the backup answers.
+const aiTimeout = 6 * time.Minute
 
 // uploadTimeout covers sending up to 12 MB and the API extracting and parsing it.
 const uploadTimeout = 90 * time.Second
@@ -77,7 +76,7 @@ type Question struct {
 func (c *Client) ResolveAnswers(ctx context.Context, jobID string, questions []Question) (ResolvedAnswers, error) {
 	var out ResolvedAnswers
 	body := resolveRequest{Questions: questions}
-	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/answers", body, &out, composeTimeout)
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/answers", body, &out, aiTimeout)
 }
 
 func (c *Client) CVs(ctx context.Context) ([]CVDocument, error) {
@@ -140,12 +139,12 @@ func (c *Client) ApproveCV(ctx context.Context, id string, approved bool) (CVDoc
 
 func (c *Client) TailorCV(ctx context.Context, jobID string) (TailoredCV, error) {
 	var out TailoredCV
-	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/cv", nil, &out, composeTimeout)
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/cv", nil, &out, aiTimeout)
 }
 
 func (c *Client) Compose(ctx context.Context, jobID string) (OutboxEntry, error) {
 	var out OutboxEntry
-	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/compose", nil, &out, composeTimeout)
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/compose", nil, &out, aiTimeout)
 }
 
 func (c *Client) Outbox(ctx context.Context, status string) ([]OutboxEntry, error) {

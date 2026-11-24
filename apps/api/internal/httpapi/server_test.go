@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"jobpilot/core/api/internal/ats"
+	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
 )
@@ -78,6 +79,31 @@ func TestHealthReportsTheContract(t *testing.T) {
 	}
 	if body.Status != "ok" || body.Contract != Contract || Contract < 1 {
 		t.Fatalf("unexpected health body: %s", w.Body.String())
+	}
+}
+
+func TestAIStatusReportsBackup(t *testing.T) {
+	for _, model := range []string{"", "local-model"} {
+		options := llm.Options{Provider: "cli", CLICommand: "claude", Model: "primary-model"}
+		want := ""
+		if model != "" {
+			options.BackupProvider, options.BackupModel = "ollama", model
+			want = "ollama/" + model
+		}
+		client, err := llm.Build(options, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := httptest.NewRecorder()
+		(&Server{LLM: client}).aiStatus(w, httptest.NewRequest("GET", "/api/ai/status", nil))
+		var body struct {
+			Enabled  bool    `json:"enabled"`
+			Provider string  `json:"provider"`
+			Backup   *string `json:"backup"`
+		}
+		if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil || w.Code != 200 || !body.Enabled || body.Provider != "cli:claude/primary-model" || body.Backup == nil || *body.Backup != want {
+			t.Fatalf("want backup %q, got %d %s", want, w.Code, w.Body.String())
+		}
 	}
 }
 

@@ -14,7 +14,7 @@ import (
 func TestEveryAIPathTakesTheRequestsClient(t *testing.T) {
 	allowed := map[string]int{
 		"roles.go":  1, // llmForUser hands it to admins
-		"server.go": 2, // aiStatus (Enabled and Describe), an admin-only route
+		"server.go": 1, // aiStatus reads Status once for the admin-only route
 	}
 	files, err := filepath.Glob("*.go")
 	if err != nil {

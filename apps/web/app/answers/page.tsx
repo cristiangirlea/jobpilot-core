@@ -2,11 +2,11 @@
 
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {AnswerEntry,AnswerScope} from "@/lib/types";
+import {AnswerEntry,AnswerScope,backupDraftLabel} from "@/lib/types";
 import {Shell} from "@/components/Shell";
 import {Empty,ErrorMessage,Header,Notice} from "@/components/UI";
 
-const sourceLabel:Record<string,string>={human:"you wrote this",ai:"drafted by AI",deterministic:"from your profile"};
+const sourceLabel:Record<string,string>={human:"you wrote this",ai:"drafted by AI",ai_backup:backupDraftLabel,deterministic:"from your profile"};
 
 // Where an approved answer is reused. The narrowest one that matches a job wins.
 const scopeLabel=(item:AnswerEntry,scope:AnswerScope=item.scope)=>

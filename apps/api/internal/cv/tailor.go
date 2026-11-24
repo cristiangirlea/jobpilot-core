@@ -449,8 +449,11 @@ Write the CV summary.`, factSheetFor(profile), llm.Fence(role), listOrNoneText(h
 			Task: "tailor_cv_summary", System: summarySystemPrompt, Prompt: prompt,
 			MaxTokens: 400, Temperature: 0.2,
 		})
-		if err == nil && strings.TrimSpace(result.Text) != "" {
-			return strings.TrimSpace(result.Text), "ai"
+		if summary := strings.TrimSpace(result.Text); err == nil && summary != "" {
+			if result.Backup {
+				return summary, answers.SourceAIBackup
+			}
+			return summary, answers.SourceAI
 		}
 	}
 	return deterministicSummary(profile), "deterministic"

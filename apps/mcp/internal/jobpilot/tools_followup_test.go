@@ -29,7 +29,7 @@ func TestDraftFollowUp(t *testing.T) {
 			return
 		}
 		w.WriteHeader(201)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": "draft-1", "application_id": "app-1", "body": "A saved draft, never sent.", "created_at": "2026-10-01T00:00:00Z"})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": "draft-1", "application_id": "app-1", "body": "A saved draft, never sent.", "created_at": "2026-10-01T00:00:00Z", "source": "ai_backup"})
 	}))
 	defer api.Close()
 	client, err := NewClient(Options{BaseURL: api.URL, Token: "fake"})
@@ -62,7 +62,7 @@ func TestDraftFollowUp(t *testing.T) {
 		var got map[string]any
 		raw, _ := json.Marshal(res.StructuredContent)
 		_ = json.Unmarshal(raw, &got)
-		if got["body"] != "A saved draft, never sent." {
+		if got["body"] != "A saved draft, never sent." || got["source"] != "ai_backup" {
 			t.Fatal(got)
 		}
 	}

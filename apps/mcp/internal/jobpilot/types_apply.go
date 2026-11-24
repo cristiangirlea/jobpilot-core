@@ -4,7 +4,7 @@ import "time"
 
 // Wire types for the apply engine: the answer bank, CV documents, and the
 // outbox. A source says where an answer came from and is part of the API's
-// contract: profile, bank, bank_similar, ai, template, unanswered, plus cv,
+// contract: profile, bank, bank_similar, ai, ai_backup, template, unanswered, plus cv,
 // cover_letter and declaration on an outbox answer.
 
 type AnswerEntry struct {
@@ -180,6 +180,7 @@ type OutboxList struct {
 }
 
 type AIStatus struct {
+	Backup   string `json:"backup,omitempty"`
 	Enabled  bool   `json:"enabled"`
 	Provider string `json:"provider"`
 }

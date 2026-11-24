@@ -31,7 +31,7 @@ func TestFollowUpRealOutboxAnswers(t *testing.T) {
 
 func TestFollowUpAnswerProvenance(t *testing.T) {
 	const sentence = "I build and maintain reliable Go services."
-	for _, source := range []string{"bank", "bank_similar", "ai", "template", "profile", "", "unknown"} {
+	for _, source := range []string{"bank", "bank_similar", "ai", "ai_backup", "template", "profile", "", "unknown"} {
 		t.Run(source, func(t *testing.T) {
 			sent := FollowUpMaterials{Answers: map[string]string{"Experience": sentence}}
 			raw, _ := json.Marshal(map[string]any{"answers": sent.Answers, "answer_sources": map[string]string{"Experience": source}})
@@ -39,7 +39,7 @@ func TestFollowUpAnswerProvenance(t *testing.T) {
 				t.Fatal(err)
 			}
 			body, _ := FollowUp(context.Background(), nil, models.Profile{}, sent)
-			want := source == "bank" || source == "bank_similar" || source == "ai" || source == "template"
+			want := source == "bank" || source == "bank_similar" || source == "ai" || source == "ai_backup" || source == "template"
 			if strings.Contains(body, sentence) != want {
 				t.Fatal("unsafe provenance", source, body)
 			}
@@ -144,6 +144,10 @@ func TestFollowUpProviderCannotAddFacts(t *testing.T) {
 	provider := &followUpProvider{text: fallback}
 	body, source := FollowUp(context.Background(), llm.New(provider, nil, 0, 0), profile, sent)
 	if body != fallback || source != "ai" {
+		t.Fatal(body, source)
+	}
+	client := llm.New(&followUpProvider{err: llm.ErrUnavailable}, nil, 0, 0).WithBackup(provider)
+	if body, source := FollowUp(t.Context(), client, profile, sent); body != fallback || source != "ai_backup" {
 		t.Fatal(body, source)
 	}
 }

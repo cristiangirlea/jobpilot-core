@@ -103,6 +103,7 @@ func TestTailorSelectsRelevantBulletsWithoutRewritingThem(t *testing.T) {
 }
 
 type summaryProvider struct {
+	err     error
 	request llm.Request
 }
 
@@ -110,7 +111,7 @@ func (p *summaryProvider) Name() string  { return "fake" }
 func (p *summaryProvider) Model() string { return "test" }
 func (p *summaryProvider) Complete(_ context.Context, req llm.Request) (string, error) {
 	p.request = req
-	return "I build Go services.", nil
+	return "I build Go services.", p.err
 }
 
 func TestTailoredSummaryTreatsTheTargetRoleAsData(t *testing.T) {
@@ -127,6 +128,14 @@ func TestTailoredSummaryTreatsTheTargetRoleAsData(t *testing.T) {
 	want := "TARGET ROLE\n<untrusted_text>\nTitle: Engineer " + planted + " [untrusted_text]\nCompany: Northwind\n</untrusted_text>"
 	if !strings.Contains(req.Prompt, want) || strings.Count(req.Prompt, "</untrusted_text>") != 1 {
 		t.Fatalf("target role is not fenced: %q", req.Prompt)
+	}
+}
+
+func TestTailoredSummaryFromBackup(t *testing.T) {
+	client := llm.New(&summaryProvider{err: llm.ErrUnavailable}, nil, 0, 0).WithBackup(&summaryProvider{})
+	got := Tailor(t.Context(), client, testProfile(), testJob(), models.Evaluation{}, "")
+	if got.SummarySource != "ai_backup" || got.Summary != "I build Go services." {
+		t.Fatalf("backup summary: %q from %q", got.Summary, got.SummarySource)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -26,6 +27,11 @@ func (s *stubProvider) Complete(context.Context, Request) (string, error) {
 }
 
 type memoryCache map[string]string
+
+type stubBackup struct{ stubProvider }
+
+func (*stubBackup) Name() string  { return "ollama" }
+func (*stubBackup) Model() string { return "backup-model" }
 
 func (m memoryCache) LookupCompletion(_ context.Context, key string) (string, bool, error) {
 	v, ok := m[key]
@@ -77,6 +83,195 @@ func TestCacheKeyChangesWithModel(t *testing.T) {
 	request := Request{Task: "t", Prompt: "p"}
 	if CacheKey("cli", "opus", request) == CacheKey("cli", "haiku", request) {
 		t.Fatal("a model switch must not reuse another model's cached answer")
+	}
+}
+
+func TestExpiredModelDeadlineSkipsCacheAndProviders(t *testing.T) {
+	req := Request{Prompt: "cached"}
+	primary := &stubProvider{reply: "fresh"}
+	backup := &stubBackup{}
+	cache := memoryCache{CacheKey(primary.Name(), primary.Model(), req): "cached answer"}
+	client := New(primary, cache, 1, time.Hour).WithBackup(backup)
+	expired := WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	if _, err := client.Complete(expired, req); err != ErrNoTime || primary.calls != 0 || backup.calls != 0 {
+		t.Fatalf("expired request: %v, primary calls=%d backup calls=%d", err, primary.calls, backup.calls)
+	}
+	live := WithDeadline(t.Context(), time.Now().Add(time.Minute))
+	if got, err := client.Complete(live, req); err != nil || !got.Cached || got.Text != "cached answer" {
+		t.Fatalf("live cache hit: %+v, %v", got, err)
+	}
+	if got, err := client.Complete(t.Context(), Request{Prompt: "uncached"}); err != nil || got.Text != "fresh" || primary.calls != 1 {
+		t.Fatalf("request without a deadline should still have one budget unit: %+v, %v", got, err)
+	}
+}
+
+type slowPrimary struct{ stubProvider }
+
+func (p *slowPrimary) Complete(ctx context.Context, _ Request) (string, error) {
+	p.calls++
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-time.After(time.Minute):
+		return "finished", nil
+	}
+}
+
+func TestCompletionsShareModelDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		primary := &slowPrimary{}
+		backup := &stubBackup{}
+		client := New(primary, nil, 0, 0).WithBackup(backup)
+		ctx := WithDeadline(t.Context(), time.Now().Add(time.Second))
+		if _, err := client.Complete(ctx, Request{}); err != context.DeadlineExceeded {
+			t.Fatalf("slow primary: got %v, want deadline exceeded", err)
+		}
+		if _, err := client.Complete(ctx, Request{}); err != ErrNoTime {
+			t.Fatalf("second completion: got %v, want ErrNoTime", err)
+		}
+		if ctx.Err() != nil || primary.calls != 1 || backup.calls != 0 {
+			t.Fatalf("request error=%v primary calls=%d backup calls=%d", ctx.Err(), primary.calls, backup.calls)
+		}
+	})
+}
+
+func TestBackupCacheAndBudgetAfterPrimaryFailure(t *testing.T) {
+	ctx := context.Background()
+	req := Request{Prompt: "same question"}
+	primary := &stubProvider{err: errors.New("primary failed")}
+	backup := &stubBackup{stubProvider{reply: " backup answer "}}
+	cache := memoryCache{}
+	client := New(primary, cache, 2, time.Hour).WithBackup(backup)
+	want := Result{Text: "backup answer", Provider: "ollama", Model: "backup-model", Backup: true}
+	for i := 0; i < 2; i++ {
+		want.Cached = i == 1
+		got, err := client.Complete(ctx, req)
+		if err != nil || got != want || primary.calls != i+1 || backup.calls != 1 {
+			t.Fatalf("completion %d: %+v, %v; calls primary=%d backup=%d", i+1, got, err, primary.calls, backup.calls)
+		}
+	}
+	if len(cache) != 1 || cache[CacheKey("backup:ollama", "backup-model", req)] != want.Text {
+		t.Fatalf("backup answer cached under the wrong key: %v", cache)
+	}
+	if _, err := client.Complete(ctx, req); err != ErrBudget || primary.calls != 2 || backup.calls != 1 {
+		t.Fatalf("exhausted budget: %v; calls primary=%d backup=%d", err, primary.calls, backup.calls)
+	}
+}
+
+func TestPromotedBackupMissesPrimaryCache(t *testing.T) {
+	cache := memoryCache{}
+	req := Request{Prompt: "same request"}
+	backup := &stubBackup{stubProvider{reply: "fallback"}}
+	client := New(&stubProvider{err: ErrUnavailable}, cache, 0, 0).WithBackup(backup)
+	if got, err := client.Complete(t.Context(), req); err != nil || !got.Backup || len(cache) != 1 {
+		t.Fatalf("expected a stored backup answer, got %+v, %v", got, err)
+	}
+	backup.reply = "new primary answer"
+	got, err := New(backup, cache, 0, 0).Complete(t.Context(), req)
+	if err != nil || got.Cached || got.Backup || got.Text != backup.reply || backup.calls != 2 {
+		t.Fatalf("promoted backup: %+v, %v; calls=%d", got, err, backup.calls)
+	}
+}
+
+func TestPrimaryRecoveryTakesPrecedenceOverCachedBackup(t *testing.T) {
+	req := Request{Prompt: "same question"}
+	primary := &stubProvider{reply: " \n "}
+	backup := &stubBackup{stubProvider{reply: "fallback"}}
+	client := New(primary, memoryCache{}, 0, 0).WithBackup(backup)
+	if got, err := client.Complete(t.Context(), req); err != nil || !got.Backup || got.Text != "fallback" {
+		t.Fatalf("whitespace primary: %+v, %v", got, err)
+	}
+	primary.reply = "primary"
+	for _, cached := range []bool{false, true} {
+		got, err := client.Complete(t.Context(), req)
+		if err != nil || got.Backup || got.Text != "primary" || got.Cached != cached || backup.calls != 1 {
+			t.Fatalf("primary recovery: %+v, %v; backup calls=%d", got, err, backup.calls)
+		}
+	}
+}
+
+func TestBackupFailurePreservesBothErrors(t *testing.T) {
+	primaryErr := errors.New("primary offline")
+	for _, backupErr := range []error{errors.New("backup offline"), ErrEmpty} {
+		t.Run(backupErr.Error(), func(t *testing.T) {
+			backup := &stubBackup{stubProvider{err: backupErr}}
+			if backupErr == ErrEmpty {
+				backup.err, backup.reply = nil, "  "
+			}
+			client := New(&stubProvider{err: primaryErr}, nil, 0, 0).WithBackup(backup)
+			_, err := client.Complete(t.Context(), Request{})
+			for _, want := range []error{primaryErr, backupErr} {
+				if !errors.Is(err, want) || !strings.Contains(err.Error(), want.Error()) {
+					t.Fatalf("missing %v in %v", want, err)
+				}
+			}
+		})
+	}
+}
+
+func TestPrimaryErrorWithoutFallback(t *testing.T) {
+	primaryErr := errors.New("primary offline")
+	client := New(&stubProvider{err: primaryErr}, nil, 0, 0).WithBackup(nil)
+	if _, err := client.Complete(t.Context(), Request{}); err != primaryErr {
+		t.Fatalf("without backup got %v, want original error", err)
+	}
+}
+
+type cancellingPrimary struct {
+	stubProvider
+	cancel context.CancelFunc
+}
+
+func (p *cancellingPrimary) Complete(ctx context.Context, _ Request) (string, error) {
+	p.cancel()
+	return "", ctx.Err()
+}
+
+func TestCancellationDuringPrimarySkipsBackup(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	backup := &stubBackup{}
+	client := New(&cancellingPrimary{cancel: cancel}, nil, 0, 0).WithBackup(backup)
+	if _, err := client.Complete(ctx, Request{}); err != context.Canceled || backup.calls != 0 {
+		t.Fatalf("cancelled request: %v; backup calls=%d", err, backup.calls)
+	}
+}
+
+func TestDescribeBackup(t *testing.T) {
+	var disabled *Client
+	client := New(&stubProvider{}, nil, 0, 0)
+	if enabled, provider, backup := disabled.Status(); enabled || provider != "disabled" || backup != "" {
+		t.Fatalf("unexpected nil client status: %t %q %q", enabled, provider, backup)
+	}
+	if disabled.BackupDescribe() != "" || client.BackupDescribe() != "" || client.Describe() != "stub/stub-1" {
+		t.Fatal("unexpected description without a backup")
+	}
+	client.WithBackup(&stubBackup{})
+	if client.BackupDescribe() != "ollama/backup-model" || client.Describe() != "stub/stub-1" {
+		t.Fatalf("unexpected descriptions: %q, %q", client.Describe(), client.BackupDescribe())
+	}
+}
+
+func TestBuildBackupProvider(t *testing.T) {
+	for _, disabled := range []string{"", "none", "off", "disabled"} {
+		client, err := Build(Options{Provider: "cli", CLICommand: "claude", BackupProvider: disabled}, nil)
+		if err != nil || !client.Enabled() || client.BackupDescribe() != "" {
+			t.Fatalf("backup %q: %v, %v", disabled, client, err)
+		}
+	}
+	client, err := Build(Options{Provider: "cli", CLICommand: "claude", BackupProvider: "ollama", BackupModel: "local-model"}, nil)
+	if err != nil || client.BackupDescribe() != "ollama/local-model" {
+		t.Fatalf("Ollama backup: %v, %v", client, err)
+	}
+	for _, tc := range []struct{ primary, backup, message string }{
+		{"none", "ollama", "LLM_BACKUP_PROVIDER needs LLM_PROVIDER"},
+		{"ollama", "ollama", "cannot both be ollama"},
+		{"cli", "cli", "unknown LLM_BACKUP_PROVIDER"},
+	} {
+		_, err := Build(Options{Provider: tc.primary, CLICommand: "claude", BackupProvider: tc.backup}, nil)
+		if err == nil || !strings.Contains(err.Error(), tc.message) {
+			t.Errorf("primary %q backup %q: %v", tc.primary, tc.backup, err)
+		}
 	}
 }
 

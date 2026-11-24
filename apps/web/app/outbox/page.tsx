@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {useEffect,useState} from "react";
 import {api} from "@/lib/api";
-import {OutboxEntry} from "@/lib/types";
+import {backupDraftLabel,OutboxEntry} from "@/lib/types";
 import {ApplicationHistory} from "@/components/ApplicationHistory";
 import {Shell} from "@/components/Shell";
 import {ApprovalChip,Empty,ErrorMessage,Header,Notice} from "@/components/UI";
@@ -16,7 +16,7 @@ const statusTone:Record<string,string>={
 
 const sourceLabel:Record<string,string>={
   profile:"from your profile",bank:"reused answer",bank_similar:"reused from a similar role",
-  ai:"drafted by AI",template:"deterministic template",unanswered:"needs you",
+  ai:"drafted by AI",ai_backup:backupDraftLabel,template:"deterministic template",unanswered:"needs you",
   cv:"CV attached",cover_letter:"letter attached",declaration:"you declare this",upload:"you upload this",personal:"only you choose this",
 };
 
@@ -164,7 +164,7 @@ function Detail({entry,busy,sending,onAct,onApproveCV,onApplied}:{entry:OutboxEn
     <div>
       <div className="flex items-baseline justify-between">
         <h3 className="font-semibold">Cover letter</h3>
-        <span className="muted text-xs">{entry.cover_letter_source==="ai"?"written by AI from your stored facts":"deterministic template"}</span>
+        <span className="muted text-xs">{entry.cover_letter_source==="ai_backup"?backupDraftLabel:entry.cover_letter_source==="ai"?"written by AI from your stored facts":"deterministic template"}</span>
       </div>
       <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded-xl bg-black/[0.03] p-4 text-sm leading-relaxed">{entry.cover_letter}</pre>
     </div>

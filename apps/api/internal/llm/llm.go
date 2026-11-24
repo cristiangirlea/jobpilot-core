@@ -18,9 +18,18 @@ import (
 
 var (
 	ErrUnavailable = errors.New("no llm provider is configured")
+	ErrNoTime      = errors.New("no model time left for this request")
 	ErrBudget      = errors.New("llm call budget exhausted for this window")
 	ErrEmpty       = errors.New("llm returned an empty response")
 )
+
+type deadlineKey struct{}
+
+// WithDeadline records the deadline shared by all model calls in a request.
+// Only Complete applies it, so callers can still save deterministic drafts.
+func WithDeadline(ctx context.Context, d time.Time) context.Context {
+	return context.WithValue(ctx, deadlineKey{}, d)
+}
 
 // Request is one completion. Task is a short stable label ("answer_question",
 // "cover_letter") used for cache accounting and diagnostics.
@@ -38,6 +47,7 @@ type Result struct {
 	Provider string `json:"provider"`
 	Model    string `json:"model"`
 	Cached   bool   `json:"cached"`
+	Backup   bool   `json:"backup"`
 }
 
 // Provider is one concrete backend (a CLI subprocess, a local server, an API).
@@ -57,6 +67,7 @@ type Cache interface {
 // Client wraps a provider with caching and a call budget.
 type Client struct {
 	provider Provider
+	backup   Provider
 	cache    Cache
 
 	mu       sync.Mutex
@@ -76,10 +87,16 @@ func New(provider Provider, cache Cache, limit int, window time.Duration) *Clien
 	return &Client{provider: provider, cache: cache, limit: limit, window: window, now: time.Now}
 }
 
+// WithBackup configures the optional fallback before the client is used.
+func (c *Client) WithBackup(p Provider) *Client {
+	c.backup = p
+	return c
+}
+
 // Enabled reports whether a provider is configured at all.
 func (c *Client) Enabled() bool { return c != nil && c.provider != nil }
 
-// Describe returns "provider/model" for diagnostics, or "disabled".
+// Describe identifies the primary provider for diagnostics.
 func (c *Client) Describe() string {
 	if !c.Enabled() {
 		return "disabled"
@@ -87,23 +104,68 @@ func (c *Client) Describe() string {
 	return c.provider.Name() + "/" + c.provider.Model()
 }
 
-// Complete returns a cached completion when one exists, otherwise calls the
-// provider and caches the result. Cache hits never consume budget.
+// BackupDescribe identifies the fallback provider, or returns an empty string.
+func (c *Client) BackupDescribe() string {
+	if c == nil || c.backup == nil {
+		return ""
+	}
+	return c.backup.Name() + "/" + c.backup.Model()
+}
+
+// Status reports the enabled state and the primary and backup descriptions.
+func (c *Client) Status() (enabled bool, provider, backup string) {
+	return c.Enabled(), c.Describe(), c.BackupDescribe()
+}
+
+// Complete spends one budget unit on a primary cache miss. Only a failed
+// primary call can reach the backup, even when the backup answer is cached.
 func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 	if !c.Enabled() {
 		return Result{}, ErrUnavailable
 	}
-	name, model := c.provider.Name(), c.provider.Model()
-	key := CacheKey(name, model, req)
-	if c.cache != nil {
-		if text, found, err := c.cache.LookupCompletion(ctx, key); err == nil && found {
-			return Result{Text: text, Provider: name, Model: model, Cached: true}, nil
+	if d, ok := ctx.Value(deadlineKey{}).(time.Time); ok {
+		if !time.Now().Before(d) {
+			return Result{}, ErrNoTime
 		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, d)
+		defer cancel()
+	}
+	key := CacheKey(c.provider.Name(), c.provider.Model(), req)
+	if result, ok := c.cached(ctx, c.provider, key); ok {
+		return result, nil
 	}
 	if err := c.spend(); err != nil {
 		return Result{}, err
 	}
-	text, err := c.provider.Complete(ctx, req)
+	result, primaryErr := c.completeWith(ctx, c.provider, req, key)
+	if primaryErr == nil || ctx.Err() != nil || c.backup == nil {
+		return result, primaryErr
+	}
+	key = CacheKey("backup:"+c.backup.Name(), c.backup.Model(), req)
+	result, ok := c.cached(ctx, c.backup, key)
+	if !ok {
+		var err error
+		result, err = c.completeWith(ctx, c.backup, req, key)
+		if err != nil {
+			return Result{}, errors.Join(primaryErr, err)
+		}
+	}
+	result.Backup = true
+	return result, nil
+}
+
+func (c *Client) cached(ctx context.Context, p Provider, key string) (Result, bool) {
+	if c.cache != nil {
+		if text, found, err := c.cache.LookupCompletion(ctx, key); err == nil && found {
+			return Result{Text: text, Provider: p.Name(), Model: p.Model(), Cached: true}, true
+		}
+	}
+	return Result{}, false
+}
+
+func (c *Client) completeWith(ctx context.Context, p Provider, req Request, key string) (Result, error) {
+	text, err := p.Complete(ctx, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -112,9 +174,9 @@ func (c *Client) Complete(ctx context.Context, req Request) (Result, error) {
 		return Result{}, ErrEmpty
 	}
 	if c.cache != nil {
-		_ = c.cache.StoreCompletion(ctx, key, req.Task, name, model, text)
+		_ = c.cache.StoreCompletion(ctx, key, req.Task, p.Name(), p.Model(), text)
 	}
-	return Result{Text: text, Provider: name, Model: model}, nil
+	return Result{Text: text, Provider: p.Name(), Model: p.Model()}, nil
 }
 
 // spend consumes one unit of the rolling call budget. A limit of zero or less

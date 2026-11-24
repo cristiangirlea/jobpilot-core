@@ -17,16 +17,17 @@ type FollowUpDraft struct {
 	ApplicationID string    `json:"application_id"`
 	Body          string    `json:"body"`
 	CreatedAt     time.Time `json:"created_at"`
+	Source        string    `json:"source,omitempty"`
 }
 
 func addFollowUpTools(s *mcp.Server, c *Client) {
-	addTool(s, &mcp.Tool{Name: "draft_follow_up", Title: "Draft a follow-up", Description: "Save a short follow-up draft from the application's sent materials and profile. Applied or interview applications only, at most two drafts per application. Show the draft to the user; it is never sent. Nothing is emailed, uploaded or posted.", Annotations: writeTool("Draft a follow-up", false)}, func(ctx context.Context, _ *mcp.CallToolRequest, in applicationInput) (*mcp.CallToolResult, FollowUpDraft, error) {
+	addTool(s, &mcp.Tool{Name: "draft_follow_up", Title: "Draft a follow-up", Description: "Save a short follow-up draft from the application's sent materials and profile. Applied or interview applications only, at most two drafts per application. Show the draft to the user; it is never sent. source says who wrote it: ai, template, or ai_backup (the backup model: tell the user so and that they must read it closely before using it). Nothing is emailed, uploaded or posted.", Annotations: writeTool("Draft a follow-up", false)}, func(ctx context.Context, _ *mcp.CallToolRequest, in applicationInput) (*mcp.CallToolResult, FollowUpDraft, error) {
 		id := strings.TrimSpace(in.ApplicationID)
 		if id == "" {
 			return nil, FollowUpDraft{}, fmt.Errorf("application_id is required")
 		}
 		var out FollowUpDraft
-		err := c.do(ctx, http.MethodPost, "/api/applications/"+url.PathEscape(id)+"/follow-up", struct{}{}, &out, c.timeout)
+		err := c.do(ctx, http.MethodPost, "/api/applications/"+url.PathEscape(id)+"/follow-up", struct{}{}, &out, aiTimeout)
 		if err != nil {
 			var apiErr *APIError
 			if errors.As(err, &apiErr) && apiErr.Status == http.StatusNotFound {

@@ -398,7 +398,7 @@ func (c *Client) ReportJob(ctx context.Context, id string) (JobReport, error) {
 
 func (c *Client) Generate(ctx context.Context, jobID string) (Documents, error) {
 	var out Documents
-	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/generate", nil, &out, c.timeout)
+	return out, c.do(ctx, http.MethodPost, "/api/jobs/"+url.PathEscape(jobID)+"/generate", nil, &out, aiTimeout)
 }
 
 func (c *Client) Applications(ctx context.Context) ([]Application, error) {

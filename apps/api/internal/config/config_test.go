@@ -6,7 +6,64 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestLoadLLMBackup(t *testing.T) {
+	for _, name := range []string{"LLM_BACKUP_PROVIDER", "LLM_BACKUP_MODEL", "LLM_BACKUP_TIMEOUT_SECONDS"} {
+		t.Setenv(name, "")
+	}
+	cfg := mustLoadLLM(t)
+	if cfg.BackupProvider != "none" || cfg.BackupModel != "" || cfg.BackupTimeout != 180*time.Second {
+		t.Fatalf("unexpected backup defaults: %q %q %v", cfg.BackupProvider, cfg.BackupModel, cfg.BackupTimeout)
+	}
+	t.Setenv("LLM_BACKUP_PROVIDER", "ollama")
+	t.Setenv("LLM_BACKUP_MODEL", "local-model")
+	t.Setenv("LLM_BACKUP_TIMEOUT_SECONDS", "42")
+	cfg = mustLoadLLM(t)
+	if cfg.BackupProvider != "ollama" || cfg.BackupModel != "local-model" || cfg.BackupTimeout != 42*time.Second {
+		t.Fatalf("unexpected backup settings: %q %q %v", cfg.BackupProvider, cfg.BackupModel, cfg.BackupTimeout)
+	}
+}
+
+func TestInvalidBackupTimeoutUsesDefault(t *testing.T) {
+	for _, value := range []string{"", "oops", "0", "-1"} {
+		t.Setenv("LLM_BACKUP_TIMEOUT_SECONDS", value)
+		if got := mustLoadLLM(t).BackupTimeout; got != 180*time.Second {
+			t.Errorf("timeout %q: got %v, want 180s", value, got)
+		}
+	}
+}
+
+func TestLLMBudgets(t *testing.T) {
+	t.Setenv("LLM_BACKUP_TIMEOUT_SECONDS", "180")
+	for _, tc := range []struct {
+		name, timeout, backup   string
+		primary, model, request time.Duration
+	}{
+		{"minimum", "1", "", time.Second, time.Second, 2 * time.Minute},
+		{"long primary only", "120", "none", 2 * time.Minute, 2 * time.Minute, 150 * time.Second},
+		{"empty timeout", "", "off", 90 * time.Second, 90 * time.Second, 2 * time.Minute},
+		{"invalid timeout with backup", "oops", " Ollama ", 90 * time.Second, 270 * time.Second, 5 * time.Minute},
+		{"zero timeout", "0", "", 90 * time.Second, 90 * time.Second, 2 * time.Minute},
+		{"negative timeout", "-1", "", 90 * time.Second, 90 * time.Second, 2 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("LLM_TIMEOUT_SECONDS", tc.timeout)
+			t.Setenv("LLM_BACKUP_PROVIDER", tc.backup)
+			cfg := mustLoadLLM(t)
+			if cfg.Timeout != tc.primary {
+				t.Errorf("primary timeout = %v, want %v", cfg.Timeout, tc.primary)
+			}
+			if got := cfg.ModelBudget(); got != tc.model {
+				t.Errorf("model budget = %v, want %v", got, tc.model)
+			}
+			if got := cfg.RequestBudget(); got != tc.request {
+				t.Errorf("request budget = %v, want %v", got, tc.request)
+			}
+		})
+	}
+}
 
 func TestSecret(t *testing.T) {
 	const name = "TEST_SECRET"
@@ -359,4 +416,13 @@ func TestCLIArgsRefuseAnUnclosedQuote(t *testing.T) {
 	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_CLI_ARGS") {
 		t.Fatalf("Load should name LLM_CLI_ARGS, got %v", err)
 	}
+}
+
+func mustLoadLLM(t *testing.T) LLMConfig {
+	t.Helper()
+	cfg, err := loadLLM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cfg
 }

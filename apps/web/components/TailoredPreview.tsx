@@ -1,4 +1,4 @@
-import {TailoredCV} from "@/lib/types";
+import {backupDraftLabel,TailoredCV} from "@/lib/types";
 
 // TailoredPreview shows a tailored CV as it will read, beside what it was
 // tailored against: which of the job's technologies the CV shows, and which
@@ -42,8 +42,8 @@ export function TailoredPreview({cv:stored}:{cv:TailoredCV}){
     <aside className="space-y-4 text-sm">
       <div className="rounded-xl bg-black/[0.03] p-4">
         <p className="text-[11px] font-bold uppercase tracking-wide text-ink/40">Summary</p>
-        <p className="mt-1">{cv.summary_source==="ai"
-          ?<span className="font-semibold text-amber-700">Drafted by AI from your facts. Read it before approving.</span>
+        <p className="mt-1">{cv.summary_source==="ai"||cv.summary_source==="ai_backup"
+          ?<span className="font-semibold text-amber-700">{cv.summary_source==="ai_backup"?backupDraftLabel:"Drafted by AI from your facts. Read it before approving."}</span>
           :"Your own summary, unchanged."}</p>
       </div>
       <div className="rounded-xl bg-black/[0.03] p-4">

@@ -183,6 +183,7 @@ func (f *fakeBank) TouchAnswer(_ context.Context, _, id string) error {
 }
 
 type countingProvider struct {
+	err     error
 	calls   int
 	request llm.Request
 }
@@ -192,7 +193,7 @@ func (c *countingProvider) Model() string { return "test" }
 func (c *countingProvider) Complete(_ context.Context, req llm.Request) (string, error) {
 	c.calls++
 	c.request = req
-	return "generated answer", nil
+	return "generated answer", c.err
 }
 
 func subject() Subject {
@@ -352,17 +353,25 @@ func TestUnapprovedAnswersAreNeverReused(t *testing.T) {
 }
 
 func TestGeneratedAnswersAreStoredUnapproved(t *testing.T) {
-	bank := &fakeBank{}
-	service := &Service{Bank: bank, LLM: llm.New(&countingProvider{}, nil, 0, 0)}
-	resolution, err := service.Resolve(context.Background(), "u1", Question{Text: "What is the strangest bug you have shipped?"}, subject())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if resolution.Source != SourceAI || !resolution.NeedsReview {
-		t.Fatalf("a generated answer must be flagged for review, got %+v", resolution)
-	}
-	if len(bank.saved) != 1 || bank.saved[0].Approved {
-		t.Fatalf("expected exactly one unapproved saved entry, got %+v", bank.saved)
+	for _, tc := range []struct {
+		source     string
+		primaryErr error
+	}{{SourceAI, nil}, {SourceAIBackup, llm.ErrUnavailable}} {
+		t.Run(tc.source, func(t *testing.T) {
+			bank := &fakeBank{}
+			client := llm.New(&countingProvider{err: tc.primaryErr}, nil, 0, 0).WithBackup(&countingProvider{})
+			service := &Service{Bank: bank, LLM: client}
+			resolution, err := service.Resolve(context.Background(), "u1", Question{Text: "What is the strangest bug you have shipped?"}, subject())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolution.Answer != "generated answer" || resolution.Source != tc.source || resolution.Approved || !resolution.NeedsReview {
+				t.Fatalf("a generated answer must be flagged for review, got %+v", resolution)
+			}
+			if len(bank.saved) != 1 || bank.saved[0].Approved || bank.saved[0].Source != tc.source || bank.saved[0].Answer != resolution.Answer {
+				t.Fatalf("expected exactly one unapproved saved entry, got %+v", bank.saved)
+			}
+		})
 	}
 }
 

@@ -12,7 +12,7 @@ func SendsFormValue(answer OutboxAnswer) bool {
 	switch answer.Source {
 	case "declaration", "personal", "upload":
 		return false
-	case "ai", "template":
+	case "ai", "ai_backup", "template":
 		if answer.NeedsReview && !answer.Required {
 			return false
 		}

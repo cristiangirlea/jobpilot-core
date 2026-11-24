@@ -111,14 +111,30 @@ func (g GoogleConfig) Enabled() bool { return g.ClientID != "" }
 // LLMConfig selects the optional AI provider. The zero value ("none") keeps the
 // product fully deterministic, which is the supported default.
 type LLMConfig struct {
-	Provider     string
-	Model        string
-	CLICommand   string
-	CLIArgs      []string
-	CLIDir       string
-	OllamaURL    string
-	Timeout      time.Duration
-	CallsPerHour int
+	BackupProvider string
+	BackupModel    string
+	BackupTimeout  time.Duration
+	Provider       string
+	Model          string
+	CLICommand     string
+	CLIArgs        []string
+	CLIDir         string
+	OllamaURL      string
+	Timeout        time.Duration
+	CallsPerHour   int
+}
+
+// ModelBudget bounds all model calls made during one request.
+func (c LLMConfig) ModelBudget() time.Duration {
+	if strings.EqualFold(strings.TrimSpace(c.BackupProvider), "ollama") {
+		return c.Timeout + c.BackupTimeout
+	}
+	return c.Timeout
+}
+
+// RequestBudget reserves time after the model deadline to finish the response.
+func (c LLMConfig) RequestBudget() time.Duration {
+	return max(2*time.Minute, c.ModelBudget()+30*time.Second)
 }
 
 func Load() (Config, error) {
@@ -180,21 +196,31 @@ func Load() (Config, error) {
 }
 
 func loadLLM() (LLMConfig, error) {
-	seconds, _ := strconv.Atoi(env("LLM_TIMEOUT_SECONDS", "90"))
+	backupSeconds, err := strconv.Atoi(os.Getenv("LLM_BACKUP_TIMEOUT_SECONDS"))
+	if err != nil || backupSeconds <= 0 {
+		backupSeconds = 180
+	}
+	seconds, err := strconv.Atoi(os.Getenv("LLM_TIMEOUT_SECONDS"))
+	if err != nil || seconds <= 0 {
+		seconds = 90
+	}
 	calls, _ := strconv.Atoi(env("LLM_CALLS_PER_HOUR", "120"))
 	args, err := splitArgs(env("LLM_CLI_ARGS", ""))
 	if err != nil {
 		return LLMConfig{}, fmt.Errorf("LLM_CLI_ARGS: %w", err)
 	}
 	return LLMConfig{
-		Provider:     env("LLM_PROVIDER", "none"),
-		Model:        env("LLM_MODEL", ""),
-		CLICommand:   env("LLM_CLI_COMMAND", ""),
-		CLIArgs:      args,
-		CLIDir:       env("LLM_CLI_DIR", ""),
-		OllamaURL:    env("LLM_OLLAMA_URL", "http://localhost:11434"),
-		Timeout:      time.Duration(seconds) * time.Second,
-		CallsPerHour: calls,
+		BackupProvider: env("LLM_BACKUP_PROVIDER", "none"),
+		BackupModel:    env("LLM_BACKUP_MODEL", ""),
+		BackupTimeout:  time.Duration(backupSeconds) * time.Second,
+		Provider:       env("LLM_PROVIDER", "none"),
+		Model:          env("LLM_MODEL", ""),
+		CLICommand:     env("LLM_CLI_COMMAND", ""),
+		CLIArgs:        args,
+		CLIDir:         env("LLM_CLI_DIR", ""),
+		OllamaURL:      env("LLM_OLLAMA_URL", "http://localhost:11434"),
+		Timeout:        time.Duration(seconds) * time.Second,
+		CallsPerHour:   calls,
 	}, nil
 }
 

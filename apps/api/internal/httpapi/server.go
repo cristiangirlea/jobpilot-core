@@ -76,6 +76,7 @@ import (
 //	   status and sending are refused as for any rejection); jobs carry application_history;
 //	   filter presets carry history_mode, history_lookback and history_since, which POST
 //	   and PUT honour, and PUT keeps the stored values when they are absent.
+//	16: backup-generated drafts carry ai_backup and require the same approval as ai.
 //
 // Additions at contract 13: reading the notification feed opens due quiet
 // reminders; POST /api/applications/{id}/follow-up (403 for an unverified
@@ -85,7 +86,7 @@ import (
 // expose quiet_application_days. GET /api/application-history and POST
 // /api/application-history/import read and add private external history.
 // These routes and fields do not raise Contract.
-const Contract = 15
+const Contract = 16
 
 // NotRescored is the answer when a profile, exclusion or filter change was
 // saved but scoring the matches again failed or could not be confirmed, and
@@ -108,6 +109,7 @@ type Server struct {
 	Store       *store.Store
 	Discovery   *discovery.Service
 	LLM         *llm.Client
+	ModelBudget time.Duration
 	ATS         *ats.Reader
 	Secret      string
 	TokenTTL    time.Duration
@@ -299,7 +301,14 @@ func (s *Server) Handler() http.Handler {
 	m.Handle("GET /api/invites", admin(s.listInvites))
 	m.Handle("POST /api/invites", admin(s.createInvite))
 	m.Handle("DELETE /api/invites/{id}", admin(s.deleteInvite))
-	return s.cors(m)
+	handler := s.cors(m)
+	if s.ModelBudget <= 0 {
+		return handler
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := llm.WithDeadline(r.Context(), time.Now().Add(s.ModelBudget))
+		handler.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *Server) cors(next http.Handler) http.Handler {
@@ -1260,5 +1269,6 @@ func nonNil(in []string) []string {
 // behaviour never depends on this; it exists so a test run can confirm which
 // provider, if any, is actually in use.
 func (s *Server) aiStatus(w http.ResponseWriter, r *http.Request) {
-	write(w, 200, map[string]any{"enabled": s.LLM.Enabled(), "provider": s.LLM.Describe()})
+	enabled, provider, backup := s.LLM.Status()
+	write(w, 200, map[string]any{"enabled": enabled, "provider": provider, "backup": backup})
 }

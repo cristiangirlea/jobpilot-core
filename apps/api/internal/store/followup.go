@@ -19,6 +19,8 @@ type FollowUpDraft struct {
 	ApplicationID string    `json:"application_id"`
 	Body          string    `json:"body"`
 	CreatedAt     time.Time `json:"created_at"`
+	// Source is who wrote a new draft (ai, ai_backup or template); not stored.
+	Source string `json:"source,omitempty"`
 }
 
 func (s *Store) FollowUps(ctx context.Context, u, id string) ([]FollowUpDraft, error) {

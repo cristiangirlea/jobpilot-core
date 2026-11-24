@@ -419,8 +419,8 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 		return OutboxRefusal(cvBlocker(kind)), nil
 	}
 
-	// Required answers someone has to have read. The sources are answers.SourceAI
-	// and answers.SourceTemplate; a model or the template wrote them, not the user.
+	// Required drafts from either AI provider need a matching approved bank
+	// answer. Required template wording needs a user-reviewed replacement.
 	for _, answer := range entry.Answers {
 		if !answer.Required || !answer.NeedsReview {
 			continue
@@ -428,7 +428,7 @@ func approvalRefusal(ctx context.Context, tx pgx.Tx, userID string, entry models
 		switch answer.Source {
 		case "template":
 			return OutboxRefusal(fmt.Sprintf("A required question carries template wording you have not reviewed: %q. Save your own answer to it in the answer bank, then prepare this application again.", answer.Label)), nil
-		case "ai":
+		case "ai", "ai_backup":
 			var banked, scope, bankJob string
 			var bankApproved bool
 			err := pgx.ErrNoRows // a draft the bank never stored has nothing to approve

@@ -12,6 +12,7 @@ import (
 // Sources a cover letter can come from.
 const (
 	LetterSourceAI       = "ai"
+	LetterSourceAIBackup = "ai_backup"
 	LetterSourceTemplate = "template"
 )
 
@@ -58,10 +59,17 @@ Write the cover letter.`,
 			MaxTokens: 900, Temperature: 0.3,
 		})
 		if err == nil && strings.TrimSpace(result.Text) != "" {
-			return strings.TrimSpace(result.Text), LetterSourceAI
+			return strings.TrimSpace(result.Text), letterSource(result)
 		}
 	}
 	return Generate(profile, job, match).CoverLetter, LetterSourceTemplate
+}
+
+func letterSource(result llm.Result) string {
+	if result.Backup {
+		return LetterSourceAIBackup
+	}
+	return LetterSourceAI
 }
 
 // letterFacts renders the only facts a provider may draw on. It mirrors the

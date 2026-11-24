@@ -85,14 +85,17 @@ func main() {
 		}
 	}()
 	aiClient, err := llm.Build(llm.Options{
-		Provider:     cfg.LLM.Provider,
-		Model:        cfg.LLM.Model,
-		CLICommand:   cfg.LLM.CLICommand,
-		CLIArgs:      cfg.LLM.CLIArgs,
-		CLIDir:       cfg.LLM.CLIDir,
-		OllamaURL:    cfg.LLM.OllamaURL,
-		Timeout:      cfg.LLM.Timeout,
-		CallsPerHour: cfg.LLM.CallsPerHour,
+		BackupProvider: cfg.LLM.BackupProvider,
+		BackupModel:    cfg.LLM.BackupModel,
+		BackupTimeout:  cfg.LLM.BackupTimeout,
+		Provider:       cfg.LLM.Provider,
+		Model:          cfg.LLM.Model,
+		CLICommand:     cfg.LLM.CLICommand,
+		CLIArgs:        cfg.LLM.CLIArgs,
+		CLIDir:         cfg.LLM.CLIDir,
+		OllamaURL:      cfg.LLM.OllamaURL,
+		Timeout:        cfg.LLM.Timeout,
+		CallsPerHour:   cfg.LLM.CallsPerHour,
 	}, dataStore)
 	if err != nil {
 		slog.Error("invalid AI configuration", "error", err)
@@ -109,7 +112,7 @@ func main() {
 		slog.Error("invalid Google sign-in configuration", "error", err)
 		os.Exit(1)
 	}
-	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, Mailer: mails, UserAgentTokens: cfg.UserAgentTokens, ExtractionModel: cfg.ExtractionModel, ExtractionScoring: cfg.ExtractionScoring}
+	api := &httpapi.Server{Store: dataStore, Discovery: discoveryService, LLM: aiClient, ModelBudget: cfg.LLM.ModelBudget(), ATS: formReader(cfg), Secret: cfg.JWTSecret, TokenTTL: cfg.TokenTTL, FrontendURL: cfg.FrontendURL, Google: google, GoogleSignup: cfg.Google.AllowSignup, Registration: cfg.Registration, AdminEmails: cfg.AdminEmails, ClientIPHeader: cfg.ClientIPHeader, Mailer: mails, UserAgentTokens: cfg.UserAgentTokens, ExtractionModel: cfg.ExtractionModel, ExtractionScoring: cfg.ExtractionScoring}
 	// Scheduled discovery runs only for admins (#128): it is theirs to automate.
 	discoveryService.MayDiscover = api.IsAdmin
 	go discoveryService.Start(ctx)
@@ -119,7 +122,7 @@ func main() {
 		api.Sender = outboxSender
 		slog.Info("sending approved applications through employers' forms", "delay", cfg.OutboxSendDelay)
 	}
-	srv := &http.Server{Addr: cfg.Addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: 2 * time.Minute, IdleTimeout: 60 * time.Second}
+	srv := &http.Server{Addr: cfg.Addr, Handler: api.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 2 * time.Minute, WriteTimeout: cfg.LLM.RequestBudget(), IdleTimeout: 60 * time.Second}
 	// ListenAndServe returns as soon as Shutdown starts; main waits on drained so requests in flight
 	// get up to 10 seconds to finish (well inside Kubernetes' 30-second grace period).
 	drained := make(chan struct{})

@@ -48,8 +48,9 @@ func (s *Server) draftFollowUp(w http.ResponseWriter, r *http.Request) {
 		internal(w, err)
 		return
 	}
-	body, _ := generator.FollowUp(ctx, s.llmFor(ctx), profile, materials)
+	body, source := generator.FollowUp(ctx, s.llmFor(ctx), profile, materials)
 	draft, err := s.Store.SaveFollowUp(ctx, uid, a.ID, body)
+	draft.Source = source
 	if errors.Is(err, store.ErrFollowUpLimit) || errors.Is(err, store.ErrFollowUpStatus) {
 		problem(w, 409, err.Error())
 		return

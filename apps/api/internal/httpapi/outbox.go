@@ -14,6 +14,7 @@ import (
 	"jobpilot/core/api/internal/auth"
 	"jobpilot/core/api/internal/discovery"
 	"jobpilot/core/api/internal/generator"
+	"jobpilot/core/api/internal/llm"
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/store"
 
@@ -107,13 +108,7 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 		entry.Blockers = append(entry.Blockers, store.CVBlocker)
 	}
 
-	// The letter.
-	ai := s.llmFor(ctx)
-	entry.CoverLetter, entry.CoverLetterSource = generator.CoverLetter(ctx, ai, profile, job.Job, job.Match)
-	if entry.CoverLetterSource == generator.LetterSourceTemplate && ai.Enabled() {
-		// Worth knowing, but the letter is still usable, so it does not block.
-		entry.Notices = append(entry.Notices, "The cover letter fell back to the deterministic template because the AI provider did not respond.")
-	}
+	composeCoverLetter(ctx, s.llmFor(ctx), &entry, profile, job)
 
 	// The form read above decides the channel and the answers.
 	entry.ATSProvider = form.Provider
@@ -203,6 +198,18 @@ func (s *Server) compose(w http.ResponseWriter, r *http.Request) {
 		saved.Form = withPreview(saved.Form, decision)
 	}
 	write(w, 201, saved)
+}
+
+func composeCoverLetter(ctx context.Context, ai *llm.Client, entry *models.OutboxEntry, profile models.Profile, job models.JobWithMatch) {
+	entry.CoverLetter, entry.CoverLetterSource = generator.CoverLetter(ctx, ai, profile, job.Job, job.Match)
+	switch entry.CoverLetterSource {
+	case generator.LetterSourceAIBackup:
+		entry.Notices = append(entry.Notices, "The backup AI model wrote this cover letter because the main one was unavailable. Read it closely before you approve this application.")
+	case generator.LetterSourceTemplate:
+		if ai.Enabled() {
+			entry.Notices = append(entry.Notices, "The cover letter fell back to the deterministic template because the AI provider did not respond.")
+		}
+	}
 }
 
 // answerForm resolves every question on a published form. Resume and cover
