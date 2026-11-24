@@ -28,7 +28,10 @@ services:
     restart: "no"
 
   api:
-    build: ./apps/api
+    build:
+      context: ./apps/api
+      # ai adds the claude and codex CLIs for LLM_PROVIDER=cli.
+      target: ${API_IMAGE_TARGET:-runtime}
     environment:
       API_ADDR: :8080
       DATABASE_URL: postgres://jobpilot:jobpilot@postgres:5432/jobpilot?sslmode=disable
@@ -54,14 +57,15 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       MAIL_FROM: ${MAIL_FROM:-}
       # Optional AI adapter; defaults keep the container fully deterministic.
-      # LLM_PROVIDER=cli needs the CLI installed inside the container, so for
-      # subscription-billed CLI use, run the API natively instead of in Compose.
+      # LLM_PROVIDER=cli needs API_IMAGE_TARGET=ai, the image with the CLIs.
       LLM_PROVIDER: ${LLM_PROVIDER:-none}
       LLM_MODEL: ${LLM_MODEL:-}
       EXTRACTION_MODEL: ${EXTRACTION_MODEL:-}
       EXTRACTION_SCORING: ${EXTRACTION_SCORING:-}
       LLM_CLI_COMMAND: ${LLM_CLI_COMMAND:-}
       LLM_CLI_ARGS: ${LLM_CLI_ARGS:-}
+      LLM_CLI_DIR: ${LLM_CLI_DIR:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       LLM_OLLAMA_URL: ${LLM_OLLAMA_URL:-http://host.docker.internal:11434}
       # Point at a fake (for example http://host.docker.internal:18999) to
       # run the MCP end-to-end flow's employer-form section locally.

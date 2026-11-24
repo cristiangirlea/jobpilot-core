@@ -115,6 +115,7 @@ type LLMConfig struct {
 	Model        string
 	CLICommand   string
 	CLIArgs      []string
+	CLIDir       string
 	OllamaURL    string
 	Timeout      time.Duration
 	CallsPerHour int
@@ -130,6 +131,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	googleSecret, err := secret("GOOGLE_CLIENT_SECRET", "")
+	if err != nil {
+		return Config{}, err
+	}
+	llmConfig, err := loadLLM()
 	if err != nil {
 		return Config{}, err
 	}
@@ -155,7 +160,7 @@ func Load() (Config, error) {
 		ATSAshbyURL:       env("ATS_ASHBY_URL", "https://jobs.ashbyhq.com"),
 		ATSRecruiteeURL:   env("ATS_RECRUITEE_URL", ""),
 		TokenTTL:          time.Duration(hours) * time.Hour,
-		LLM:               loadLLM(),
+		LLM:               llmConfig,
 		ExtractionModel:   strings.TrimSpace(os.Getenv("EXTRACTION_MODEL")),
 		ExtractionScoring: extractionScoring,
 		Registration:      strings.ToLower(strings.TrimSpace(env("REGISTRATION", RegistrationInvite))),
@@ -174,18 +179,59 @@ func Load() (Config, error) {
 	}, nil
 }
 
-func loadLLM() LLMConfig {
+func loadLLM() (LLMConfig, error) {
 	seconds, _ := strconv.Atoi(env("LLM_TIMEOUT_SECONDS", "90"))
 	calls, _ := strconv.Atoi(env("LLM_CALLS_PER_HOUR", "120"))
+	args, err := splitArgs(env("LLM_CLI_ARGS", ""))
+	if err != nil {
+		return LLMConfig{}, fmt.Errorf("LLM_CLI_ARGS: %w", err)
+	}
 	return LLMConfig{
 		Provider:     env("LLM_PROVIDER", "none"),
 		Model:        env("LLM_MODEL", ""),
 		CLICommand:   env("LLM_CLI_COMMAND", ""),
-		CLIArgs:      strings.Fields(env("LLM_CLI_ARGS", "")),
+		CLIArgs:      args,
+		CLIDir:       env("LLM_CLI_DIR", ""),
 		OllamaURL:    env("LLM_OLLAMA_URL", "http://localhost:11434"),
 		Timeout:      time.Duration(seconds) * time.Second,
 		CallsPerHour: calls,
+	}, nil
+}
+
+// splitArgs splits LLM_CLI_ARGS on spaces, keeping text in double or single
+// quotes together, so an empty argument can be written as "". An unclosed
+// quote is an error, since it would swallow the options after it.
+func splitArgs(v string) ([]string, error) {
+	var args []string
+	var current strings.Builder
+	var quote rune
+	inArg := false
+	for _, r := range v {
+		switch {
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote != 0:
+			current.WriteRune(r)
+		case r == '"' || r == '\'':
+			quote, inArg = r, true
+		case unicode.IsSpace(r):
+			if inArg {
+				args = append(args, current.String())
+				current.Reset()
+				inArg = false
+			}
+		default:
+			current.WriteRune(r)
+			inArg = true
+		}
 	}
+	if quote != 0 {
+		return nil, fmt.Errorf("unclosed %c quote", quote)
+	}
+	if inArg {
+		args = append(args, current.String())
+	}
+	return args, nil
 }
 
 func loadMail(password string) MailConfig {

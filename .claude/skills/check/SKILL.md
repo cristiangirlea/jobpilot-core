@@ -25,7 +25,9 @@ step's result in one line; on a failure, show the error text and fix it before r
 2. Web: `cd apps/web && npm ci && npm run typecheck && npm test`.
 3. Images, only when a Dockerfile, `go.mod`, `package*.json` or `migrations/` changed:
    `docker build apps/api`, `docker build --build-arg NEXT_PUBLIC_API_URL=http://localhost:8080/api apps/web`,
-   `docker build migrations`.
+   `docker build migrations`, and the API's `ai` target with both CLIs as CI does:
+   `docker build -q --target ai -t jobpilot-api-ai:ci apps/api` then
+   `docker run --rm --entrypoint claude jobpilot-api-ai:ci --version` and the same with `codex`.
 4. Manifests, only when `deploy/` changed: `kustomize build deploy/base | kubeconform -strict -summary -kubernetes-version 1.35.0`
    if both tools are installed; otherwise say it was left to CI. When `scripts/infra-bump*` changed: `sh scripts/infra-bump-test.sh` (needs git and jq;
    without jq, as on Windows, run it as CI does, under dash:

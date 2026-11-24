@@ -29,6 +29,7 @@ services:
       LLM_MODEL: ""
       LLM_CLI_COMMAND: ""
       LLM_CLI_ARGS: ""
+      CLAUDE_CODE_OAUTH_TOKEN: ""
       OUTBOX_SENDER_ENABLED: "false"
     ports: !override
       - "127.0.0.1:${STAGING_API_PORT:-18081}:8080"

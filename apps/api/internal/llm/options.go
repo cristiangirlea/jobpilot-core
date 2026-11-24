@@ -13,6 +13,7 @@ type Options struct {
 	Model        string
 	CLICommand   string
 	CLIArgs      []string
+	CLIDir       string
 	OllamaURL    string
 	Timeout      time.Duration
 	CallsPerHour int
@@ -31,7 +32,7 @@ func Build(options Options, cache Cache) (*Client, error) {
 		if command == "" {
 			return nil, fmt.Errorf("LLM_PROVIDER=cli requires LLM_CLI_COMMAND (for example \"claude\" or \"codex\")")
 		}
-		return New(&CLI{Command: command, Args: options.CLIArgs, ModelName: options.Model, Timeout: options.Timeout}, cache, limit, window), nil
+		return New(&CLI{Command: command, Args: options.CLIArgs, ModelName: options.Model, Timeout: options.Timeout, Dir: options.CLIDir}, cache, limit, window), nil
 	case "ollama":
 		return New(NewOllama(options.OllamaURL, options.Model, options.Timeout), cache, limit, window), nil
 	default:

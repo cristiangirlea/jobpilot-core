@@ -312,3 +312,51 @@ func TestLoadSecrets(t *testing.T) {
 		})
 	}
 }
+
+func TestCLIArgsKeepQuotedTextTogether(t *testing.T) {
+	cases := map[string][]string{
+		"":                                  nil,
+		"-p --output-format text":           {"-p", "--output-format", "text"},
+		`-p --tools "" --strict-mcp-config`: {"-p", "--tools", "", "--strict-mcp-config"},
+		`exec '{{prompt}}'  --model "a b"`:  {"exec", "{{prompt}}", "--model", "a b"},
+		`--name=x"y z"`:                     {"--name=xy z"},
+	}
+	for in, want := range cases {
+		got, err := splitArgs(in)
+		if err != nil {
+			t.Fatalf("splitArgs(%q): %v", in, err)
+		}
+		if len(got) != len(want) {
+			t.Fatalf("splitArgs(%q) = %q, want %q", in, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("splitArgs(%q) = %q, want %q", in, got, want)
+			}
+		}
+	}
+}
+
+func TestLLMCLIDirIsReadFromTheEnvironment(t *testing.T) {
+	t.Setenv("LLM_CLI_ARGS", `-p --tools ""`)
+	t.Setenv("LLM_CLI_DIR", "/var/empty/jobpilot-cli")
+	got, err := loadLLM()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.CLIDir != "/var/empty/jobpilot-cli" || len(got.CLIArgs) != 3 || got.CLIArgs[2] != "" {
+		t.Fatalf("unexpected CLI settings: dir %q args %q", got.CLIDir, got.CLIArgs)
+	}
+}
+
+func TestCLIArgsRefuseAnUnclosedQuote(t *testing.T) {
+	for _, in := range []string{`--model 'some model --strict-mcp-config`, `-p --tools "`} {
+		if _, err := splitArgs(in); err == nil {
+			t.Fatalf("splitArgs(%q) should refuse an unclosed quote", in)
+		}
+	}
+	t.Setenv("LLM_CLI_ARGS", `-p --tools "`)
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "LLM_CLI_ARGS") {
+		t.Fatalf("Load should name LLM_CLI_ARGS, got %v", err)
+	}
+}

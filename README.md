@@ -1251,13 +1251,16 @@ All optional. `LLM_PROVIDER=none` is the default and keeps the API fully determi
 |---|---|
 | `LLM_PROVIDER` | `none`, `cli`, or `ollama` |
 | `LLM_CLI_COMMAND` | Command for the `cli` provider, e.g. `claude` or `codex` |
-| `LLM_CLI_ARGS` | Arguments for it, e.g. `-p --output-format text`. The prompt goes to stdin unless an argument contains `{{prompt}}` |
+| `LLM_CLI_ARGS` | Arguments for it, e.g. `-p --output-format text --tools "" --strict-mcp-config --no-session-persistence` (every claude tool off). The prompt goes to stdin unless an argument contains `{{prompt}}`; quotes keep an argument together and `""` passes an empty one |
+| `LLM_CLI_DIR` | An existing, writable folder under which each call gets a new empty folder of its own; empty (default) means the system's temporary folder |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code's sign-in, from `claude setup-token`; set in `.env`, never in the image |
+| `API_IMAGE_TARGET` | Compose only: `runtime` (default) or `ai`, the API image with the claude and codex CLIs |
 | `LLM_OLLAMA_URL` | Base URL for the `ollama` provider |
 | `LLM_MODEL` | Model name; optional for the CLI provider |
 | `LLM_TIMEOUT_SECONDS` | Per-call timeout, default `90` |
 | `LLM_CALLS_PER_HOUR` | Rolling call budget, default `120` |
 
-The `cli` provider bills against an existing subscription instead of per token, which makes it the cheapest option. It needs the CLI installed in the same environment as the API, so run the API natively rather than in Compose when using it.
+The `cli` provider bills against an existing subscription instead of per token, which makes it the cheapest option. It needs the CLI in the same environment as the API: in Compose, build the `ai` target of `apps/api/Dockerfile` (`API_IMAGE_TARGET=ai`), which adds pinned claude and codex CLIs to the same non-root image; natively, install the CLI yourself. The CLI runs in an empty folder and receives only the environment variables it needs, never the API's secrets such as `JWT_SECRET` or `DATABASE_URL`.
 
 ### Frontend environment
 

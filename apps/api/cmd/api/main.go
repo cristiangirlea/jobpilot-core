@@ -89,6 +89,7 @@ func main() {
 		Model:        cfg.LLM.Model,
 		CLICommand:   cfg.LLM.CLICommand,
 		CLIArgs:      cfg.LLM.CLIArgs,
+		CLIDir:       cfg.LLM.CLIDir,
 		OllamaURL:    cfg.LLM.OllamaURL,
 		Timeout:      cfg.LLM.Timeout,
 		CallsPerHour: cfg.LLM.CallsPerHour,

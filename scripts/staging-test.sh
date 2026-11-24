@@ -136,7 +136,7 @@ if docker compose version > /dev/null 2>&1; then
   mkdir "$work/empty"
   : > "$work/empty/.env"
   if env OUTBOX_SENDER_ENABLED=true SMTP_HOST=smtp.example.com LLM_PROVIDER=cli GOOGLE_CLIENT_ID=hostile-google \
-    REGISTRATION=closed JWT_SECRET=hostile-secret ADMIN_EMAILS=hostile@example.com \
+    REGISTRATION=closed JWT_SECRET=hostile-secret ADMIN_EMAILS=hostile@example.com CLAUDE_CODE_OAUTH_TOKEN=hostile-token \
     docker compose -p jobpilot-staging-test --project-directory "$work/empty" --env-file "$work/empty/.env" \
     -f "$repo/docker-compose.yml" -f "$override" config > "$work/config.yml" 2> "$work/config.err"; then
     has "rendered: outbox sending stays off" "$work/config.yml" 'OUTBOX_SENDER_ENABLED: "false"'
@@ -148,6 +148,7 @@ if docker compose version > /dev/null 2>&1; then
     lacks "rendered: the shell's Google client is ignored" "$work/config.yml" "hostile-google"
     lacks "rendered: the shell's JWT secret is ignored" "$work/config.yml" "hostile-secret"
     lacks "rendered: the shell's admin is ignored" "$work/config.yml" "hostile@example.com"
+    lacks "rendered: the shell's Claude token is ignored" "$work/config.yml" "hostile-token"
     published=$(grep -c "published:" "$work/config.yml" || true)
     loopback=$(grep -c "host_ip: 127.0.0.1" "$work/config.yml" || true)
     if [ "$published" = 2 ] && [ "$loopback" = 2 ]; then pass "rendered: two ports, both on loopback"; else fail "rendered: $published published ports, $loopback on 127.0.0.1"; fi
