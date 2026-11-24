@@ -26,6 +26,7 @@ services:
       SMTP_PASSWORD: ""
       MAIL_FROM: ""
       LLM_PROVIDER: none
+      LLM_BACKUP_PROVIDER: none
       LLM_MODEL: ""
       LLM_CLI_COMMAND: ""
       LLM_CLI_ARGS: ""

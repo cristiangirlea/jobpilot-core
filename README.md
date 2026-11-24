@@ -58,7 +58,7 @@ The one submission path is the outbox sender (see "Sending approved applications
 
 ### Requirements
 
-- Docker Desktop with Docker Compose v2.
+- Docker Desktop with Docker Compose v2.20.2 or later.
 - Make, or the ability to run the equivalent commands from `Makefile`.
 - Ports `3000`, `8080`, and `5432` available.
 
@@ -1258,12 +1258,18 @@ All optional. `LLM_PROVIDER=none` is the default and keeps the API fully determi
 | `LLM_CLI_DIR` | An existing, writable folder under which each call gets a new empty folder of its own; empty (default) means the system's temporary folder |
 | `CLAUDE_CODE_OAUTH_TOKEN` | Claude Code's sign-in, from `claude setup-token`; set in `.env`, never in the image |
 | `API_IMAGE_TARGET` | Compose only: `runtime` (default) or `ai`, the API image with the claude and codex CLIs |
-| `LLM_OLLAMA_URL` | Base URL for the `ollama` provider |
+| `LLM_BACKUP_PROVIDER` | `none` (default) or `ollama`, used only when the primary fails; needs a primary that is not Ollama |
+| `LLM_BACKUP_MODEL` | The backup's Ollama model, e.g. `llama3.2:3b` |
+| `LLM_BACKUP_TIMEOUT_SECONDS` | Per-call timeout for the backup, default `180` |
+| `COMPOSE_PROFILES` | Compose only: `ollama` starts the bundled Ollama server and pulls `LLM_BACKUP_MODEL` before the API starts |
+| `LLM_OLLAMA_URL` | Base URL for the `ollama` provider and the backup; `http://ollama:11434` for the bundled server |
 | `LLM_MODEL` | Model name; optional for the CLI provider |
 | `LLM_TIMEOUT_SECONDS` | Per-call timeout, default `90` |
 | `LLM_CALLS_PER_HOUR` | Rolling call budget, default `120` |
 
 The `cli` provider bills against an existing subscription instead of per token, which makes it the cheapest option. It needs the CLI in the same environment as the API: in Compose, build the `ai` target of `apps/api/Dockerfile` (`API_IMAGE_TARGET=ai`), which adds pinned claude and codex CLIs to the same non-root image; natively, install the CLI yourself. The CLI runs in an empty folder and receives only the environment variables it needs, never the API's secrets such as `JWT_SECRET` or `DATABASE_URL`.
+
+The Ollama backup in Compose stands behind a working primary (`LLM_PROVIDER=cli` as above; the API refuses to start with a backup and no primary). Add `COMPOSE_PROFILES=ollama`, `LLM_BACKUP_PROVIDER=ollama`, `LLM_BACKUP_MODEL` and `LLM_OLLAMA_URL=http://ollama:11434`. The `ollama` service runs on the CPU, keeps its models in the `jobpilot_ollama` volume and publishes no port; `ollama-pull` downloads the model on the first start (a few GB) and the API starts after it, while later starts reuse the model without the network. If the pull fails (no `LLM_BACKUP_MODEL`, a wrong name, or no network on the first start), `ollama-pull` logs a warning (`docker compose logs ollama-pull`) and the API starts anyway, so `up --wait` and a release still succeed: the primary keeps working, and while the backup's model is missing, the drafts it would have written use the templates. A 3B model such as `llama3.2:3b` fits a CPU-only host with 8 GB of memory or more.
 
 ### Frontend environment
 

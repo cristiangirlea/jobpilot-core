@@ -135,12 +135,13 @@ has "no Google sign-in" "$override" 'GOOGLE_CLIENT_ID: ""'
 if docker compose version > /dev/null 2>&1; then
   mkdir "$work/empty"
   : > "$work/empty/.env"
-  if env OUTBOX_SENDER_ENABLED=true SMTP_HOST=smtp.example.com LLM_PROVIDER=cli GOOGLE_CLIENT_ID=hostile-google \
+  if env OUTBOX_SENDER_ENABLED=true SMTP_HOST=smtp.example.com LLM_PROVIDER=cli LLM_BACKUP_PROVIDER=ollama GOOGLE_CLIENT_ID=hostile-google \
     REGISTRATION=closed JWT_SECRET=hostile-secret ADMIN_EMAILS=hostile@example.com CLAUDE_CODE_OAUTH_TOKEN=hostile-token \
     docker compose -p jobpilot-staging-test --project-directory "$work/empty" --env-file "$work/empty/.env" \
     -f "$repo/docker-compose.yml" -f "$override" config > "$work/config.yml" 2> "$work/config.err"; then
     has "rendered: outbox sending stays off" "$work/config.yml" 'OUTBOX_SENDER_ENABLED: "false"'
     has "rendered: no AI provider" "$work/config.yml" "LLM_PROVIDER: none"
+    has "rendered: no backup AI provider" "$work/config.yml" "LLM_BACKUP_PROVIDER: none"
     has "rendered: sign-up is open" "$work/config.yml" "REGISTRATION: open"
     has "rendered: the staging JWT secret" "$work/config.yml" "JWT_SECRET: staging-only-not-a-secret"
     has "rendered: only the staging admin" "$work/config.yml" "ADMIN_EMAILS: staging@jobpilot.test"
@@ -156,6 +157,43 @@ if docker compose version > /dev/null 2>&1; then
     has "rendered: the web on 13000" "$work/config.yml" 'published: "13000"'
   else
     fail "docker compose config failed: $(head -c 300 "$work/config.err")"
+  fi
+
+  # docker-compose.yml's ollama profile: absent by default; when on, unpublished and pulled first.
+  # Rendered in a clean environment so nothing from the caller's shell lands in the files.
+  plain() {
+    for v in PATH HOME USERPROFILE SYSTEMROOT PROGRAMFILES PROGRAMDATA APPDATA LOCALAPPDATA TEMP TMP \
+      DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG DOCKER_CERT_PATH DOCKER_TLS_VERIFY MSYS_NO_PATHCONV; do
+      eval "x=\${$v-}"
+      [ -z "$x" ] || set -- "$v=$x" "$@"
+    done
+    env -i "$@"
+  }
+  if plain docker compose -p jobpilot-compose-test --project-directory "$work/empty" --env-file "$work/empty/.env" \
+    -f "$repo/docker-compose.yml" config > "$work/plain.yml" 2> "$work/plain.err"; then
+    lacks "compose: no Ollama without the profile" "$work/plain.yml" "ollama/ollama"
+  else
+    fail "docker compose config failed: $(head -c 300 "$work/plain.err")"
+  fi
+  if plain LLM_BACKUP_MODEL=test-model docker compose -p jobpilot-compose-test --project-directory "$work/empty" \
+    --env-file "$work/empty/.env" -f "$repo/docker-compose.yml" --profile ollama config \
+    > "$work/ollama.yml" 2> "$work/ollama.err"; then
+    has "compose: Ollama with the profile" "$work/ollama.yml" "image: ollama/ollama:"
+    has "compose: the pull reaches Ollama on the Compose network" "$work/ollama.yml" "OLLAMA_HOST: http://ollama:11434"
+    if grep -q '^  ollama-pull:$' "$work/ollama.yml" &&
+      sed -n '/^  api:$/,/^  [a-z][a-z-]*:$/p' "$work/ollama.yml" | grep -A2 '^      ollama-pull:$' |
+      grep -q 'condition: service_completed_successfully'; then
+      pass "compose: the API waits for the model pull to finish"
+    else
+      fail "compose: the API does not wait for the model pull to finish"
+    fi
+    if sed -n '/^  ollama:$/,/^  [a-z][a-z-]*:$/p' "$work/ollama.yml" | grep -q '^    ports:'; then
+      fail "compose: Ollama publishes a port"
+    else
+      pass "compose: Ollama publishes no port"
+    fi
+  else
+    fail "docker compose config --profile ollama failed: $(head -c 300 "$work/ollama.err")"
   fi
 elif [ -n "${STAGING_TEST_REQUIRE_COMPOSE:-}" ]; then
   fail "docker compose is required here (STAGING_TEST_REQUIRE_COMPOSE) but not available"

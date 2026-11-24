@@ -84,6 +84,10 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+      # Only with the ollama profile: the backup model is on disk before the API starts.
+      ollama-pull:
+        condition: service_completed_successfully
+        required: false
     ports:
       - "8080:8080"
     healthcheck:
@@ -105,6 +109,40 @@ services:
       - "3000:3000"
     restart: unless-stopped
 
+  # The backup AI provider, off unless COMPOSE_PROFILES includes ollama. Reachable only on the
+  # Compose network: set LLM_OLLAMA_URL=http://ollama:11434. It runs on the CPU.
+  ollama:
+    image: ollama/ollama:0.40.16
+    profiles: [ollama]
+    volumes:
+      - jobpilot_ollama:/root/.ollama
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  # Pulls LLM_BACKUP_MODEL into the volume once; later starts reuse it without the network.
+  # A failed pull only warns, so `up --wait` and a release still succeed without the backup.
+  ollama-pull:
+    image: ollama/ollama:0.40.16
+    profiles: [ollama]
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+      LLM_BACKUP_MODEL: ${LLM_BACKUP_MODEL:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        test -n "$$LLM_BACKUP_MODEL" || { echo "warning: the ollama profile needs LLM_BACKUP_MODEL" >&2; exit 0; };
+        ollama show "$$LLM_BACKUP_MODEL" > /dev/null 2>&1 || ollama pull "$$LLM_BACKUP_MODEL" ||
+        echo "warning: could not pull $$LLM_BACKUP_MODEL; the backup's drafts use the templates" >&2
+    restart: "no"
+
 volumes:
   jobpilot_postgres:
+  jobpilot_ollama:
 
