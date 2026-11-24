@@ -21,6 +21,6 @@ paths:
   pins them, so change both together.
 - A new or changed SQL query gets a `...Postgres` test (skips without `JOBPILOT_TEST_DATABASE_URL`).
   Run it against a throwaway container, never the owner's database.
-- A model change goes through `internal/models`, the store queries, and `apps/web/lib/types.ts`
-  together.
+- A model change goes through `internal/models`, the store queries, and, for a model the web app
+  reads, `apps/web/lib/types.ts` together.
 - Test fixtures are invented people and companies, never the owner's profile or CV.

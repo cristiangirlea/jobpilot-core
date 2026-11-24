@@ -26,7 +26,11 @@ func TestShadow(t *testing.T) {
 	want := &models.ShadowEvaluation{
 		ExtractionID: answer.ID, TextHash: answer.TextHash, AnsweredAt: now,
 		RulesScore: rules.Score, RulesRejected: rules.Rejected,
+		RulesParts: &models.RulesParts{Skill: rules.Breakdown["skill_match"], Seniority: rules.Breakdown["seniority_match"], MatchedSkills: 1},
 		Evaluation: EvaluateWith(profile, blacklist, nil, job, answer.Extraction, now),
+	}
+	if skill, seniority := want.RulesParts.Skill, want.RulesParts.Seniority; skill == 0 || seniority == 0 || skill == seniority {
+		t.Fatalf("the fixture needs two different parts above zero, got skill %d and seniority %d", skill, seniority)
 	}
 	if got := Shadow(profile, blacklist, nil, job, rules, answer, now); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Shadow() = %+v, want %+v", got, want)

@@ -57,12 +57,21 @@ type JobExtraction struct {
 
 // ShadowEvaluation records what the extraction and rules scored from the same posting and profile.
 type ShadowEvaluation struct {
-	ExtractionID  string     `json:"extraction_id"`
-	TextHash      string     `json:"text_hash"`
-	AnsweredAt    time.Time  `json:"answered_at"`
-	RulesScore    int        `json:"rules_score"`
-	RulesRejected bool       `json:"rules_rejected"`
-	Evaluation    Evaluation `json:"evaluation"`
+	ExtractionID  string    `json:"extraction_id"`
+	TextHash      string    `json:"text_hash"`
+	AnsweredAt    time.Time `json:"answered_at"`
+	RulesScore    int       `json:"rules_score"`
+	RulesRejected bool      `json:"rules_rejected"`
+	// RulesParts is nil on a comparison stored before it existed.
+	RulesParts *RulesParts `json:"rules_parts,omitempty"`
+	Evaluation Evaluation  `json:"evaluation"`
+}
+
+// RulesParts keeps what an extraction can change in the rules' result, so the summary can say where a difference comes from.
+type RulesParts struct {
+	Skill         int `json:"skill"`
+	Seniority     int `json:"seniority"`
+	MatchedSkills int `json:"matched_skills"`
 }
 
 // ExtractionSummary counts current catalog answers and the signed-in account's comparisons.
@@ -78,6 +87,7 @@ type ExtractionSummary struct {
 	MultiLine              ExtractionTexts    `json:"multi_line"`
 	Compared               int                `json:"compared"`
 	ScoreDifferences       []ScoreDifferences `json:"score_differences"`
+	DifferenceParts        []DifferenceParts  `json:"difference_parts"`
 	MinScore               int                `json:"min_score"`
 	WouldReachMinScore     int                `json:"would_reach_min_score"`
 	WouldFallBelowMinScore int                `json:"would_fall_below_min_score"`
@@ -95,4 +105,18 @@ type ScoreDifferences struct {
 	Min   int `json:"min"`
 	Max   int `json:"max"`
 	Count int `json:"count"`
+}
+
+// DifferenceParts sums, over one range's matches, where extraction minus rules comes from.
+// Only comparisons that kept the rules' parts are split.
+type DifferenceParts struct {
+	Min                     int `json:"min"`
+	Max                     int `json:"max"`
+	Matches                 int `json:"matches"`
+	Skill                   int `json:"skill"`
+	Seniority               int `json:"seniority"`
+	Other                   int `json:"other"`
+	RulesMatchedSkills      int `json:"rules_matched_skills"`
+	ExtractionMatchedSkills int `json:"extraction_matched_skills"`
+	ExtractionMatchedNone   int `json:"extraction_matched_none"`
 }

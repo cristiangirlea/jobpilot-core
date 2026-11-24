@@ -195,19 +195,36 @@ func TestExtractionSummaryAgainstPostgres(t *testing.T) {
 	if _, err := tx.Exec(ctx, `INSERT INTO discovery_settings (user_id, min_score) VALUES ($1, 60)`, user); err != nil {
 		t.Fatal(err)
 	}
+	parts := func(skill, seniority int) map[string]int {
+		return map[string]int{"skill_match": skill, "seniority_match": seniority, "title_match": 20}
+	}
+	rulesParts := func(skill, seniority, matched int) *models.RulesParts {
+		return &models.RulesParts{Skill: skill, Seniority: seniority, MatchedSkills: matched}
+	}
 	for _, tc := range []struct {
 		name, description     string
 		rules, extracted      int
 		blocked, closed, drop bool
+		rulesParts            *models.RulesParts
+		extractedParts        map[string]int
+		extractedSkills       []string
 	}{
-		{name: "reach", description: "Go required.", rules: 39, extracted: 60, drop: true},
-		{name: "fall", description: "Go required.\nRust optional.", rules: 60, extracted: 35},
-		{name: "rules rejection", description: "Go required.", rules: 50, extracted: 70, blocked: true},
-		{name: "middle negative", description: "Go required.", rules: 90, extracted: 71},
-		{name: "small negative", description: "Go required.\nRust optional.", rules: 90, extracted: 81},
-		{name: "tie", description: "Go required.", rules: 65, extracted: 65},
-		{name: "small positive", description: "Go required.", rules: 62, extracted: 71},
-		{name: "middle positive", description: "Go required.", rules: 70, extracted: 89},
+		{name: "reach", description: "Go required.", rules: 39, extracted: 60, drop: true,
+			rulesParts: rulesParts(9, 10, 1), extractedParts: parts(30, 10), extractedSkills: []string{"Go", "PostgreSQL"}},
+		{name: "fall", description: "Go required.\nRust optional.", rules: 60, extracted: 35,
+			rulesParts: rulesParts(25, 15, 2), extractedParts: parts(5, 10), extractedSkills: []string{}},
+		{name: "rules rejection", description: "Go required.", rules: 50, extracted: 70, blocked: true,
+			rulesParts: rulesParts(10, 0, 1), extractedParts: map[string]int{"skill_match": 25, "title_match": 45}, extractedSkills: []string{"Go"}},
+		{name: "second small positive", description: "Go required.", rules: 70, extracted: 75,
+			rulesParts: rulesParts(15, 5, 2), extractedParts: parts(20, 5)},
+		{name: "middle negative", description: "Go required.", rules: 90, extracted: 71,
+			rulesParts: rulesParts(30, 15, 1), extractedParts: parts(15, 15), extractedSkills: []string{"Go"}},
+		{name: "small negative, stored before the parts were", description: "Go required.\nRust optional.", rules: 90, extracted: 81,
+			extractedParts: parts(21, 15)},
+		{name: "tie, parts without seniority", description: "Go required.", rules: 65, extracted: 65, rulesParts: rulesParts(10, 5, 0), extractedParts: parts(5, 10)},
+		{name: "small positive", description: "Go required.", rules: 62, extracted: 71, rulesParts: rulesParts(12, 0, 0), extractedParts: parts(12, 9)},
+		{name: "middle positive, null parts", description: "Go required.", rules: 70, extracted: 89,
+			rulesParts: rulesParts(1, 0, 1), extractedParts: parts(20, 0), extractedSkills: []string{"Go"}},
 		{name: "stale hash", description: "Go required.\nRust optional.", rules: 59, extracted: 80},
 		{name: "stale ID", description: "Go required.", rules: 59, extracted: 80},
 		{name: "closed", description: "Go required.", rules: 59, extracted: 80, closed: true, drop: true},
@@ -219,7 +236,8 @@ func TestExtractionSummaryAgainstPostgres(t *testing.T) {
 		})
 		shadow := models.ShadowEvaluation{
 			ExtractionID: x.ID, TextHash: x.TextHash, AnsweredAt: x.CreatedAt.UTC(),
-			RulesScore: tc.rules, RulesRejected: tc.blocked, Evaluation: models.Evaluation{Score: tc.extracted},
+			RulesScore: tc.rules, RulesRejected: tc.blocked, RulesParts: tc.rulesParts,
+			Evaluation: models.Evaluation{Score: tc.extracted, Breakdown: tc.extractedParts, MatchedSkills: tc.extractedSkills},
 		}
 		if _, err := saveJobEvaluation(ctx, tx, other, "", JobEvaluation{JobID: job, Shadow: &shadow}); err != nil {
 			t.Fatal(err)
@@ -230,9 +248,20 @@ func TestExtractionSummaryAgainstPostgres(t *testing.T) {
 		case "stale ID":
 			shadow.ExtractionID = other
 		}
-		rules := models.Evaluation{Score: tc.rules, Rejected: tc.blocked}
+		// The match shows parts of another scoring; the summary must not read them.
+		rules := models.Evaluation{Score: tc.rules, Rejected: tc.blocked, Breakdown: parts(1, 2), MatchedSkills: []string{"Kotlin", "Java", "AWS"}}
 		if _, err := saveJobEvaluation(ctx, tx, user, "", JobEvaluation{JobID: job, Evaluation: rules, Shadow: &shadow}); err != nil {
 			t.Fatal(err)
+		}
+		// The API writes neither shape; the summary must still answer.
+		change := map[string]string{
+			"tie, parts without seniority": `shadow_evaluation #- '{rules_parts,seniority}'`,
+			"middle positive, null parts":  `jsonb_set(shadow_evaluation, '{rules_parts}', 'null')`,
+		}[tc.name]
+		if change != "" {
+			if _, err := tx.Exec(ctx, `UPDATE job_matches SET shadow_evaluation=`+change+` WHERE user_id=$1 AND job_id=$2`, user, job); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	for _, tc := range []struct {
@@ -255,25 +284,36 @@ func TestExtractionSummaryAgainstPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.OpenJobs < 13 || got.SingleLine.OpenJobs < 8 || got.MultiLine.OpenJobs < 5 ||
+	if got.OpenJobs < 14 || got.SingleLine.OpenJobs < 9 || got.MultiLine.OpenJobs < 5 ||
 		got.OpenJobs != got.SingleLine.OpenJobs+got.MultiLine.OpenJobs {
 		t.Fatalf("catalog totals = %+v", got)
 	}
 	want := models.ExtractionSummary{
 		Model: model, PromptVersion: prompt, OpenJobs: got.OpenJobs,
-		CurrentExtractions: 10, DroppedSeniority: 1, RejectedAnswers: map[string]int{"not_json": 1, "unknown_field": 1},
-		SingleLine: models.ExtractionTexts{OpenJobs: got.SingleLine.OpenJobs, Answered: 8, Rejected: 1},
+		CurrentExtractions: 11, DroppedSeniority: 1, RejectedAnswers: map[string]int{"not_json": 1, "unknown_field": 1},
+		SingleLine: models.ExtractionTexts{OpenJobs: got.SingleLine.OpenJobs, Answered: 9, Rejected: 1},
 		MultiLine:  models.ExtractionTexts{OpenJobs: got.MultiLine.OpenJobs, Answered: 4, Rejected: 1},
-		Compared:   8, MinScore: 60, WouldReachMinScore: 1, WouldFallBelowMinScore: 1,
+		Compared:   9, MinScore: 60, WouldReachMinScore: 1, WouldFallBelowMinScore: 1,
 		ScoreDifferences: []models.ScoreDifferences{
 			{Min: -100, Max: -20, Count: 1}, {Min: -19, Max: -10, Count: 1}, {Min: -9, Max: -1, Count: 1},
-			{Min: 0, Max: 0, Count: 1}, {Min: 1, Max: 9, Count: 1}, {Min: 10, Max: 19, Count: 1}, {Min: 20, Max: 100, Count: 2},
+			{Min: 0, Max: 0, Count: 1}, {Min: 1, Max: 9, Count: 2}, {Min: 10, Max: 19, Count: 1}, {Min: 20, Max: 100, Count: 2},
+		},
+		// Not split: the comparison stored before the parts were, and the one whose parts are null.
+		// The tie's parts lack the rules' seniority, which then counts as zero.
+		DifferenceParts: []models.DifferenceParts{
+			{Min: -100, Max: -20, Matches: 1, Skill: -20, Seniority: -5, RulesMatchedSkills: 2, ExtractionMatchedNone: 1},
+			{Min: -19, Max: -10, Matches: 1, Skill: -15, Other: -4, RulesMatchedSkills: 1, ExtractionMatchedSkills: 1},
+			{Min: -9, Max: -1},
+			{Min: 0, Max: 0, Matches: 1, Skill: -5, Seniority: 10, Other: -5},
+			{Min: 1, Max: 9, Matches: 2, Skill: 5, Seniority: 9, RulesMatchedSkills: 2, ExtractionMatchedNone: 1},
+			{Min: 10, Max: 19},
+			{Min: 20, Max: 100, Matches: 2, Skill: 36, Other: 5, RulesMatchedSkills: 2, ExtractionMatchedSkills: 3},
 		},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("summary = %+v, want %+v", got, want)
 	}
-	if got, err := extractionSummary(ctx, tx, other, model, prompt); err != nil || got.MinScore != 75 || got.Compared != 10 {
+	if got, err := extractionSummary(ctx, tx, other, model, prompt); err != nil || got.MinScore != 75 || got.Compared != 11 {
 		t.Fatalf("second account's summary = %+v, %v", got, err)
 	}
 	empty, err := extractionSummary(ctx, tx, user, "", prompt)
@@ -285,6 +325,12 @@ func TestExtractionSummaryAgainstPostgres(t *testing.T) {
 	}
 	if !slices.Equal(empty.ScoreDifferences, want.ScoreDifferences) {
 		t.Fatalf("empty ranges = %+v, want %+v", empty.ScoreDifferences, want.ScoreDifferences)
+	}
+	for i, part := range want.DifferenceParts {
+		want.DifferenceParts[i] = models.DifferenceParts{Min: part.Min, Max: part.Max}
+	}
+	if !slices.Equal(empty.DifferenceParts, want.DifferenceParts) {
+		t.Fatalf("empty parts = %+v, want %+v", empty.DifferenceParts, want.DifferenceParts)
 	}
 }
 

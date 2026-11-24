@@ -477,7 +477,8 @@ The main matching implementation is `apps/api/internal/matching/matching.go`. Co
 ### Shadow scoring
 
 In `shadow` mode, a match stores the extraction's evaluation, the extraction's ID, its text hash and when its answer was stored,
-and the rules' score calculated at the same time because freshness points depend on the day.
+and the rules' score calculated at the same time because freshness points depend on the day, with the rules' skill part,
+seniority part and number of matched skills, which the summary compares.
 An extraction is used only for the exact text being scored. After the extraction route responds,
 the API refreshes each account's shadow evaluation in the background under its matching lock.
 A failure is logged and the stored answer stands. Discovery runs and manual imports take the same
@@ -906,7 +907,7 @@ The routes are restricted to admins when `ADMIN_EMAILS` is set. An admin can run
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/extractions/pending` | List open discovered postings that need an answer for the configured model and prompt version. `limit` defaults to 50 and accepts 1 through 200. |
-| `GET` | `/api/extractions/summary` | Admin only. Counts open jobs with a current extraction, rejected answers by reason, answers whose seniority was dropped, and open jobs by single-line or other descriptions. For the signed-in account, it counts matches by score difference (extraction minus rules) and how many would reach or fall below its minimum score. It returns no posting text or data from another account. |
+| `GET` | `/api/extractions/summary` | Admin only. Counts open jobs with a current extraction, rejected answers by reason, answers whose seniority was dropped, and open jobs by single-line or other descriptions. For the signed-in account, it counts matches by score difference (extraction minus rules) and how many would reach or fall below its minimum score. `difference_parts` splits each range of differences into the parts of the score: the summed difference of the skill part, of the seniority part and of the rest, the summed number of matched profile skills on each side, and how many matches have a matched skill under the rules and none under the extraction. A match is split from the rules' skill part, seniority part and number of matched skills kept in its comparison; a comparison stored before those were kept is counted and not split until the match is scored again. It returns no posting text, no skill names and no data from another account. |
 | `POST` | `/api/extractions` | Verify and store an answer using `job_id`, `text_hash`, and the model's raw `answer` as a JSON string. Requires write scope and returns 409 if the posting changed. |
 
 #### Run the extraction batch
@@ -930,7 +931,7 @@ go run ./cmd/extract --dry-run
 - `--concurrency` defaults to 4 and accepts 1 through 8. `--timeout` defaults to `2m` and accepts `10s` through `15m` per model request.
 - `--max` caps how many postings the command asks the model about. The default `0` means no cap.
 - `--dry-run` asks the model without posting answers. Postings asked about in a dry run and postings that keep failing can be asked about again on the next run.
-- `--summary` prints only the extraction summary counts. It cannot be combined with `--dry-run` or a positive `--max`.
+- `--summary` prints only the extraction summary counts, and per range of score differences the mean of each part of the difference. It cannot be combined with `--dry-run` or a positive `--max`.
 - A run reads the newest 200 pending postings at a time, asks each posting once, and ends when a page holds nothing it has not asked yet. It prints counts and timings only, never posting text.
 
 ### AI, answer bank, and CV endpoints

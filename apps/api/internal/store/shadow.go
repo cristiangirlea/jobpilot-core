@@ -84,6 +84,11 @@ func saveShadowEvaluation(ctx context.Context, db extractionDB, u, jobID string,
 	return err
 }
 
+// shadowPart is one part of the score, the extraction's minus the rules' kept in the same comparison.
+func shadowPart(extraction, rules string) string {
+	return `COALESCE((m.shadow_evaluation->'evaluation'->'breakdown'->>'` + extraction + `')::int, 0)-COALESCE((m.shadow_evaluation->'rules_parts'->>'` + rules + `')::int, 0)`
+}
+
 // ExtractionSummary counts answers for open jobs and, of matches, only this account's; it selects no posting text.
 func (s *Store) ExtractionSummary(ctx context.Context, u, model, promptVersion string) (models.ExtractionSummary, error) {
 	return extractionSummary(ctx, s.DB, u, model, promptVersion)
@@ -103,10 +108,18 @@ func extractionSummary(ctx context.Context, db extractionDB, u, model, promptVer
 			FROM jobs j LEFT JOIN job_extractions x ON x.job_id=j.id AND x.model=$2 AND x.prompt_version=$3
 				AND x.text_hash=`+extractionTextHash+`
 			WHERE j.closed_at IS NULL AND j.discovered_at IS NOT NULL
+		), ranges(min, max) AS (
+			VALUES (-100,-20), (-19,-10), (-9,-1), (0,0), (1,9), (10,19), (20,100)
 		), compared AS (
 			SELECT (m.shadow_evaluation->>'rules_score')::int AS rules_score,
 				(m.shadow_evaluation->>'rules_rejected')::boolean AS rules_rejected,
-				(m.shadow_evaluation->'evaluation'->>'score')::int AS extraction_score
+				(m.shadow_evaluation->'evaluation'->>'score')::int AS extraction_score,
+				jsonb_typeof(m.shadow_evaluation->'rules_parts')='object' AS has_parts,
+				`+shadowPart("skill_match", "skill")+` AS skill,
+				`+shadowPart("seniority_match", "seniority")+` AS seniority,
+				COALESCE((m.shadow_evaluation->'rules_parts'->>'matched_skills')::int, 0) AS rules_matched,
+				CASE WHEN jsonb_typeof(m.shadow_evaluation->'evaluation'->'matched_skills')='array'
+					THEN jsonb_array_length(m.shadow_evaluation->'evaluation'->'matched_skills') ELSE 0 END AS extraction_matched
 			FROM job_matches m JOIN open_jobs x ON x.job_id=m.job_id
 			WHERE m.user_id=$1 AND m.shadow_evaluation IS NOT NULL AND x.status='ok'
 				AND x.extraction_id::text=m.shadow_evaluation->>'extraction_id'
@@ -116,8 +129,19 @@ func extractionSummary(ctx context.Context, db extractionDB, u, model, promptVer
 			SELECT reason, count(*) AS count FROM open_jobs WHERE status='rejected' GROUP BY reason
 		), differences AS (
 			SELECT min, max, count(c.extraction_score) AS count
-			FROM (VALUES (-100,-20), (-19,-10), (-9,-1), (0,0), (1,9), (10,19), (20,100)) AS ranges(min,max)
-			LEFT JOIN compared c ON c.extraction_score-c.rules_score BETWEEN min AND max
+			FROM ranges LEFT JOIN compared c ON c.extraction_score-c.rules_score BETWEEN min AND max
+			GROUP BY min, max
+		), split AS (
+			SELECT extraction_score-rules_score AS difference, skill, seniority, rules_matched, extraction_matched
+			FROM compared WHERE has_parts
+		), parts AS (
+			SELECT min, max, count(s.difference) AS matches,
+				COALESCE(sum(s.skill), 0) AS skill, COALESCE(sum(s.seniority), 0) AS seniority,
+				COALESCE(sum(s.difference-s.skill-s.seniority), 0) AS other,
+				COALESCE(sum(s.rules_matched), 0) AS rules_matched_skills,
+				COALESCE(sum(s.extraction_matched), 0) AS extraction_matched_skills,
+				count(*) FILTER (WHERE s.rules_matched>0 AND s.extraction_matched=0) AS extraction_matched_none
+			FROM ranges LEFT JOIN split s ON s.difference BETWEEN min AND max
 			GROUP BY min, max
 		), threshold AS (
 			SELECT count(*) AS compared,
@@ -132,12 +156,13 @@ func extractionSummary(ctx context.Context, db extractionDB, u, model, promptVer
 			count(*) FILTER (WHERE NOT single_line AND status='rejected'),
 			(SELECT COALESCE(jsonb_object_agg(reason, count), '{}'::jsonb) FROM rejected),
 			(SELECT jsonb_agg(differences ORDER BY min) FROM differences),
+			(SELECT jsonb_agg(parts ORDER BY min) FROM parts),
 			(SELECT compared FROM threshold), (SELECT would_reach FROM threshold), (SELECT would_fall FROM threshold)
 		FROM open_jobs`, u, model, promptVersion, out.MinScore).Scan(
 		&out.OpenJobs, &out.CurrentExtractions, &out.DroppedSeniority,
 		&out.SingleLine.OpenJobs, &out.SingleLine.Answered, &out.SingleLine.Rejected,
 		&out.MultiLine.OpenJobs, &out.MultiLine.Answered, &out.MultiLine.Rejected,
-		&out.RejectedAnswers, &out.ScoreDifferences,
+		&out.RejectedAnswers, &out.ScoreDifferences, &out.DifferenceParts,
 		&out.Compared, &out.WouldReachMinScore, &out.WouldFallBelowMinScore,
 	)
 	return out, err

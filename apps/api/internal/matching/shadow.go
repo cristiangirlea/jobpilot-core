@@ -18,6 +18,9 @@ func Shadow(profile models.Profile, blacklist []models.BlacklistEntry, filter *m
 		AnsweredAt:    x.CreatedAt.UTC(),
 		RulesScore:    rules.Score,
 		RulesRejected: rules.Rejected,
-		Evaluation:    EvaluateWith(profile, blacklist, filter, job, x.Extraction, now),
+		RulesParts: &models.RulesParts{
+			Skill: rules.Breakdown["skill_match"], Seniority: rules.Breakdown["seniority_match"], MatchedSkills: len(rules.MatchedSkills),
+		},
+		Evaluation: EvaluateWith(profile, blacklist, filter, job, x.Extraction, now),
 	}
 }

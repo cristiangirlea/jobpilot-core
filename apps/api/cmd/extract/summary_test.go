@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -81,6 +82,68 @@ Minimum score 75: 30 would reach it, 22 would fall below it
 	}
 }
 
+func TestSummaryPrintsWhereTheDifferenceComesFrom(t *testing.T) {
+	api := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{
+			"scoring": "shadow", "model": "example-model", "prompt_version": "prompt-v1", "compared": 31,
+			"score_differences": [
+				{"min": -100, "max": -31, "count": 12},
+				{"min": -30, "max": -30, "count": 1},
+				{"min": 0, "max": 0, "count": 10},
+				{"min": 1, "max": 100, "count": 8}
+			],
+			"difference_parts": [
+				{"min": -100, "max": -31, "matches": 10, "skill": -215, "seniority": -100, "other": -5,
+					"rules_matched_skills": 52, "extraction_matched_skills": 11, "extraction_matched_none": 4},
+				{"min": -30, "max": -30, "matches": 1, "skill": -30, "seniority": 0, "other": 0,
+					"rules_matched_skills": 501, "extraction_matched_skills": 0, "extraction_matched_none": 1},
+				{"min": 0, "max": 0, "matches": 10, "skill": -20, "seniority": 20, "other": 0,
+					"rules_matched_skills": 0, "extraction_matched_skills": 30, "extraction_matched_none": 0},
+				{"min": 1, "max": 100, "matches": 0, "skill": 0, "seniority": 0, "other": 0,
+					"rules_matched_skills": 0, "extraction_matched_skills": 0, "extraction_matched_none": 0}
+			]
+		}`)
+	})
+	const want = `Where the difference comes from, for 21 of 31 matches (means per match, extraction minus rules):
+  -100 to -31: 10 matches; skills -21.5, seniority -10.0, other -0.5; matched skills: rules 5.2, extraction 1.1; none matched by the extraction: 4
+  -30: 1 matches; skills -30.0, seniority +0.0, other +0.0; matched skills: rules 501.0, extraction 0.0; none matched by the extraction: 1
+  0: 10 matches; skills -2.0, seniority +2.0, other +0.0; matched skills: rules 0.0, extraction 3.0; none matched by the extraction: 0
+  1 to 100: 0 matches
+`
+	code, stdout, stderr := summaryCommand(t, api)
+	if code != 0 || !strings.HasSuffix(stdout, "would fall below it\n"+want) || stderr != "" {
+		t.Fatalf("code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+}
+
+func TestSummaryWithNullPartsPrintsNone(t *testing.T) {
+	api := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"compared": 1, "score_differences": [{"min": 0, "max": 0, "count": 1}], "difference_parts": null}`)
+	})
+	code, stdout, stderr := summaryCommand(t, api)
+	if code != 0 || !strings.HasSuffix(stdout, "would fall below it\n") || stderr != "" {
+		t.Fatalf("code %d, stdout %q, stderr %q", code, stdout, stderr)
+	}
+}
+
+func TestSummaryChecksLargeSumsExactly(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("the sums need 64-bit integers")
+	}
+	// Above 2^53 a float cannot tell these two sums apart.
+	const matches, bound int64 = 100000000000000, 10000000000000000
+	for sum, want := range map[int64]int{bound: 0, bound + 1: 1} {
+		api := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprintf(w, `{"compared": %d, "score_differences": [{"min": 100, "max": 100, "count": %d}],
+				"difference_parts": [{"min": 100, "max": 100, "matches": %d, "skill": %d, "other": %d}]}`,
+				matches, matches, matches, sum, bound-sum)
+		})
+		if code, stdout, stderr := summaryCommand(t, api); code != want || (code == 1) != (stdout == "") {
+			t.Fatalf("skill sum %d: code %d, stdout %q, stderr %q", sum, code, stdout, stderr)
+		}
+	}
+}
+
 func TestSummaryRedactsSettings(t *testing.T) {
 	api := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		reply(w, extractionSummary{
@@ -120,6 +183,24 @@ func TestSummaryErrors(t *testing.T) {
 		{"negative reason count", http.StatusOK, `{"score_differences":[{}],"rejected_answers":{"quote":-1}}`, badResponse},
 		{"negative description count", http.StatusOK, `{"score_differences":[{}],"single_line":{"answered":-1}}`, badResponse},
 		{"negative total", http.StatusOK, `{"score_differences":[{}],"compared":-1}`, badResponse},
+		{"an empty list of parts", http.StatusOK, `{"score_differences":[{}],"difference_parts":[]}`, badResponse},
+		{"more parts than ranges", http.StatusOK, `{"score_differences":[{}],"difference_parts":[{},{}]}`, badResponse},
+		{"a range without parts", http.StatusOK, `{"score_differences":[{},{"min":1,"max":1}],"difference_parts":[{}]}`, badResponse},
+		{"parts of another range", http.StatusOK, `{"score_differences":[{}],"difference_parts":[{"min":1,"max":2}]}`, badResponse},
+		{"a range's parts twice", http.StatusOK, `{"score_differences":[{},{"min":1,"max":1}],"difference_parts":[{},{}]}`, badResponse},
+		{"a range and its parts twice", http.StatusOK, `{"score_differences":[{},{}],"difference_parts":[{},{}]}`, badResponse},
+		{"negative part matches", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"matches":-1}]}`, badResponse},
+		{"more split than the range holds", http.StatusOK, `{"score_differences":[{"count":1}],"compared":5,"difference_parts":[{"matches":2}]}`, badResponse},
+		{"more split than compared", http.StatusOK, `{"score_differences":[{"count":9}],"compared":1,"difference_parts":[{"matches":2}]}`, badResponse},
+		{"part sum without matches", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"skill":1,"other":-1}]}`, badResponse},
+		{"matched skills without matches", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"extraction_matched_skills":1}]}`, badResponse},
+		{"part sum beyond a score", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"matches":2,"seniority":-201,"other":201}]}`, badResponse},
+		{"parts outside their range", http.StatusOK, `{"score_differences":[{"min":-100,"max":-20,"count":1}],"compared":1,"difference_parts":[{"min":-100,"max":-20,"matches":1,"skill":-19}]}`, badResponse},
+		{"negative matched skills", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"matches":2,"rules_matched_skills":-1}]}`, badResponse},
+		{"more unmatched than matches", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"matches":2,"rules_matched_skills":9,"extraction_matched_none":3}]}`, badResponse},
+		{"sums that wrap in 64 bits", http.StatusOK, `{"score_differences":[{"min":-100,"max":100,"count":92233720368547758}],"compared":92233720368547758,` +
+			`"difference_parts":[{"min":-100,"max":100,"matches":92233720368547758,"skill":9223372036854775800,"seniority":9223372036854775800,"other":9223372036854775807}]}`, badResponse},
+		{"unmatched without rules skills", http.StatusOK, `{"score_differences":[{"count":5}],"compared":5,"difference_parts":[{"matches":2,"extraction_matched_none":1}]}`, badResponse},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			api := fakeServer(t, func(w http.ResponseWriter, _ *http.Request) {
