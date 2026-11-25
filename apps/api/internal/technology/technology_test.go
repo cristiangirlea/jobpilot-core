@@ -103,7 +103,7 @@ func TestMentionsSkipGoInEverydayPhrases(t *testing.T) {
 		"Port Go-to-Node.js bridges.":                                    1,
 		"Maintain a Go-to-SQL Server connector.":                         1,
 		"Transpile Go to source code in the target language.":            1,
-		"Go to production twice a day.":                                  1,
+		"Ship Go to production twice a day.":                             1,
 		"A Go-to-Python transpiler for our go\u2011to\u2011market team.": 1,
 		"Maintain a Go to Python transpiler.":                            1,
 		"Lead the Go to Rust migration.":                                 1,
@@ -129,6 +129,90 @@ func TestMentionsSkipGoInEverydayPhrases(t *testing.T) {
 	}
 	if !HasEverydayUses("go") || HasEverydayUses("rust") {
 		t.Error("only go has everyday uses")
+	}
+}
+
+// Outside the listed phrases the verb "go" counted as Go: "our releases go
+// through review". Before a word the verb takes, go is the verb, unless the
+// text writes "Go" inside a sentence.
+func TestMentionsSkipTheVerbGoBeforeItsUsualWords(t *testing.T) {
+	for _, texts := range [][]string{
+		{"Engineer", "Our releases go through code review."},
+		{"Backend Engineer", "As we go from one team to three, you own the platform."},
+		{"Engineer", "Nodes come and go from the cluster."},
+		{"Engineer", "Your best hours go to the client."},
+		{"Engineer", "Ready to go into the code when needed."},
+		{"Engineer", "Questions now go straight to the AI tools."},
+		{"Engineer", "Ship it. Go further together: we value ownership."},
+		{"Engineer", "Our values\nGo beyond the brief"},
+		{"Engineer", "<ul><li>Go deeper than the ticket</li></ul>"},
+		{"Engineer", "Customer\u2011first values\nGo further together"},
+		{"Engineer", "Go to production twice a day."},
+		{"Engineer", "OUR RELEASES GO THROUGH REVIEW."},
+		{"Engineer", "We go above and beyond; go ahead and ship."},
+	} {
+		if got := Mentions(texts...); got["go"] != 0 {
+			t.Errorf("Mentions(%q) = %v, want no go", texts, got)
+		}
+		if got := Signature(0, texts...); len(got) != 0 {
+			t.Errorf("Signature(%q) = %v, want none", texts, got)
+		}
+	}
+	for _, c := range []struct {
+		texts []string
+		want  int
+	}{
+		// Written inside a sentence, Go is the language whatever follows.
+		{[]string{"Engineer", "Services written in Go from day one."}, 1},
+		{[]string{"Engineer", "We moved from Python to Go through 2025."}, 1},
+		{[]string{"Engineer", "Transpile Go to the target language."}, 1},
+		// Before a technology, "to" joins two languages.
+		{[]string{"Engineer", "Go to Rust migration."}, 1},
+		// Everything master counted outside the verb phrases still counts.
+		{[]string{"Go"}, 1},
+		{[]string{"go"}, 1},
+		{[]string{"SENIOR GO DEVELOPER"}, 1},
+		{[]string{"Go Back-End Engineer"}, 1},
+		{[]string{"Engineer", "How many years have you used go?"}, 1},
+		{[]string{"Engineer", "Languages: Python, Rust, and go."}, 1},
+		{[]string{"Engineer", "Go is a plus. Go services on Kafka."}, 2},
+		{[]string{"Engineer", "Work on the go and stay connected."}, 1},
+		{[]string{"Engineer", "Our releases go through review. We write Go."}, 1},
+		{[]string{"Engineer", "熟悉go和rust"}, 1},
+		{[]string{"Engineer", "Nous développons nos services en Go."}, 1},
+		{[]string{"Engineer", "Wir migrieren von Java zu Go."}, 1},
+		// A verb word on the next line or in the next block is not this Go's.
+		{[]string{"Engineer", "Required languages\nGo\nFurther information below"}, 1},
+		{[]string{"Engineer", "<li>Go</li><li>Further languages welcome</li>"}, 1},
+		// Emphasis inside a sentence opens nothing; a quote at a line's start does not hide the verb.
+		{[]string{"Engineer", "Experience deploying **Go to production** is required."}, 1},
+		{[]string{"Engineer", "\"Go further together.\" is our motto."}, 0},
+		{[]string{"Engineer", "- Go further together"}, 0},
+		// A letter whose lower case is longer still lets "to" join two languages.
+		{[]string{"Engineer", "GO-TO-SW\u0130FT bridges."}, 1},
+		// A letter whose lower case is shorter before Go keeps the offsets right.
+		{[]string{"Engineer", "\u0130stanbul office\nGo further together"}, 0},
+		{[]string{"Engineer", "\u0130stanbul: we use Go from day one."}, 1},
+		// A bullet starts an item wherever it stands.
+		{[]string{"Engineer", "Our values \u2022 Go further together"}, 0},
+		{[]string{"Engineer", "Our values \u00b7 Go further together"}, 0},
+		{[]string{"Engineer", "Our values \u2013 Go further together"}, 0},
+		{[]string{"Engineer", "Our values \u2014 Go further together"}, 0},
+		{[]string{"Engineer", "Our values - Go further together"}, 1},
+		{[]string{"Engineer", "Our values\n1) Go further together."}, 0},
+		{[]string{"Engineer", "We deploy compiled languages, e.g. Go to production."}, 1},
+		{[]string{"Engineer", "Our releases go\u00a0through review."}, 0},
+		{[]string{"Engineer", "We use <p-chip>Go from day one</p-chip>."}, 1},
+		{[]string{"Engineer", "We cover pay, leave, etc. Go further together."}, 0},
+		{[]string{"Engineer", "We build a pinned (v1.24) Go from source."}, 1},
+		{[]string{"Engineer", "Our values<p\fclass=x>Go further together.</p>"}, 0},
+		{[]string{"Engineer", "Check your dashboard on the go\u00a0with our mobile app."}, 0},
+		{[]string{"Engineer", "Port Go\u2013to\u2013Rust bridges."}, 1},
+		{[]string{"Engineer", "\u0130stanbul needs go\nFurther information below"}, 1},
+	} {
+		if got := Mentions(c.texts...)["go"]; got != c.want {
+			t.Errorf("Mentions(%q)[go] = %d, want %d", c.texts, got, c.want)
+		}
 	}
 }
 

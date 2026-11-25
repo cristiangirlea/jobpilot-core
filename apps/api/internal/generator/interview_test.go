@@ -159,6 +159,55 @@ func TestInterviewMentionsDoNotReadInsideAnAccentedWord(t *testing.T) {
 	}
 }
 
+// A paragraph that opens with the verb asks for no Go; flattening the markup
+// first hid where the paragraph started.
+func TestInterviewRequirementsSkipTheVerbGoAtAParagraphStart(t *testing.T) {
+	description := "<p>Our values</p><p>Go further together.</p><p>Python services.</p>"
+	for _, match := range []models.Evaluation{{}, {MatchedSkills: []string{"Go"}}, {MissingSkills: []string{"Go"}}} {
+		posting := models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Title: "Go Engineer", Description: description}}, Match: match}
+		if got := interviewRequirements(posting); strings.Join(got, ",") != "python" {
+			t.Errorf("with %+v, interviewRequirements = %v, want [python]", match, got)
+		}
+	}
+	// A comparison sign in the text is not a tag.
+	posting := models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "<p>Keep latency < 50 ms using Python.</p>"}}}
+	if got := interviewRequirements(posting); strings.Join(got, ",") != "python" {
+		t.Errorf("interviewRequirements = %v, want [python]", got)
+	}
+	// A stored skill of two words is still found across a line break, and a
+	// character the text already holds does not join two words.
+	for _, description := range []string{"Experience with incident<br>response.", "Experience with incident\r\nresponse."} {
+		posting := models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: description}}, Match: models.Evaluation{MatchedSkills: []string{"incident response"}}}
+		if got := interviewRequirements(posting); strings.Join(got, ",") != "incident response" {
+			t.Errorf("%q: interviewRequirements = %v, want [incident response]", description, got)
+		}
+	}
+	posting = models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "Python\uE000services."}}}
+	if got := interviewRequirements(posting); strings.Join(got, ",") != "python" {
+		t.Errorf("interviewRequirements = %v, want [python]", got)
+	}
+	// A custom element whose name starts like a block tag is inline.
+	posting = models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "We use <p-chip>Go from day one</p-chip>."}}}
+	if got := interviewRequirements(posting); strings.Join(got, ",") != "go" {
+		t.Errorf("interviewRequirements = %v, want [go]", got)
+	}
+	// A title ending in GO is not read with the description's first word.
+	profile := models.Profile{Experiences: []models.WorkExperience{{Title: "SENIOR ENGINEER, GO", Description: "From day one I mentored two hires."}}}
+	pack, err := PrepareInterview(models.Application{Status: "interview"}, profile, models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "Go services."}}, Match: models.Evaluation{MatchedSkills: []string{"Go"}}}, nil)
+	if err != nil || len(pack.STARPrompts) != 1 || pack.STARPrompts[0].Experience == nil {
+		t.Errorf("the GO role is evidence for Go, got %+v (%v)", pack.STARPrompts, err)
+	}
+	// A skill at the very start of the text is still a whole word.
+	if !interviewMentions(" Incident response lead", "incident response") {
+		t.Error("a skill that opens the text is mentioned")
+	}
+	// A list item is its own line, so the next line's first word is not its verb word.
+	posting = models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "Required languages\nGo\nFurther information below"}}, Match: models.Evaluation{MatchedSkills: []string{"Go"}}}
+	if got := interviewRequirements(posting); strings.Join(got, ",") != "go" {
+		t.Errorf("interviewRequirements = %v, want [go]", got)
+	}
+}
+
 // A project about a go-to-market rollout is no evidence for a Go requirement.
 func TestInterviewMentionsSkipGoInEverydayPhrases(t *testing.T) {
 	if interviewMentions("Led the go-to-market rollout", "Go") {

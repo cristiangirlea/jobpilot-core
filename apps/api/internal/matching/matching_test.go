@@ -10,6 +10,20 @@ import (
 	"time"
 )
 
+// The verb "go" asked for Go, so a posting naming no technology scored a Go
+// profile's skills as a full match.
+func TestScoreSkillsSkipTheVerbGo(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Go"}}}
+	verbOnly := Evaluate(profile, nil, nil, models.JobInput{Title: "Account Executive", Description: "Our releases go through review. Go further together."}, time.Now())
+	if verbOnly.Breakdown["skill_match"] != 15 || len(verbOnly.MatchedSkills) != 0 || len(verbOnly.MissingSkills) != 0 {
+		t.Errorf("a posting naming no technology scores a neutral 15 and claims nothing, got %d, %v, %v", verbOnly.Breakdown["skill_match"], verbOnly.MatchedSkills, verbOnly.MissingSkills)
+	}
+	mixed := Evaluate(profile, nil, nil, models.JobInput{Title: "Backend Engineer", Description: "Go further. We use Go and Rust."}, time.Now())
+	if mixed.Breakdown["skill_match"] != 15 || strings.Join(mixed.MatchedSkills, ",") != "Go" || strings.Join(mixed.MissingSkills, ",") != "Rust" {
+		t.Errorf("Go and Rust weigh the same, got %d, %v, %v", mixed.Breakdown["skill_match"], mixed.MatchedSkills, mixed.MissingSkills)
+	}
+}
+
 func sampleProfile() models.Profile {
 	return models.Profile{DesiredTitles: []string{"Backend Engineer"}, Seniorities: []string{"senior"}, WorkPreference: []string{"remote"}, SalaryExpectation: 90000, Experiences: []models.WorkExperience{{Company: "Acme Inc.", Current: true}}, Skills: []models.Skill{{Name: "Go"}, {Name: "PostgreSQL"}}}
 }

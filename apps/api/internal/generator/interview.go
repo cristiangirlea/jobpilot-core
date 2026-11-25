@@ -3,12 +3,26 @@ package generator
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"jobpilot/core/api/internal/models"
 	"jobpilot/core/api/internal/technology"
 )
+
+var blockTag = regexp.MustCompile(`(?i)</?(p|br|li|div|ul|ol|tr|td|th|h[1-6]|dt|dd|hr|section|blockquote|pre)[\s/>]`)
+
+// lineMark stands for a line break while stripMarkup collapses whitespace.
+const lineMark = "\uE000"
+
+// linesWithoutMarkup is stripMarkup that keeps a line break where a line or a
+// block element ends, so the vocabulary can tell a line's first word.
+func linesWithoutMarkup(v string) string {
+	v = strings.ReplaceAll(v, lineMark, " ")
+	v = strings.NewReplacer("\r\n", lineMark, "\n", lineMark, "\r", lineMark).Replace(blockTag.ReplaceAllString(v, lineMark+"$0"))
+	return strings.ReplaceAll(stripMarkup(v), lineMark, "\n")
+}
 
 var ErrInterviewStatus = errors.New("Interview preparation requires an application in interview status.")
 
@@ -91,14 +105,15 @@ func PrepareInterview(app models.Application, profile models.Profile, posting mo
 			Result:      "What was the real outcome? Supply only results you can substantiate; leave unknown results blank.",
 		}
 		for _, experience := range profile.Experiences {
-			if interviewMentions(experience.Title+" "+experience.Description, requirement) {
+			// Fields join on line breaks, so one field's last word is not read with the next one's first.
+			if interviewMentions(experience.Title+"\n"+experience.Description, requirement) {
 				p := prompt
 				p.Experience = &experience
 				pack.STARPrompts = append(pack.STARPrompts, p)
 			}
 		}
 		for _, project := range profile.Projects {
-			if interviewMentions(project.Name+" "+project.Description+" "+strings.Join(project.Skills, " "), requirement) {
+			if interviewMentions(project.Name+"\n"+project.Description+"\n"+strings.Join(project.Skills, "\n"), requirement) {
 				p := prompt
 				p.Project = &project
 				pack.STARPrompts = append(pack.STARPrompts, p)
@@ -122,7 +137,7 @@ func PrepareInterview(app models.Application, profile models.Profile, posting mo
 }
 
 func interviewRequirements(posting models.JobWithMatch) []string {
-	text := stripMarkup(posting.Job.Description)
+	text := linesWithoutMarkup(posting.Job.Description)
 	terms := technology.Signature(len(technology.Terms()), text)
 	for _, skills := range [][]string{posting.Match.MatchedSkills, posting.Match.MissingSkills} {
 		for _, skill := range skills {
@@ -150,7 +165,8 @@ func interviewMentions(text, requirement string) bool {
 		_, ok := technology.Mentions(text)[key]
 		return ok
 	}
-	if technology.Count(strings.ToLower(text), strings.ToLower(requirement)) > 0 {
+	// A line break between the words of a skill does not part them.
+	if technology.Count(" "+strings.ToLower(strings.Join(strings.Fields(text), " "))+" ", strings.ToLower(requirement)) > 0 {
 		return true
 	}
 	_, ok := technology.Mentions(text)[technology.Canonical(requirement)]

@@ -77,6 +77,16 @@ var everyday = map[string][]string{
 	},
 }
 
+// verbWords follow a term where it is a verb ("go through review", "go to the
+// client") and seldom where it is the technology; see countOutsideVerbUses.
+// "to" counts only before these words, so "Go to Rust" stays two languages.
+var verbWords = map[string][]string{
+	"go": {
+		"through", "from", "further", "into", "beyond", "above", "straight", "deeper", "ahead", "far",
+		"to the", "to a", "to an", "to our", "to your", "to their", "to production",
+	},
+}
+
 // HasEverydayUses reports whether term is also an ordinary word in some
 // phrases, so only Mentions can say whether a text names it.
 func HasEverydayUses(term string) bool { return everyday[term] != nil }
@@ -227,23 +237,49 @@ func Canonical(name string) string {
 // as the <[^>]*> and \s+ patterns it replaced did, in one pass: it runs on
 // every posting each time a job is scored.
 func haystackOf(texts []string) string {
-	text := strings.ToLower(strings.Join(texts, " "))
+	text, _ := scanHaystack(strings.ToLower(strings.Join(texts, " ")), false)
+	return text
+}
+
+// keptHaystack is haystackOf for one text with its case kept, and with the
+// positions of the spaces that stand for a line break or a block tag, so a
+// line's first word can be told from one inside a sentence.
+func keptHaystack(text string) (string, map[int]bool) {
+	return scanHaystack(text, true)
+}
+
+func scanHaystack(text string, markBreaks bool) (string, map[int]bool) {
 	var b strings.Builder
 	b.Grow(len(text) + 2)
 	b.WriteByte(' ')
-	space := true
+	space, lineBreak := true, false
+	var breaks map[int]bool
 	for i := 0; i < len(text); i++ {
 		c := text[i]
 		if c == '<' {
 			if end := strings.IndexByte(text[i:], '>'); end >= 0 {
+				if markBreaks && blockTag(text[i+1:i+end]) {
+					lineBreak = true
+				}
 				i += end
 				c = ' '
 			}
 		}
 		if c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f' {
+			if markBreaks && (c == '\n' || c == '\r') {
+				lineBreak = true
+			}
 			if !space {
 				b.WriteByte(' ')
 				space = true
+			}
+			if lineBreak {
+				// The space written for this run of whitespace stands for the break.
+				if breaks == nil {
+					breaks = map[int]bool{}
+				}
+				breaks[b.Len()-1] = true
+				lineBreak = false
 			}
 			continue
 		}
@@ -253,7 +289,194 @@ func haystackOf(texts []string) string {
 	if !space {
 		b.WriteByte(' ')
 	}
-	return b.String()
+	return b.String(), breaks
+}
+
+// blockTag reports whether a tag's contents name an element that starts a new
+// line, such as p, li or br.
+func blockTag(tag string) bool {
+	// The name ends at a space or "/", so a custom element such as "p-chip" is not "p".
+	name := strings.ToLower(strings.TrimLeft(tag, "/ "))
+	if end := strings.IndexAny(name, " \t\r\n\f/"); end >= 0 {
+		name = name[:end]
+	}
+	switch name {
+	case "p", "br", "li", "div", "ul", "ol", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "dt", "dd", "hr", "section", "blockquote", "pre":
+		return true
+	}
+	return false
+}
+
+// verbSpan is more than the space and the longest verb word take.
+const verbSpan = 32
+
+// HasVerbUses reports whether term is also a common verb before some words,
+// so Mentions leaves those uses out (see verbWords).
+func HasVerbUses(term string) bool { return verbWords[term] != nil }
+
+// MayMention reports whether text names term as Mentions read it before verb
+// words were left out: a caller to whom a missed mention costs more than a
+// stray verb, such as a question about years with one skill, asks this too.
+func MayMention(text, term string) bool {
+	haystack := haystackOf([]string{text})
+	if HasEverydayUses(term) {
+		haystack = withoutEveryday(haystack, term)
+	}
+	return Count(haystack, term) > 0
+}
+
+// countOutsideVerbUses is Count for a term with verbWords: it leaves out each
+// occurrence that a verb word follows, unless the text writes the term as a
+// name ("Go") inside a sentence. A name opening a sentence or line ("Go
+// further together") and the term in capitals ("GO THROUGH") are the verb.
+func countOutsideVerbUses(text, term string) int {
+	kept, breaks := keptHaystack(text)
+	lower, at := lowerWithOffsets(kept)
+	if HasEverydayUses(term) {
+		lower = withoutEveryday(lower, term)
+	}
+	n := 0
+	for offset := 0; offset < len(lower); {
+		index := strings.Index(lower[offset:], term)
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		end := start + len(term)
+		offset = start + 1
+		if start == 0 || endsInWord(lower[:start]) || startsInWord(lower[end:]) {
+			continue
+		}
+		// A verb word on the next line is not this word's; no verb word is
+		// longer than verbSpan, so only that much is searched for a break.
+		rest := lower[end:min(len(lower), end+verbSpan)]
+		for i := end; i < end+len(rest); i++ {
+			if breaks[offsetAt(at, i)] {
+				rest = lower[end:i]
+				break
+			}
+		}
+		k := offsetAt(at, start)
+		named := kept[k] >= 'A' && kept[k] <= 'Z' && kept[k+1] >= 'a' && kept[k+1] <= 'z'
+		// A no-break space separates words here as a space does.
+		rest = strings.ReplaceAll(rest, "\u00a0", " ")
+		if followedBy(strings.TrimLeft(rest, " "), verbWords[term]) && !(named && !opensSentence(kept, breaks, k)) {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+func followedBy(s string, words []string) bool {
+	for _, word := range words {
+		if strings.HasPrefix(s, word) && !startsInWord(s[len(word):]) {
+			return true
+		}
+	}
+	return false
+}
+
+// opensSentence reports whether the word at start begins the text, a line, a
+// list item or a sentence. Opening quotes, emphasis and "-" or "*" before it
+// are passed over, so "**Go to production**" inside a sentence opens nothing
+// while a quoted "Go further" at a line's start does.
+func opensSentence(kept string, breaks map[int]bool, start int) bool {
+	i := start
+	for i > 0 {
+		r, size := utf8.DecodeLastRuneInString(kept[:i])
+		// A bullet or a dash starts an item or a clause wherever it stands.
+		if strings.ContainsRune("\u2022\u00b7\u2013\u2014", r) {
+			return true
+		}
+		// A numbered item's marker ("1)") is passed over like a bullet.
+		if r == ')' && i > 1 && kept[i-2] >= '0' && kept[i-2] <= '9' {
+			j := i - 1
+			for j > 0 && kept[j-1] >= '0' && kept[j-1] <= '9' {
+				j--
+			}
+			// Only a number standing on its own, not "v1.24)".
+			if j == 0 || kept[j-1] == ' ' {
+				i = j
+				continue
+			}
+		}
+		if r != ' ' && !strings.ContainsRune("\"'(*_\u201c\u2018-", r) {
+			break
+		}
+		i -= size
+		if r == ' ' && breaks[i] {
+			return true
+		}
+	}
+	if i == 0 {
+		return true
+	}
+	r, _ := utf8.DecodeLastRuneInString(kept[:i])
+	if r == '.' && abbreviation(kept[:i]) {
+		return false
+	}
+	return strings.ContainsRune(".!?;", r)
+}
+
+// abbreviation reports a full stop that ends "e.g.", "i.e." or "vs.", which a
+// sentence does not ("etc." often does).
+func abbreviation(before string) bool {
+	before = strings.ToLower(before[max(0, len(before)-6):])
+	for _, short := range []string{" e.g.", " i.e.", " vs.", "(e.g.", "(i.e."} {
+		if strings.HasSuffix(before, short) {
+			return true
+		}
+	}
+	return false
+}
+
+// lowerWithOffsets lowercases s as strings.ToLower does, writes the hyphens
+// withoutEveryday reads as one as "-", and gives, for each byte of the result,
+// the offset in s of the letter it came from: a letter's lower case can be
+// shorter or longer ("İ"). For ASCII text the offsets are the same and no
+// table is made (see offsetAt).
+func lowerWithOffsets(s string) (string, []int) {
+	ascii := true
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			ascii = false
+			break
+		}
+	}
+	if ascii {
+		b := []byte(s)
+		for i, c := range b {
+			if c >= 'A' && c <= 'Z' {
+				b[i] = c + 'a' - 'A'
+			}
+		}
+		return string(b), nil
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	at := make([]int, 0, len(s)+1)
+	for i, r := range s {
+		n := b.Len()
+		switch r {
+		case '\u2010', '\u2011', '\u2013':
+			b.WriteByte('-')
+		default:
+			b.WriteRune(unicode.ToLower(r))
+		}
+		for range b.Len() - n {
+			at = append(at, i)
+		}
+	}
+	return b.String(), append(at, len(s))
+}
+
+// offsetAt is the offset in the original text of byte i of the lowered one.
+func offsetAt(at []int, i int) int {
+	if at == nil {
+		return i
+	}
+	return at[i]
 }
 
 // leads holds each term's first run of letters and digits: ".net" leads
@@ -285,11 +508,17 @@ func Mentions(texts ...string) map[string]int {
 			if !present[leads[i]] {
 				continue
 			}
-			text := haystack
-			if HasEverydayUses(term) {
-				text = withoutEveryday(haystack, term)
+			var n int
+			if verbWords[term] != nil {
+				n = countOutsideVerbUses(texts[t], term)
+			} else {
+				text := haystack
+				if HasEverydayUses(term) {
+					text = withoutEveryday(haystack, term)
+				}
+				n = Count(text, term)
 			}
-			if n := Count(text, term); n > 0 {
+			if n > 0 {
 				counts[Canonical(term)] += n
 			}
 		}

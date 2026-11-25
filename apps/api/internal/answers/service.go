@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -406,6 +407,13 @@ func factSheet(p models.Profile) string {
 // has no years for.
 func skillYears(question string, p models.Profile) (answer string, scoped bool) {
 	named := TechnologySignature(4, question)
+	// A term that is also a verb may be one ("deploying go to production"):
+	// counted as the skill, the question is scoped, never the total.
+	for _, term := range technology.Terms() {
+		if technology.HasVerbUses(term) && !slices.Contains(named, term) && technology.MayMention(question, term) {
+			named = append(named, term)
+		}
+	}
 	if len(named) == 0 {
 		return "", false
 	}

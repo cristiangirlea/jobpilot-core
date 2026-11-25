@@ -263,6 +263,22 @@ func TestEvaluateWithExtractedSkills(t *testing.T) {
 	assertExtractionRejections(t, got, rules)
 }
 
+// A quote starting with "Go" is cut from inside a sentence, so the rules and
+// the extraction both read the language there.
+func TestEvaluateWithExtractedQuoteStartingWithGo(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Golang"}}}
+	job := models.JobInput{Title: "Engineer", Description: "We use Go from day one."}
+	x, err := extraction.Verify(job.Title, job.Description, []byte(`{"required":[{"skills":["Go"],"quote":"Go from day one"}],"nice_to_have":[],"stack":[],"seniority":{"level":"unspecified","quote":null},"min_years":null,"constraints":[]}`))
+	if err != nil || len(x.Required) != 1 {
+		t.Fatalf("Verify kept %v (%v), want the Go entry", x.Required, err)
+	}
+	rules := Evaluate(profile, nil, nil, job, time.Time{})
+	got := EvaluateWith(profile, nil, nil, job, &x, time.Time{})
+	if rules.Breakdown["skill_match"] != 30 || got.Breakdown["skill_match"] != 30 {
+		t.Fatalf("rules %d, extraction %d: both should read Go", rules.Breakdown["skill_match"], got.Breakdown["skill_match"])
+	}
+}
+
 func TestEvaluateWithExtractedRequirementOutsideTechnologies(t *testing.T) {
 	profile := models.Profile{Skills: []models.Skill{{Name: "Go"}}}
 	job := models.JobInput{Title: "Solutions Engineer", Company: "Brambleglass Labs", Description: "Go required. 5+ years of technical pre-sales experience."}

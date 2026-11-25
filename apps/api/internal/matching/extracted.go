@@ -25,7 +25,8 @@ func scoreExtractedSkills(profile []models.Skill, x models.Extraction) (int, []s
 		for _, entry := range group.entries {
 			options := make([]postingOption, 0, len(entry.Skills))
 			for _, option := range entry.Skills {
-				if containsPhrase(entry.Quote, option) && mentionsTechnology(option, entry.Quote) {
+				// A quote is cut from a sentence, so its first word does not open one.
+				if containsPhrase(entry.Quote, option) && mentionsTechnology(option, "and "+entry.Quote) {
 					options = append(options, readOption(option))
 				}
 			}

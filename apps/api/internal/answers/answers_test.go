@@ -855,6 +855,11 @@ func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
 	}{
 		{"How many years of professional Python experience do you have?", "6"},
 		{"How many years of experience do you have with Golang?", "6"},
+		// Written in lower case, it is still the skill and not the total.
+		{"How many years of experience do you have with go?", "6"},
+		{"How many years have you used go?", "6"},
+		// Read as the verb by the vocabulary, but still the profile's skill.
+		{"How many years of experience do you have deploying go to production?", "6"},
 		{"How many years of experience do you have?", "13"},
 		{"Years of professional experience", "13"},
 		// Named, but no years recorded: the total would be a false claim.
@@ -877,6 +882,32 @@ func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
 		}
 		if c.want != "" && resolution.Source != SourceProfile {
 			t.Errorf("%q: a recorded fact should come from the profile, got %s", c.question, resolution.Source)
+		}
+	}
+	// A question the vocabulary reads as the verb is still about Go: held for
+	// review when Go has no years or is not on the profile, or when it names a
+	// second technology; answered once when Go is listed twice.
+	deploying := "How many years of experience do you have deploying go to production?"
+	for _, c := range []struct {
+		skills   []models.Skill
+		question string
+		want     string
+	}{
+		{[]models.Skill{{Name: "Go"}}, deploying, ""},
+		{[]models.Skill{{Name: "Python", Years: 4}}, deploying, ""},
+		{[]models.Skill{{Name: "Go", Years: 6}, {Name: "Python", Years: 4}}, "How many years of experience do you have deploying go to production and using Python?", ""},
+		{[]models.Skill{{Name: "Python", Years: 4}}, "How many years of experience do you have deploying go to production and using Python?", ""},
+		{[]models.Skill{{Name: "Go", Years: 6}, {Name: "Golang", Years: 6}}, deploying, "6"},
+		// An everyday phrase is not the skill, as before.
+		{[]models.Skill{{Name: "Go", Years: 6}}, "How many years of experience do you have coordinating go-live events?", "13"},
+	} {
+		s.Profile.Skills = c.skills
+		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: c.question}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolution.Answer != c.want || (c.want == "") != resolution.NeedsReview {
+			t.Errorf("%q with %v: got %q (review %v), want %q", c.question, c.skills, resolution.Answer, resolution.NeedsReview, c.want)
 		}
 	}
 }
