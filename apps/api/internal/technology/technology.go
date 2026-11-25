@@ -14,7 +14,7 @@ import (
 // terms is the vocabulary, aliases included.
 var terms = []string{
 	"go", "golang", "java", "kotlin", "scala", "python", "ruby", "php", "rust", "c#", "c++", "elixir", "erlang", "clojure", "swift", "dart",
-	"javascript", "typescript", "node.js", "node", "deno", "bun",
+	"javascript", "typescript", "node.js", "node", "nodejs", "deno", "bun",
 	"react", "next.js", "angular", "vue", "svelte", "remix", "redux", "tailwind",
 	"spring", "spring boot", "quarkus", "micronaut", ".net", "asp.net", "django", "flask", "fastapi", "rails", "laravel", "symfony", "express", "nestjs", "gin", "echo", "fiber",
 	"postgresql", "postgres", "mysql", "mariadb", "mongodb", "redis", "cassandra", "dynamodb", "elasticsearch", "opensearch", "clickhouse", "snowflake", "bigquery", "sqlite", "oracle", "sql server",
@@ -29,7 +29,7 @@ var terms = []string{
 // aliases collapse spellings that mean the same technology, so a signature
 // built from one posting matches a signature built from another.
 var aliases = map[string]string{
-	"golang": "go", "node": "node.js", "postgres": "postgresql", "google cloud": "gcp",
+	"golang": "go", "node": "node.js", "nodejs": "node.js", "postgres": "postgresql", "google cloud": "gcp",
 }
 
 // names is how each term is written as a skill. Every name lowercases back to
@@ -87,9 +87,103 @@ var verbWords = map[string][]string{
 	},
 }
 
+// ordinaryNeighbours lists words beside which a term names something else:
+// "node" next to a cluster or tree word is a machine or a graph's node, not
+// Node.js ("single-node", "worker node", "node failures"). Only the bare
+// alias is read this way; "Node.js" always counts.
+var ordinaryNeighbours = map[string]struct{ before, after []string }{
+	"node": {
+		before: []string{
+			"single", "multi", "worker", "master", "edge", "compute", "each", "per", "every", "leaf",
+			"root", "child", "parent", "graph", "tree", "cluster", "storage", "gpu", "k8s", "kubernetes",
+			"plane", "validator", "full", "bootstrap", "head", "data", "control",
+		},
+		after: []string{
+			"failure", "failures", "health", "pool", "pools", "affinity", "selector", "selectors",
+			"exporter", "count", "group", "groups", "drain", "crash", "crashes", "pressure", "label",
+			"labels", "autoscaler", "autoscaling", "size", "sizes", "type", "types", "taint", "taints",
+			"issue", "issues",
+		},
+	},
+}
+
+// neighbourGap is what may stand between a term and an ordinary neighbour.
+const neighbourGap = " -_\u2010\u2011\u2013"
+
+// withoutNeighbours blanks each whole-word term that one of its ordinary
+// neighbours touches on the same line, across a space, hyphen or underscore.
+// A term the technology's own suffix follows ("node.js", "node js") stays.
+// breaks holds the spaces that stand for a line break or a block tag.
+func withoutNeighbours(haystack, term string, breaks map[int]bool) string {
+	words := ordinaryNeighbours[term]
+	var out []byte
+	for offset := 0; offset < len(haystack); {
+		index := strings.Index(haystack[offset:], term)
+		if index < 0 {
+			break
+		}
+		start := offset + index
+		end := start + len(term)
+		offset = start + 1
+		if start == 0 || endsInWord(haystack[:start]) || startsInWord(haystack[end:]) {
+			continue
+		}
+		before := strings.TrimRight(haystack[:start], neighbourGap)
+		after := strings.TrimLeft(haystack[end:], neighbourGap)
+		jsSuffix := strings.HasPrefix(haystack[end:], ".js") && !startsInWord(haystack[end+3:])
+		if jsSuffix || followedBy(after, []string{"js"}) && !anyBreak(breaks, end, len(haystack)-len(after)) {
+			continue
+		}
+		beforeNear := endsWithWord(before, words.before) && !anyBreak(breaks, len(before), start)
+		afterNear := followedBy(after, words.after) && !anyBreak(breaks, end, len(haystack)-len(after))
+		if !beforeNear && !afterNear {
+			continue
+		}
+		if out == nil {
+			out = []byte(haystack)
+		}
+		for i := start; i < end; i++ {
+			out[i] = ' '
+		}
+	}
+	if out == nil {
+		return haystack
+	}
+	return string(out)
+}
+
+func anyBreak(breaks map[int]bool, from, to int) bool {
+	for i := from; i < to; i++ {
+		if breaks[i] {
+			return true
+		}
+	}
+	return false
+}
+
+func endsWithWord(s string, words []string) bool {
+	for _, word := range words {
+		if strings.HasSuffix(s, word) && !endsInWord(s[:len(s)-len(word)]) {
+			return true
+		}
+	}
+	return false
+}
+
 // HasEverydayUses reports whether term is also an ordinary word in some
 // phrases, so only Mentions can say whether a text names it.
-func HasEverydayUses(term string) bool { return everyday[term] != nil }
+func HasEverydayUses(term string) bool { return everyday[term] != nil || HasNeighbours(term) }
+
+// HasNeighbours reports whether term, or the alias it stands for, has
+// ordinary neighbours, so a word written like it may be something else.
+func HasNeighbours(term string) bool {
+	for t := range ordinaryNeighbours {
+		if t == term || Canonical(t) == term {
+			return true
+		}
+	}
+	return false
+}
 
 // hyphens writes a non-breaking hyphen or an en dash as a hyphen.
 var hyphens = strings.NewReplacer("\u2010", "-", "\u2011", "-", "\u2013", "-")
@@ -97,6 +191,9 @@ var hyphens = strings.NewReplacer("\u2010", "-", "\u2011", "-", "\u2013", "-")
 // withoutEveryday blanks term where it is an ordinary word in haystack, so
 // Count no longer finds it there.
 func withoutEveryday(haystack, term string) string {
+	if everyday[term] == nil {
+		return haystack
+	}
 	text := haystack
 	if strings.ContainsAny(text, "\u2010\u2011\u2013") {
 		text = hyphens.Replace(text)
@@ -310,10 +407,6 @@ func blockTag(tag string) bool {
 // verbSpan is more than the space and the longest verb word take.
 const verbSpan = 32
 
-// HasVerbUses reports whether term is also a common verb before some words,
-// so Mentions leaves those uses out (see verbWords).
-func HasVerbUses(term string) bool { return verbWords[term] != nil }
-
 // MayMention reports whether text names term as Mentions read it before verb
 // words were left out: a caller to whom a missed mention costs more than a
 // stray verb, such as a question about years with one skill, asks this too.
@@ -515,6 +608,11 @@ func Mentions(texts ...string) map[string]int {
 				text := haystack
 				if HasEverydayUses(term) {
 					text = withoutEveryday(haystack, term)
+				}
+				if ordinaryNeighbours[term].before != nil {
+					// Line breaks are only needed here, so only read here.
+					_, breaks := scanHaystack(strings.ToLower(texts[t]), true)
+					text = withoutNeighbours(text, term, breaks)
 				}
 				n = Count(text, term)
 			}

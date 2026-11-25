@@ -407,12 +407,25 @@ func factSheet(p models.Profile) string {
 // has no years for.
 func skillYears(question string, p models.Profile) (answer string, scoped bool) {
 	named := TechnologySignature(4, question)
-	// A term that is also a verb may be one ("deploying go to production"):
-	// counted as the skill, the question is scoped, never the total.
+	// A term that is also an ordinary word may be the skill all the same:
+	// never the total. A verb before its usual words ("deploying go to
+	// production") is counted as the skill; a word that may name a machine
+	// ("worker node failures") leaves a question naming nothing else to the
+	// candidate, and beside a named technology it is that machine.
+	ambiguous := false
 	for _, term := range technology.Terms() {
-		if technology.HasVerbUses(term) && !slices.Contains(named, term) && technology.MayMention(question, term) {
-			named = append(named, term)
+		key := technology.Canonical(term)
+		if !technology.HasEverydayUses(term) || slices.Contains(named, key) || !technology.MayMention(question, term) {
+			continue
 		}
+		if technology.HasNeighbours(term) {
+			ambiguous = true
+			continue
+		}
+		named = append(named, key)
+	}
+	if len(named) == 0 && ambiguous {
+		return "", true
 	}
 	if len(named) == 0 {
 		return "", false

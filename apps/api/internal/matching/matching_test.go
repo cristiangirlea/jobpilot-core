@@ -24,6 +24,39 @@ func TestScoreSkillsSkipTheVerbGo(t *testing.T) {
 	}
 }
 
+// A cluster's node is not Node.js, so it neither matches nor misses a Node.js profile.
+func TestScoreSkillsSkipTheClusterNode(t *testing.T) {
+	profile := models.Profile{Skills: []models.Skill{{Name: "Node.js"}}}
+	job := models.JobInput{Title: "Site Reliability Engineer", Description: "Debug node failures on every worker node of the cluster."}
+	for _, name := range []string{"Node.js", "Node", "node"} {
+		profile := models.Profile{Skills: []models.Skill{{Name: name}}}
+		got := Evaluate(profile, nil, nil, job, time.Now())
+		if got.Breakdown["skill_match"] != 15 || len(got.MatchedSkills) != 0 || len(got.MissingSkills) != 0 {
+			t.Errorf("profile %q: a posting naming no technology scores a neutral 15 and claims nothing, got %d, %v, %v", name, got.Breakdown["skill_match"], got.MatchedSkills, got.MissingSkills)
+		}
+	}
+	// A filter excluding Node does not reject it.
+	if got := Evaluate(profile, nil, &models.FilterPreset{ExcludedTechnologies: []string{"Node"}}, job, time.Now()); got.Rejected {
+		t.Errorf("a cluster's node is not Node.js, yet the filter rejected it: %v", got.RejectionReasons)
+	}
+	// An extracted option is read the same way: a machine's node is dropped, the technology joins Node.js.
+	x := models.Extraction{Required: []models.ExtractedSkills{{Skills: []string{"Node"}, Quote: "Debug node failures"}}}
+	if got := EvaluateWith(profile, nil, nil, job, &x, time.Now()); len(got.MatchedSkills) != 0 || len(got.MissingSkills) != 0 {
+		t.Errorf("an extracted machine node is no skill, got %v, %v", got.MatchedSkills, got.MissingSkills)
+	}
+	stack := models.JobInput{Title: "Engineer", Description: "React and Node services."}
+	x = models.Extraction{Required: []models.ExtractedSkills{{Skills: []string{"Node"}, Quote: "React and Node"}}}
+	if got := EvaluateWith(profile, nil, nil, stack, &x, time.Now()); strings.Join(got.MatchedSkills, ",") != "Node.js" {
+		t.Errorf("an extracted Node joins a Node.js profile, got %v", got.MatchedSkills)
+	}
+	// A longer option naming the machine does not join a profile skill written Node.
+	restart := models.JobInput{Title: "Engineer", Description: "Restart the worker node weekly."}
+	x = models.Extraction{Required: []models.ExtractedSkills{{Skills: []string{"worker node"}, Quote: "Restart the worker node"}}}
+	if got := EvaluateWith(models.Profile{Skills: []models.Skill{{Name: "Node"}}}, nil, nil, restart, &x, time.Now()); len(got.MatchedSkills) != 0 {
+		t.Errorf("a worker node is not the Node skill, got %v", got.MatchedSkills)
+	}
+}
+
 func sampleProfile() models.Profile {
 	return models.Profile{DesiredTitles: []string{"Backend Engineer"}, Seniorities: []string{"senior"}, WorkPreference: []string{"remote"}, SalaryExpectation: 90000, Experiences: []models.WorkExperience{{Company: "Acme Inc.", Current: true}}, Skills: []models.Skill{{Name: "Go"}, {Name: "PostgreSQL"}}}
 }

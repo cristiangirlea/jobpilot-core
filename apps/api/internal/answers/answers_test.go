@@ -858,6 +858,8 @@ func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
 		// Written in lower case, it is still the skill and not the total.
 		{"How many years of experience do you have with go?", "6"},
 		{"How many years have you used go?", "6"},
+		// A cluster's node is not Node.js, but the question may mean it: never the total.
+		{"How many years of experience do you have troubleshooting worker node failures?", ""},
 		// Read as the verb by the vocabulary, but still the profile's skill.
 		{"How many years of experience do you have deploying go to production?", "6"},
 		{"How many years of experience do you have?", "13"},
@@ -900,6 +902,12 @@ func TestYearsQuestionsAboutOneSkillUseThatSkill(t *testing.T) {
 		{[]models.Skill{{Name: "Go", Years: 6}, {Name: "Golang", Years: 6}}, deploying, "6"},
 		// An everyday phrase is not the skill, as before.
 		{[]models.Skill{{Name: "Go", Years: 6}}, "How many years of experience do you have coordinating go-live events?", "13"},
+		// A node that may be a machine leaves the question to the candidate, even with Node.js years;
+		// a question naming the technology itself is answered.
+		{[]models.Skill{{Name: "Node.js", Years: 4}}, "How many years of experience do you have troubleshooting worker node failures?", ""},
+		{[]models.Skill{{Name: "Node.js", Years: 4}}, "How many years of Node.js experience do you have?", "4"},
+		{[]models.Skill{{Name: "Kubernetes", Years: 3}, {Name: "Node.js", Years: 4}}, "How many years of Kubernetes experience do you have?", "3"},
+		{[]models.Skill{{Name: "Kubernetes", Years: 3}, {Name: "Node.js", Years: 4}}, "How many years of Kubernetes experience do you have troubleshooting worker node failures?", "3"},
 	} {
 		s.Profile.Skills = c.skills
 		resolution, err := service.Resolve(context.Background(), "u1", Question{Text: c.question}, s)

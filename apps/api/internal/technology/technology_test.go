@@ -3,6 +3,7 @@ package technology
 import (
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -213,6 +214,59 @@ func TestMentionsSkipTheVerbGoBeforeItsUsualWords(t *testing.T) {
 		if got := Mentions(c.texts...)["go"]; got != c.want {
 			t.Errorf("Mentions(%q)[go] = %d, want %d", c.texts, got, c.want)
 		}
+	}
+}
+
+// The alias "node" read every machine in a cluster as Node.js: "single-node
+// installs", "node failures". Beside a word that makes it the machine or a
+// graph's node, it is not the technology.
+func TestMentionsSkipTheClusterNode(t *testing.T) {
+	for _, texts := range [][]string{
+		{"Engineer", "From single-node installs to large clusters."},
+		{"Engineer", "Debug pod crashes and node failures."},
+		{"Engineer", "Run node health checks for training runs."},
+		{"Engineer", "Each node runs a sidecar; a multi-node setup follows."},
+		{"Engineer", "Tune node pools and node affinity in the cluster."},
+		{"Engineer", "Scrape metrics with node_exporter on every worker node."},
+		{"Engineer", "Walk the tree from the root node to each leaf node."},
+		{"Engineer", "Operate a Kubernetes node group per region."},
+		{"Engineer", "Debug pod and node issues such as CrashLoopBackOff."},
+		{"Engineer", "From multi\u2011node installs up."},
+		{"Engineer", "Drain a Kubernetes node before maintenance; cordon the k8s node."},
+		{"Engineer", "Restart the worker node.json loader."},
+		{"Engineer", "Replace the worker node\nJS tooling is separate"},
+	} {
+		if got := Mentions(texts...); got["node.js"] != 0 {
+			t.Errorf("Mentions(%q) = %v, want no node.js", texts, got)
+		}
+		if got := Signature(0, texts...); slices.Contains(got, "node.js") {
+			t.Errorf("Signature(%q) = %v, want no node.js", texts, got)
+		}
+	}
+	for text, want := range map[string]int{
+		"React and Node for the backend.":           1,
+		"Node/TypeScript services.":                 1,
+		"Backend in node, frontend in React.":       1,
+		"Node":                                      1,
+		"Senior Node Engineer":                      1,
+		"We run Node on each node of the cluster.":  1,
+		"Deploy each Node JS service.":              1,
+		"Deploy each Node.js service.":              2, // as on master; #228 counts it twice
+		"NodeJS developer":                          1,
+		"<ul><li>Kubernetes</li><li>Node</li></ul>": 1,
+		"<ul><li>worker</li><li>Node</li></ul>":     1,
+		"Node\nhealth checks are ours":              1,
+		"Node-to-browser streaming.":                1,
+		// Kept as on master: no listed word stands next to it.
+		"Diagnose node-to-pod traffic drops.": 1,
+		"On\u2011call worker\nNode":           1,
+	} {
+		if got := Mentions(text)["node.js"]; got != want {
+			t.Errorf("Mentions(%q)[node.js] = %d, want %d", text, got, want)
+		}
+	}
+	if Canonical("Node") != "node.js" {
+		t.Error("a skill written Node is still Node.js")
 	}
 }
 

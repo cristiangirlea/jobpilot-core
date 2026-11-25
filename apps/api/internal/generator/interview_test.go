@@ -209,6 +209,14 @@ func TestInterviewRequirementsSkipTheVerbGoAtAParagraphStart(t *testing.T) {
 }
 
 // A project about a go-to-market rollout is no evidence for a Go requirement.
+// A stored Node match is no requirement when the posting's only node is a machine.
+func TestInterviewRequirementsSkipTheClusterNode(t *testing.T) {
+	posting := models.JobWithMatch{Job: models.Job{JobInput: models.JobInput{Description: "Debug node failures on every worker node."}}, Match: models.Evaluation{MatchedSkills: []string{"Node"}}}
+	if got := interviewRequirements(posting); len(got) != 0 {
+		t.Errorf("interviewRequirements = %v, want none", got)
+	}
+}
+
 func TestInterviewMentionsSkipGoInEverydayPhrases(t *testing.T) {
 	if interviewMentions("Led the go-to-market rollout", "Go") {
 		t.Error("go-to-market does not mention Go")
